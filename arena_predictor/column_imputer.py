@@ -1170,10 +1170,9 @@ class SpecializedColumnImputer:
         self.correlation_matrix_ = X_df[numeric_cols].corr(method='pearson')
         self.spearman_matrix_ = X_df[numeric_cols].corr(method='spearman')
 
-        # Stage 2.75: Compute SVD anchor for residual targets and warm-start
-        # Low-rank approximation captures global capability structure. Models will
-        # learn residuals (y - svd_estimate) instead of raw values, focusing on
-        # what the global structure misses.
+        # Stage 2.75: Compute SVD anchor for warm-start with rank selection via
+        # masked-cell cross-validation. Tries a small grid of ranks and picks the
+        # one that best reconstructs held-out observed cells.
         numeric_cols_for_svd = X_df.select_dtypes(include=[np.number]).columns.tolist()
         self.anchor_df_ = None
         if len(numeric_cols_for_svd) >= 3 and len(cols_to_impute) > 0:
@@ -1183,14 +1182,45 @@ class SpecializedColumnImputer:
             col_stds[col_stds < 1e-10] = 1.0
             X_standardized = (X_mat - col_means) / col_stds
 
-            svd_rank = min(8, len(numeric_cols_for_svd) // 3, X_mat.shape[0] // 5)
-            svd_rank = max(svd_rank, 2)
+            rank_max = min(12, len(numeric_cols_for_svd) // 3, X_mat.shape[0] // 5)
+            rank_candidates = [r for r in [4, 6, 8, 10, 12] if 2 <= r <= rank_max]
+            if not rank_candidates:
+                rank_candidates = [max(2, rank_max)]
+
+            if len(rank_candidates) > 1:
+                # Masked-cell CV: hold out 10% of observed cells, measure reconstruction
+                observed_mask = ~np.isnan(X_standardized)
+                obs_rows, obs_cols_idx = np.where(observed_mask)
+                n_obs = len(obs_rows)
+                rng = np.random.RandomState(42)
+                holdout_idx = rng.choice(n_obs, size=max(1, n_obs // 10), replace=False)
+                holdout_rows = obs_rows[holdout_idx]
+                holdout_cols = obs_cols_idx[holdout_idx]
+                holdout_vals = X_standardized[holdout_rows, holdout_cols]
+
+                X_masked = X_standardized.copy()
+                X_masked[holdout_rows, holdout_cols] = np.nan
+
+                best_rank = rank_candidates[0]
+                best_err = float('inf')
+                for r in rank_candidates:
+                    Z_trial = _iterative_svd_impute(X_masked, rank=r)
+                    recon = Z_trial[holdout_rows, holdout_cols]
+                    err = float(np.sqrt(np.mean((recon - holdout_vals) ** 2)))
+                    if err < best_err:
+                        best_err = err
+                        best_rank = r
+                svd_rank = best_rank
+            else:
+                svd_rank = rank_candidates[0]
+
             Z_std = _iterative_svd_impute(X_standardized, rank=svd_rank)
             Z = Z_std * col_stds + col_means
 
             self.anchor_df_ = pd.DataFrame(Z, index=X_df.index, columns=numeric_cols_for_svd)
             if self.verbose:
-                print(f"Stage 2.75: SVD anchor computed (rank={svd_rank})")
+                rank_info = f"rank={svd_rank}" if len(rank_candidates) <= 1 else f"rank={svd_rank} selected from {rank_candidates}"
+                print(f"Stage 2.75: SVD anchor computed ({rank_info})")
 
         # Stage 3: Feature Selection & Model Fitting
         if self.verbose:
