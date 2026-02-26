@@ -1,0 +1,283 @@
+import json
+import os
+import random
+import time
+from typing import Optional, Dict, Any, Tuple, Union
+
+import requests
+
+# --- Shared API Settings ---
+# Load/update the API key in this file once and the change will propagate
+# anywhere the helper is imported.
+API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+if not API_KEY:
+    raise RuntimeError("OPENROUTER_API_KEY environment variable is required")
+MAX_RETRIES = 5
+INITIAL_RETRY_DELAY = 5
+
+
+class APIError(Exception):
+    """Custom exception for API-related errors."""
+    pass
+
+
+def get_llm_response(
+    prompt: str,
+    model: str,
+    name: str,
+    reasoning: bool,
+    system_prompt: Optional[str] = None,
+    include_usage: bool = False,
+) -> Union[str, Tuple[str, Dict[str, Any]]]:
+    # print(model, prompt)
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    provider_candidates = {
+        # Try these in order; adjust to what you know works for your key
+        "qwen/qwen3-30b-a3b": ["novita/fp8", "nebius/fp8", "deepinfra/fp8", 'chutes' ],
+    }
+    provider_overrides = {
+        # "qwen/qwen3-32b": "cerebras",
+        "qwen/qwen3-235b-a22b": "chutes/bf16",
+        "qwen/qwen3-235b-a22b-thinking-2507": "chutes",
+        "qwen/qwen3-coder": "cerebras/fp8",
+        "qwen/qwen3-235b-a22b-2507": "targon/bf16",
+        "meta-llama/llama-4-maverick": "baseten/fp16",
+        "deepseek/deepseek-r1-0528": "targon/fp8",
+        "deepseek/deepseek-chat-v3-0324": "targon/fp8",
+        "deepseek/deepseek-r1": "targon/fp8",
+        "deepseek/deepseek-chat": "targon/fp8",
+        "meta-llama/llama-3.3-70b-instruct": "novita/bf16",
+        "qwen/qwen3-32b": "novita/fp8",
+        "openai/gpt-oss-120b": "novita",
+        "openai/gpt-oss-20b": "novita",
+        "google/gemma-3-27b-it": "deepinfra/bf16",
+        "google/gemma-3-12b-it": "deepinfra/bf16",
+        "moonshotai/kimi-k2": "chutes/fp8",
+        "z-ai/glm-4.5": "chutes/fp8",
+        "deepseek/deepseek-chat-v3.1": "fireworks",
+        "qwen/qwen3-next-80b-a3b-thinking":"deepinfra/bf16",
+        "qwen/qwen3-next-80b-a3b-instruct":"deepinfra/bf16",
+        "deepseek/deepseek-v3.1-terminus":"novita",
+        'z-ai/glm-4.6':'novita',
+        'deepseek/deepseek-v3.2': 'deepseek',
+        'deepseek/deepseek-v3.2-speciale': 'deepseek',
+        'z-ai/glm-4.7': 'z-ai',
+        'z-ai/glm-5': 'z-ai'
+    }
+
+    nonthinking_variants = [
+        "Gemini 2.5 Flash Lite Preview (2025-06-17) Nonthinking",
+        "Gemini 2.5 Flash Preview Nonthinking",
+        "Claude 3.7 Sonnet",
+        "Claude 4 Opus",
+        "Claude 4 Sonnet",
+        "Claude Opus 4.1",
+        "DeepSeek V3.1 (Non-Reasoning)",
+
+    ]
+    # Models that reject explicit reasoning-disable payloads — just omit the param
+    no_reasoning_param_models = [
+        "Intellect-3", "Grok 3 Mini Beta",
+    ]
+    high_models = ["o3 High", "o3-Mini High", "o4-Mini High",
+                   "Grok 3 Mini Beta (High)", "GPT-5 (high)",
+                   "GPT-5 Mini (High)", "GPT-5 Nano (high)", 'GPT-5.2 (high)',
+                   "GPT-5 Mini",
+                   "GPT-5 Codex", "GPT-5.1 Codex", "GPT-5.1 Codex Mini",
+                   "GPT-5.1 (high)"]
+    xhigh_models = ['GPT-5.1 Codex Max (xhigh)', 'GPT-5.2 (xhigh)']
+    medium_models = ['GPT-5.1 (medium)', "GPT-5 (medium)", "GPT-5 Mini (medium)", "GPT-5 Nano", "GPT-5 Nano (medium)", 'GPT-5.2 (medium)',
+                     "o3-Mini Medium", "o4-Mini Medium", "o3 Medium"]
+    low_models = ["GPT-5 (low)", "GPT-5 Mini (low)", "GPT-5 Nano (low)", 'Claude Opus 4.5 Thinking (Low)', 'Gemini 3.0 Pro Preview (2025-11-18) (Low)', 'Gemini 3.0 Flash Preview (2025-12-17) (Low)']
+    minimal_models = ["GPT-5 (minimal)", "GPT-5 Nano (minimal)", "GPT-5 Mini (minimal)", 'Gemini 3.0 Flash Preview (2025-12-17) (Minimal)']
+    none_models = ["GPT-5.1 (Non-reasoning)", "GPT-5.2 (Non-reasoning)"]
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        # "reasoning": {"enabled": reasoning},
+        "usage": {"include": include_usage},
+        "stream": False,
+    }
+
+    if name in no_reasoning_param_models:
+        pass  # Don't set reasoning param — these endpoints reject it
+    elif name == "Gemini 2.5 Pro Preview (2025-06-05) Limited":
+        payload["reasoning"] = {"max_tokens": 8000}
+    elif name == "Gemini 3.0 Pro Preview (2025-11-18) 1k Limited":
+        payload["reasoning"] = {"max_tokens": 1000}
+    elif name in none_models:
+        payload["reasoning"] = {"effort": "none"}
+    elif name in nonthinking_variants or reasoning == False:
+        payload["reasoning"] = {"max_tokens": 0, 'enabled' : False}
+    elif name in medium_models:
+        payload["reasoning"] = {"effort": "medium"}
+    elif name in low_models:
+        payload["reasoning"] = {"effort": "low"}
+    elif name in minimal_models:
+        payload["reasoning"] = {"effort": "minimal"}
+    elif name in high_models:
+        payload["reasoning"] = {"effort": "high"}
+    elif name in xhigh_models:
+        payload["reasoning"] = {"effort": "xhigh"}
+    else:
+        payload["reasoning"] = {"effort": "xhigh"}
+
+    forced_provider = provider_overrides.get(model)
+    delay = INITIAL_RETRY_DELAY
+
+    def _summarize_usage(u: Dict[str, Any]) -> Dict[str, Any]:
+        comp_details = (u or {}).get("completion_tokens_details") or {}
+        prompt_details = (u or {}).get("prompt_tokens_details") or {}
+        return {
+            "prompt_tokens": u.get("prompt_tokens"),
+            "completion_tokens": u.get("completion_tokens"),
+            "reasoning_tokens": comp_details.get("reasoning_tokens", 0),
+            "total_tokens": u.get("total_tokens"),
+            "cost": u.get("cost"),
+            "cost_details": u.get("cost_details"),
+            "prompt_tokens_details": prompt_details,
+            "raw": u,
+        }
+
+
+
+    with requests.Session() as s:
+        s.trust_env = False  # ignore env proxies
+        base_headers = {
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "openbench/1.0",
+            "HTTP-Referer": "http://localhost",
+            "X-Title": "Parallel-Benchmarker",
+        }
+        s.headers.update(base_headers)
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                time.sleep(random.uniform(0.02, 0.12))
+
+                # Try three transport variants each attempt
+                transport_variants = [
+                    {"connection_close": False, "identity": False},  # normal keep-alive
+                    {"connection_close": True,  "identity": False},  # force fresh TCP/TLS
+                    {"connection_close": True,  "identity": True},   # fresh + no compression
+                ]
+                prov_list = provider_candidates.get(model)
+                if prov_list:
+                    modes = [("prov", p, False) for p in prov_list]           # force each provider
+                    modes += [("prov", prov_list[0], True)]                    # allow fallbacks from the first
+                elif forced_provider:  # <- keep your old single override behavior
+                    modes = [("prov", forced_provider, False), ("prov", forced_provider, True)]
+                else:
+                    modes = []
+
+                # Always add a router-chosen lane at the end
+                modes += [("no-override", None, None)]
+
+                last_exc = None
+
+                for tv in transport_variants:
+                    # fresh session when we need to change transport knobs
+                    sess = s
+                    if tv["connection_close"] or tv["identity"]:
+                        sess = requests.Session()
+                        sess.trust_env = False
+                        hdrs = dict(base_headers)
+                        if tv["connection_close"]:
+                            hdrs["Connection"] = "close"
+                        if tv["identity"]:
+                            hdrs["Accept-Encoding"] = "identity"
+                        sess.headers.update(hdrs)
+
+                    try:
+                        for mode in modes:
+                            # req_payload = dict(payload)
+                            # if mode == "forced" and forced_provider:
+                            #     req_payload["provider"] = {"order": [forced_provider], "allow_fallbacks": False}
+                            # elif mode == "fallbacks" and forced_provider:
+                            #     req_payload["provider"] = {"order": [forced_provider], "allow_fallbacks": True}
+                            # else: no provider key (no-override)
+
+                            req_payload = dict(payload)
+                            kind, prov, allow_fb = mode  # mode is a tuple
+
+                            if kind == "prov":
+                                req_payload["provider"] = {"order": [prov], "allow_fallbacks": bool(allow_fb)}
+                            # elif kind == "no-override": leave provider unset
+
+                            try:
+                                r = sess.post(url, json=req_payload, timeout=(10, 60))
+                            except requests.RequestException as e:
+                                last_exc = e
+                                # rotate to next provider mode or next transport variant
+                                continue
+
+                            if not r.ok:
+                                try:
+                                    err_body = r.json()
+                                    err_msg = err_body.get("error") or err_body
+                                except ValueError:
+                                    err_msg = (r.text or "")[:1000]
+                                last_exc = APIError(f"HTTP {r.status_code} ({mode}): {err_msg}")
+                                continue
+
+                            raw = r.content or b""
+                            if not raw.strip():
+                                last_exc = APIError(
+                                    f"Whitespace body ({mode}, close={tv['connection_close']}, identity={tv['identity']}); "
+                                    f"CT={r.headers.get('Content-Type')}, CE={r.headers.get('Content-Encoding')}, "
+                                    f"TE={r.headers.get('Transfer-Encoding')}, CL={r.headers.get('Content-Length')}"
+                                )
+                                continue
+
+                            try:
+                                data = r.json()
+                            except (json.JSONDecodeError, ValueError):
+                                snippet = (r.text or "")[:400]
+                                last_exc = APIError(
+                                    f"JSON decode failed ({mode}, close={tv['connection_close']}, identity={tv['identity']}, "
+                                    f"CT={r.headers.get('Content-Type')}, CE={r.headers.get('Content-Encoding')}). "
+                                    f"Body starts: {snippet!r}"
+                                )
+                                continue
+
+                            msg = (data.get("choices", [{}])[0].get("message") or {})
+                            content = msg.get("content")
+                            if not content:
+                                last_exc = APIError(f"Malformed response ({mode}): missing choices[0].message.content")
+                                continue
+                            # print(content.strip())
+
+                            if not include_usage:
+                                return content.strip()
+
+                            usage = _summarize_usage(data.get("usage", {}))
+                            return content.strip(), usage
+
+                    finally:
+                        if sess is not s:
+                            sess.close()
+
+                # all variants+modes failed in this attempt
+                if attempt == MAX_RETRIES - 1:
+                    raise last_exc or APIError("Exhausted attempts")
+
+                sleep_for = delay + random.uniform(0, 1)
+                print(f"Retrying after error: {last_exc}. Waiting {sleep_for:.2f}s...")
+                time.sleep(sleep_for)
+                delay = min(delay * 2, 60)
+
+            except requests.RequestException as e:
+                # catch anything unexpected at the attempt level
+                if attempt == MAX_RETRIES - 1:
+                    raise APIError(f"Network error: {e}") from e
+                print(f"Retrying after network error: {e}. Waiting {delay:.2f}s...")
+                time.sleep(delay + random.uniform(0, 1))
+                delay = min(delay * 2, 60)

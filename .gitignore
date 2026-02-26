@@ -1,0 +1,69 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+venv_arena/
+.venv/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.code-workspace
+.claude/
+
+# OS
+.DS_Store
+*.numbers
+
+# Test / cache
+.pytest_cache/
+catboost_info/
+
+# Logs
+logs/
+
+# Benchmark generated data (large, regenerable)
+generated_responses/
+generated_stories/
+judgements/
+
+# Soothsayer EQ
+soothsayer_eq/results/
+
+# Soothsayer Writing
+soothsayer_writing/results/
+
+# Soothsayer Logic
+soothsayer_logic/output/
+soothsayer_logic/benchmark_results_multi_run.csv
+soothsayer_logic/model_outputs.csv
+soothsayer_logic/questions.json
+soothsayer_logic/combined_all_benches.csv
+soothsayer_logic/clean_combined_all_benches.csv
+
+# Soothsayer Style
+soothsayer_style/outputs/
+soothsayer_style/results/
+soothsayer_style/responses.csv
+soothsayer_style/responses copy.csv
+soothsayer_style/model_outputs.csv
+soothsayer_style/analysis_results.csv
+soothsayer_style/combined_all_benches.csv
+
+# Scraped benchmark data (regenerable)
+benchmark_combiner/benchmarks/
+
+# Combiner analysis output (generated charts/CSVs)
+benchmark_combiner/analysis_output/
+
+# Prediction pipeline outputs
+arena_predictor/analysis_output/

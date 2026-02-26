@@ -1,0 +1,20 @@
+Compare the relative ability of each writer on these criteria:
+
+
+- Character authenticity and insight
+- Interesting and original
+- Writing quality
+- Coherence in plot, character choices, metaphor
+- Instruction following (followed the prompt)
+- World and atmosphere
+- Avoids cliches in characters, dialogue & plot
+- Avoids flowery verbosity & show-offy vocab maxxing
+- Avoids gratuitous metaphor or poetic overload
+	
+Judging notes:
+
+
+- Be aware that these abilities may be independent, i.e. a model may be strong in one and weak in another.
+- You must always pick a winner for each criteria (no draws)
+	
+The response will use a + / ++ / +++ / ++++ / +++++ format to denote the stronger response and relative ability difference for each criteria.

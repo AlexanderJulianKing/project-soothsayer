@@ -1,0 +1,3 @@
+Models with no good mapping to LiveBench:
+aiderbench: claude-sonnet-4-20250514 (32k thinking)
+aiderbench: claude-sonnet-4-20250514 (no thinking)

@@ -1,0 +1,54 @@
+\documentclass[9pt,twocolumn]{extarticle}
+\usepackage[margin=0.7in]{geometry}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\setlist[itemize]{leftmargin=*, topsep=1pt, itemsep=0.5pt, parsep=0.5pt}
+\setlist[enumerate]{leftmargin=*, topsep=1pt, itemsep=0.5pt, parsep=0.5pt}
+\setlength{\parskip}{1pt}
+\setlength{\parindent}{0pt}
+
+\title{Methodology: LLM Benchmark Fusion \\ \& LMArena Forecasting}
+\date{\today}
+\author{Alexander King}
+
+\begin{document}
+\maketitle
+\vspace{-1.3em}
+
+\textbf{Purpose.} Consolidate public LLM leaderboards, repair sparse metrics, and forecast LMArena scores (both style controlled and non-style controlled) with quantified uncertainty so newly released models can be ranked the moment they appear.
+
+\section*{System Overview}
+\begin{itemize}
+  \item \textbf{Harvesters.} Grabbers such as \texttt{aiderbench\_grabber.py} and \texttt{context\_arena\_grabber.py} drop timestamped CSVs for every tracked benchmark into \texttt{benchmarks/}.
+  \item \textbf{Name Canonicalizer.} \texttt{combine.py} aligns model aliases to the OpenBench taxonomy with LLM-assisted suggestions and keeps reviewable diffs in \texttt{mappings/}.
+  \item \textbf{Feature Builder.} \texttt{correlations.py} coerces heterogeneous columns to numerics, filters sparse signals, and emits \texttt{clean\_combined\_all\_benches.csv} plus the modeling-ready \texttt{...\_transformed.csv}.
+  \item \textbf{Model Runner.} \texttt{lmsys\_predictor3.py} handles imputation, feature selection, model search, predictions, and run metadata under \texttt{analysis\_output/}; \texttt{sweep\_feature\_selector.sh} automates parameter sweeps.
+\end{itemize}
+
+\section*{Pipeline Stages}
+\begin{enumerate}
+  \item \textbf{Harvest \& Stage.} A daily cron executes each grabber, producing dated raw snapshots; optional API keys are supplied via environment variables.
+  \item \textbf{Canonical Merge.} \texttt{combine.py} loads the freshest file per benchmark, refreshes mapping dictionaries when new names appear, and outer-joins everything on \texttt{Unified\_Name} while logging unmapped and newly mapped models.
+  \item \textbf{Cleaning \& Enrichment.} Non-numeric columns are dropped or parsed, percentages become floats, benchmark-presence flags are added, and derived columns such as the stylebench normalization stats, simplebenchfree token usage aggregates, and Box-Cox / Yeo-Johnson transforms are appended before writing the `clean` and `transformed` matrices.
+  \item \textbf{Iterative Imputation.} \texttt{Gated\_Iterative\_Imputer.py} runs multi-pass Jacobi updates with per-target feature selection (relevance $\rightarrow$ decorrelation $\rightarrow$ residual rescue), dual regressors (Bayesian Ridge + CatBoost or HGBR fallback), and a learned gate that inflates uncertainty for missingness and extrapolation.
+  \item \textbf{Feature Selection \& ALT Fill.} LightGBM/XGBoost selectors apply 1-SE rules to trim features; when LMArena (style-controlled) scores exist, \texttt{impute\_alt\_for\_all()} backfills that channel so the LMSYS predictor can use both the style-controlled and style-off measurements of the same underlying arena run.
+  \item \textbf{Modeling \& Reporting.} Candidate specs (ElasticNet, Bayesian Ridge, gated blends, boosted trees) are cross-validated with fixed seeds, trained only on rows where LMSYS is observed, then scored on the remaining rows to mimic deployment; the winning model produces posterior means/intervals, QC tables, feature importances, and prediction exports for every model row.
+\end{enumerate}
+
+\section*{Quality and Safety Controls}
+\begin{itemize}
+  \item \textbf{Mapping Governance.} \texttt{mappings/} stores new alias proposals, unmapped names, and final applied mappings for manual spot checks.
+  \item \textbf{Determinism \& Fallbacks.} Random seeds propagate through MI estimates, CV splits, and model fits; CatBoost automatically falls back to HistGradientBoosting to avoid hard failures.
+  \item \textbf{Caching \& Integrity.} Imputed matrices are cached by CSV hash and hyperparameters, with post-fill NaN/Inf scans and extrapolation bin stats guarding against silent corruption.
+  \item \textbf{Reproducible Runs.} Every \texttt{analysis\_output/output\_*} bundle captures \texttt{run\_config.json}, \texttt{metadata.json}, imputation diagnostics, and README summaries.
+\end{itemize}
+
+\section*{Outputs and Next Steps}
+\begin{itemize}
+  \item \textbf{Core Artifacts.} \texttt{imputed\_full.csv}, \texttt{feature\_matrix\_used.csv}, \texttt{model\_eval\_rmse.csv}, and \texttt{predictions\_best\_model.csv} (plus long-form uncertainty tables) feed dashboards and analyses.
+  \item \textbf{Diagnostics.} Imputation QC, feature rankings, and ALT-target summaries highlight columns or benchmarks that need fresh data or mapping cleanup.
+  \item \textbf{Tuning Loop.} \texttt{sweep\_feature\_selector.sh} spins parameter sweeps whose RMSE summaries guide updates to selector caps, gating penalties, and interaction settings.
+\end{itemize}
+
+\end{document}

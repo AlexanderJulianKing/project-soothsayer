@@ -1,0 +1,151 @@
+# Project Soothsayer
+
+Predict Chatbot Arena ELO scores for LLMs before they appear on the leaderboard.
+
+Soothsayer runs 4 custom benchmarks against LLMs via the OpenRouter API, then combines those scores with 13+ public benchmark sources and uses gated iterative imputation + regression to predict Arena ELO scores for models that don't have them yet.
+
+## Benchmarks
+
+| Benchmark | What it measures | Method |
+|---|---|---|
+| **Soothsayer EQ** | Emotional intelligence | Multi-turn scenario responses, TrueSkill pairwise judging |
+| **Soothsayer Writing** | Creative writing quality | Story generation + direct scoring, TrueSkill pairwise judging |
+| **Soothsayer Logic** | Commonsense / trick questions | Multi-run answer collection + LLM grading + ML regression |
+| **Soothsayer Style** | Writing style tendencies | Style metric extraction + statistical analysis |
+
+## Architecture
+
+```
+openbench_*.csv (model list with OpenRouter IDs)
+    |
+    v
+4 benchmarks run in parallel (generate responses -> judge/score)
+    |
+    v
+Per-benchmark result CSVs
+    |
+    v
+scrape.bash         -- scrape 13+ external benchmark sources
+combine.bash        -- combine all sources -> clean_combined_all_benches.csv
+predict.sh          -- impute missing scores + predict Arena ELO
+    |
+    v
+analysis_output/    -- predictions, imputed matrices, diagnostics
+posthoc_suite.py    -- 12-chart post-hoc analysis
+```
+
+### Directory Layout
+
+```
+core/                    Shared Python package
+  llm_client.py            OpenRouter API client (retry, provider routing, reasoning effort)
+  trueskill_arena.py       TrueSkill pairwise comparison engine
+  benchmark.py             Abstract benchmark interface
+  cli.py                   CLI orchestrator
+  utils.py                 Shared utilities
+  config.py                Central configuration
+
+soothsayer_eq/           Emotional intelligence benchmark
+soothsayer_writing/      Creative writing benchmark
+soothsayer_logic/        Commonsense reasoning benchmark
+soothsayer_style/        Writing style benchmark
+
+scrapers/                External benchmark scrapers (13+ sources)
+benchmark_combiner/      Merge + clean all benchmark CSVs
+  combine.py               LLM-assisted model name mapping + merge
+  correlations.py          Correlation analysis + cleaning
+  benchmarks/              Central data store (all benchmark CSVs)
+  mappings/                Model name mapping JSONs
+arena_predictor/         Impute + predict Arena ELO scores
+  predict.py               Orchestrator (feature selection, prediction, intervals)
+  column_imputer.py        Per-column specialized imputation
+
+docs/                    Documentation (architecture, data dictionary, findings)
+tests/                   Test suite (62 tests)
+```
+
+## Setup
+
+```bash
+# Clone and install
+git clone https://github.com/YOUR_USERNAME/project_soothsayer.git
+cd project_soothsayer
+pip install -e .
+
+# Configure API keys
+cp .env.example .env
+# Edit .env with your OpenRouter and Gemini API keys
+
+# Verify setup
+python3 -m pytest tests/ -v
+```
+
+### Requirements
+
+- Python 3.9+
+- OpenRouter API key (for running benchmarks)
+- Gemini API key (for LLM-assisted model name mapping in the combiner)
+
+## Usage
+
+### Run all 4 benchmarks
+
+```bash
+./run_all_benches.bash                    # Full run with preflight API checks
+./run_all_benches.bash --skip-preflight   # Skip smoke tests
+./run_all_benches.bash eq style           # Run only named benchmarks
+```
+
+### Run individual benchmarks
+
+```bash
+# Soothsayer EQ
+cd soothsayer_eq && python3 main.py && python3 super_bench.py
+
+# Soothsayer Writing
+cd soothsayer_writing && python3 main.py && python3 super_bench.py
+
+# Soothsayer Logic
+cd soothsayer_logic && python3 collect_and_grade.py && python3 score.py
+
+# Soothsayer Style
+cd soothsayer_style && python3 collect.py && python3 style_analysis.py && python3 process_analysis.py
+```
+
+### Prediction pipeline
+
+```bash
+./scrape.bash        # Collect external benchmark data
+./combine.bash       # Combine + clean -> clean_combined_all_benches.csv
+./predict.sh         # Impute missing scores + predict Arena ELO
+python3 posthoc_suite.py  # Generate 12-chart analysis suite
+```
+
+### CLI
+
+```bash
+python -m core.cli                  # Run all benchmarks
+python -m core.cli eq writing       # Run specific benchmarks
+python -m core.cli --list-completed # Show progress
+python -m core.cli --skip-preflight # Skip API checks
+```
+
+## How It Works
+
+### Benchmark Phase
+
+Each benchmark evaluates LLMs on a different capability. EQ and Writing use a two-stage pipeline: first generate responses, then run TrueSkill pairwise comparisons with information-gain-based match selection to efficiently rank models. Logic collects answers across multiple runs and uses ML regression to score. Style extracts writing style metrics and runs statistical analysis.
+
+All benchmarks read from a shared `openbench_*.csv` that maps model display names to OpenRouter model IDs. The benchmarks are resume-safe -- they check existing outputs before running and skip already-evaluated models.
+
+### Prediction Phase
+
+The prediction pipeline (`scrapers/` → `benchmark_combiner/` → `arena_predictor/`) merges scores from the 4 custom benchmarks with 13+ external sources (LiveBench, Artificial Analysis, AiderBench, ARC, etc.) using a three-tier model name mapping system with LLM-assisted fuzzy matching. The mappings require significant human curation and pruning -- the LLM suggestions are a starting point, but incorrect matches (e.g. confusing model versions or sizes) must be manually reviewed and corrected in `benchmark_combiner/mappings/`.
+
+The combined benchmark matrix is sparse -- most models are missing scores from several benchmarks. `SpecializedColumnImputer` fills these gaps using per-column specialized models (Gaussian Processes, BayesianRidge, LogisticRegression) chosen by automatic column type classification.
+
+Finally, `predict.py` trains on models that have Arena scores to predict scores for those that don't, using feature selection, polynomial interactions, and conformal prediction intervals.
+
+## License
+
+MIT License. See [LICENSE](LICENSE).

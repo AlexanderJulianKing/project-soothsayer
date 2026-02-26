@@ -1,0 +1,5 @@
+New mappings generated (please review for accuracy):
+DeepSeek R1 05/28 → DeepSeek R1 (2025-05-28)
+Claude 4 Sonnet (thinking) → Claude 4 Sonnet Thinking
+Qwen3 235B-A22B → Qwen 3 235B A22B
+Claude 4 Opus (thinking) → Claude 4 Opus Thinking
