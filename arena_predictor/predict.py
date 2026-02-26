@@ -731,6 +731,7 @@ def _alt_cv_report(
             n_runs=1,      # no consensus inside nested CV
             consensus_min=1,
             verbose=False,
+            n_jobs=1,      # already inside nested CV, no further forking
         )
         int_pair_rows.append({
             "fold": k,
@@ -1009,6 +1010,7 @@ def _greedy_select_alt_interactions(
     n_runs: int = 5,
     consensus_min: int = 3,
     verbose: bool = True,
+    n_jobs: int = -1,
 ) -> Tuple[List[Tuple[str, str]], pd.DataFrame]:
     """Consensus greedy forward search for post-PCA interaction terms.
 
@@ -1048,8 +1050,9 @@ def _greedy_select_alt_interactions(
         print(f"ALT interactions: consensus search ({n_runs} runs, keep pairs in ≥{consensus_min})")
 
     # Run independent greedy searches in parallel
+    eff_jobs = min(n_runs, os.cpu_count() or 4) if n_jobs == -1 else min(n_runs, max(1, n_jobs))
     all_runs: List[List[Tuple[str, str]]] = Parallel(
-        n_jobs=min(n_runs, os.cpu_count() or 4), prefer="processes"
+        n_jobs=eff_jobs, prefer="processes"
     )(
         delayed(_single_greedy_run)(
             X_df, y, cols, n_comp,
@@ -4249,6 +4252,7 @@ def main():
                 max_pairs=args.alt_interaction_max_pairs,
                 min_improvement=args.alt_interaction_min_improvement,
                 verbose=True,
+                n_jobs=PARALLELISM_CFG.get("selector_n_jobs", -1),
             )
             search_elapsed = time.time() - search_t0
             ALT_POST_PCA_INTERACTIONS = selected_pairs
