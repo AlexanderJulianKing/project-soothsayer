@@ -1434,7 +1434,16 @@ class SpecializedColumnImputer:
         return equal
 
     def _select_predictors(self, df: pd.DataFrame, target_col: str) -> List[str]:
-        """Simple correlation-based feature selection."""
+        """Correlation-based feature selection with co-missingness awareness.
+
+        Predictors that are always missing when the target is missing are
+        useless for imputation — they provide no information for the rows
+        that actually need filling.  We discount correlation by the fraction
+        of target-missing rows where the predictor is available.
+        """
+        target_missing = df[target_col].isna()
+        n_missing = target_missing.sum()
+
         correlations = []
         for col in df.columns:
             if col != target_col:
@@ -1443,13 +1452,24 @@ class SpecializedColumnImputer:
                     try:
                         corr = abs(df.loc[common_mask, target_col].corr(df.loc[common_mask, col]))
                         if not np.isnan(corr):
-                            correlations.append((col, corr))
+                            # Compute availability: fraction of target-missing rows
+                            # where this predictor is NOT missing
+                            if n_missing > 0:
+                                pred_available = (~df[col].isna() & target_missing).sum()
+                                availability = pred_available / n_missing
+                            else:
+                                availability = 1.0
+                            # Effective score: correlation * availability
+                            # A predictor with r=0.9 but 0% availability is useless
+                            # A predictor with r=0.7 but 100% availability is much better
+                            eff_score = corr * availability
+                            correlations.append((col, eff_score, corr, availability))
                     except Exception:
                         continue
 
-        # Sort by correlation, keep top k_max
+        # Sort by effective score, keep top k_max
         correlations.sort(key=lambda x: x[1], reverse=True)
-        selected = [col for col, _ in correlations[:self.selector_k_max]]
+        selected = [col for col, _, _, _ in correlations[:self.selector_k_max]]
 
         return selected
 
@@ -1491,13 +1511,26 @@ class SpecializedColumnImputer:
         if not candidates:
             return []
 
-        # Compute relevance: |spearman(feature, target)|
+        # Precompute availability for co-missingness awareness
+        target_missing = df[target_col].isna()
+        n_missing = target_missing.sum()
+        availability = {}
+        for col in candidates:
+            if n_missing > 0:
+                pred_available = (~df[col].isna() & target_missing).sum()
+                availability[col] = pred_available / n_missing
+            else:
+                availability[col] = 1.0
+
+        # Compute relevance: |spearman(feature, target)| * availability
         relevance = {}
         for col in candidates:
             if target_col in self.spearman_matrix_.index and col in self.spearman_matrix_.columns:
                 corr = self.spearman_matrix_.loc[target_col, col]
                 if not pd.isna(corr) and abs(corr) >= min_relevance:
-                    relevance[col] = abs(corr)
+                    # Discount by availability: a perfectly correlated predictor
+                    # that's always missing when the target is missing scores 0
+                    relevance[col] = abs(corr) * availability.get(col, 1.0)
 
         if not relevance:
             # No features pass minimum relevance threshold
