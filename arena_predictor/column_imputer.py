@@ -29,6 +29,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import DotProduct, Matern, WhiteKernel, ConstantKernel
 
+from sklearn.utils.extmath import randomized_svd
 from joblib import Parallel, delayed
 
 
@@ -898,6 +899,53 @@ class ModelFactory:
         return base
 
 
+def _iterative_svd_impute(X: np.ndarray, rank: int = 5, max_iter: int = 30,
+                          tol: float = 1e-4) -> np.ndarray:
+    """Low-rank matrix completion via iterative SVD (SoftImpute-style).
+
+    Fills missing values by iteratively computing a rank-k SVD approximation.
+    Observed values are preserved; only missing entries are updated each iteration.
+
+    Args:
+        X: 2D array with np.nan for missing entries.
+        rank: Target rank for SVD approximation.
+        max_iter: Maximum iterations.
+        tol: Convergence tolerance (relative change in Frobenius norm of fills).
+
+    Returns:
+        Completed matrix (same shape as X).
+    """
+    mask = np.isnan(X)
+    # Initialize missing with column medians
+    col_medians = np.nanmedian(X, axis=0)
+    # Handle all-NaN columns
+    col_medians = np.where(np.isnan(col_medians), 0.0, col_medians)
+    Z = X.copy()
+    Z[mask] = np.take(col_medians, np.where(mask)[1])
+
+    effective_rank = min(rank, min(Z.shape) - 1)
+    if effective_rank < 1:
+        return Z
+
+    prev_fills = Z[mask].copy()
+
+    for _ in range(max_iter):
+        U, s, Vt = randomized_svd(Z, n_components=effective_rank, random_state=42)
+        Z_approx = U @ np.diag(s) @ Vt
+        # Only update missing entries
+        Z[mask] = Z_approx[mask]
+
+        # Check convergence
+        new_fills = Z[mask]
+        change = np.linalg.norm(new_fills - prev_fills)
+        scale = np.linalg.norm(new_fills) + 1e-10
+        if change / scale < tol:
+            break
+        prev_fills = new_fills.copy()
+
+    return Z
+
+
 class SpecializedColumnImputer:
     """
     Drop-in replacement for GatedIterativeImputer with per-column specialization.
@@ -1065,6 +1113,11 @@ class SpecializedColumnImputer:
             if self.verbose and n_transformed > 0:
                 print(f"Stage 0.5: Log-transformed {n_transformed} positively-skewed columns (threshold={self.skew_threshold:.1f})")
 
+        # Save original missing mask BEFORE any filling (needed for SVD warm-start)
+        self.original_missing_: Dict[str, pd.Series] = {}
+        for col in cols_to_impute:
+            self.original_missing_[col] = X_df[col].isna().copy()
+
         # Stage 1: Column Classification
         if self.verbose:
             print("Stage 1: Classifying columns...")
@@ -1116,6 +1169,28 @@ class SpecializedColumnImputer:
         numeric_cols = X_df.select_dtypes(include=[np.number]).columns.tolist()
         self.correlation_matrix_ = X_df[numeric_cols].corr(method='pearson')
         self.spearman_matrix_ = X_df[numeric_cols].corr(method='spearman')
+
+        # Stage 2.75: Compute SVD anchor for residual targets and warm-start
+        # Low-rank approximation captures global capability structure. Models will
+        # learn residuals (y - svd_estimate) instead of raw values, focusing on
+        # what the global structure misses.
+        numeric_cols_for_svd = X_df.select_dtypes(include=[np.number]).columns.tolist()
+        self.anchor_df_ = None
+        if len(numeric_cols_for_svd) >= 3 and len(cols_to_impute) > 0:
+            X_mat = X_df[numeric_cols_for_svd].to_numpy(dtype=float, na_value=np.nan)
+            col_means = np.nanmean(X_mat, axis=0)
+            col_stds = np.nanstd(X_mat, axis=0)
+            col_stds[col_stds < 1e-10] = 1.0
+            X_standardized = (X_mat - col_means) / col_stds
+
+            svd_rank = min(8, len(numeric_cols_for_svd) // 3, X_mat.shape[0] // 5)
+            svd_rank = max(svd_rank, 2)
+            Z_std = _iterative_svd_impute(X_standardized, rank=svd_rank)
+            Z = Z_std * col_stds + col_means
+
+            self.anchor_df_ = pd.DataFrame(Z, index=X_df.index, columns=numeric_cols_for_svd)
+            if self.verbose:
+                print(f"Stage 2.75: SVD anchor computed (rank={svd_rank})")
 
         # Stage 3: Feature Selection & Model Fitting
         if self.verbose:
@@ -1203,7 +1278,21 @@ class SpecializedColumnImputer:
         if self.verbose:
             print(f"Stage 4: Iterative imputation ({self.passes} rounds)...")
 
+        # Initialize current_df: fill missing with SVD anchor (warm-start) or keep NaN
         current_df = X_df.copy()
+        if self.anchor_df_ is not None:
+            n_svd_filled = 0
+            for col in cols_to_impute:
+                if col in self.anchor_df_.columns:
+                    missing_mask = self.original_missing_.get(col, current_df[col].isna())
+                    if missing_mask.any():
+                        # Ensure column is float-compatible (handles Int64 nullable)
+                        if hasattr(current_df[col].dtype, 'numpy_dtype'):
+                            current_df[col] = current_df[col].astype(float)
+                        current_df.loc[missing_mask, col] = self.anchor_df_.loc[missing_mask, col].values
+                        n_svd_filled += int(missing_mask.sum())
+            if self.verbose:
+                print(f"  SVD warm-start: {n_svd_filled} cells initialized")
         tiers = sorted(set(tier for _, _, tier in self.imputation_order_))
         global_pass = 0
 
@@ -1219,8 +1308,11 @@ class SpecializedColumnImputer:
                 if not tier_cols:
                     continue
 
-                # Check if any columns in this tier still have missing values
-                has_missing = any(current_df[col].isna().any() for col in tier_cols)
+                # Check if any columns in this tier have originally-missing values
+                has_missing = any(
+                    self.original_missing_.get(col, current_df[col].isna()).any()
+                    for col in tier_cols
+                )
                 if not has_missing:
                     continue
 
@@ -1233,7 +1325,9 @@ class SpecializedColumnImputer:
 
                 def impute_column(col, pass_num=global_pass):
                     writes = []
-                    missing_mask = snapshot_df[col].isna()
+                    # Use original missing mask if available (SVD pre-filled cells
+                    # still need refinement by per-column models)
+                    missing_mask = self.original_missing_.get(col, snapshot_df[col].isna())
                     if not missing_mask.any():
                         return col, writes
 
