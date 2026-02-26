@@ -1,0 +1,2 @@
+Unified_Name,rows,differing_cols,sample_values
+Grok 4 (Refine.),2,"['arc_Author', 'arc_ARC-AGI-1', 'arc_ARC-AGI-2', 'arc_Cost/Task']","{'arc_Author': ['J. Berman', 'E. Pang'], 'arc_ARC-AGI-1': ['79.6%', '77.1%'], 'arc_ARC-AGI-2': ['29.4%', '26.0%'], 'arc_Cost/Task': ['$30.40', '$3.97']}"

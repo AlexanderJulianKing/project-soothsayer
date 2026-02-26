@@ -1,0 +1,18 @@
+# Core data science libraries
+pandas
+numpy
+scipy
+scikit-learn
+catboost
+lightgbm
+xgboost
+
+# Statistical modeling
+statsmodels
+
+# Plotting
+matplotlib
+
+# Parallel processing (often a dependency of scikit-learn, but good to list)
+joblib
+

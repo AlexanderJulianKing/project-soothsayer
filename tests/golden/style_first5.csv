@@ -1,0 +1,6 @@
+code,model,Q1,Q2,Q3,Q4,Q5,Q6,Q7,Q8,Q9,Q10,
+amazon/nova-lite-v1,Nova Lite,"To determine the number of whole ice cubes in the pan at the end of the third minute, we need to follow these steps:
+
+1. **Calculate the total number of ice cubes placed in the pan over the four minutes:**
+   - At the start of the first minute, Beth places 4 ice cubes.
+   - At the start of the second minute, Beth places 5 ice cubes.

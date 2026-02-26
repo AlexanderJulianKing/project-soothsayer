@@ -1,0 +1,79 @@
+Final mappings used in this run:
+Claude 4 Opus (thinking) → Claude 4 Opus Thinking
+o3 (high) → o3 High
+Gemini 2.5 Pro → Gemini 2.5 Pro Preview (2025-03-25)
+Claude 3.7 Sonnet (thinking) → Claude 3.7 Sonnet Thinking
+Claude 4 Sonnet (thinking) → Claude 4 Sonnet Thinking
+Claude-3.7-Sonnet → Claude 3.7 Sonnet
+Claude 3.5 Sonnet 10-22 → Claude 3.5 Sonnet
+DeepSeek R1 05/28 → DeepSeek R1 (2025-05-28)
+o1-2024-12-17 (high) → o1 High
+o4-mini (high) → o4-Mini High
+Grok 3 → Grok 3 Beta
+GPT-4.5 → GPT-4.5 Preview
+Qwen3 235B-A22B → Qwen 3 235B A22B
+DeepSeek-R1 → DeepSeek R1
+Gemini 2.0 Flash Thinking → Gemini 2.0 Flash Thinking Experimental
+Llama 4 Maverick → Llama 4 Maverick 17B 128E Instruct
+DeepSeek V3 03-24 → DeepSeek V3.1
+OpenAI GPT-4.1 → GPT-4.1
+Anthropic Claude-3-opus → Claude 3 Opus
+Llama 3.1 405b instruct → Llama 3.1 405B Instruct Turbo
+o3-mini (high) → o3-Mini High
+XAI Grok-2 → Grok 2
+Mistral Large v2 → Mistral Large
+Llama 3.3 70b instruct → Llama 3.3 70B Instruct Turbo
+Gemini 2.0 Flash Exp → Gemini 2.0 Flash
+o1-mini → o1-Mini
+GPT-4o 08-06 → GPT-4o (2024-08-06)
+Command R+ → Command R Plus
+GPT-4o mini → GPT-4o Mini
+o3-2025-04-16 → o3 Medium
+XAI Grok-3-Mini-Beta → Grok 3 Mini Beta (High)
+Qwen3-32B → Qwen 3 32B
+Google Gemini-2.5-Flash-Preview → Gemini 2.5 Flash Preview (2025-05-20)
+OpenAI o4-mini → o4-Mini Medium
+gemini-2.5-flash-preview-04-17 → Gemini 2.5 Flash Preview (2025-04-17)
+qwen3-30b-a3b → Qwen 3 30B A3B
+Claude Opus 4 (no reasoning) → Claude 4 Opus
+Claude Sonnet 4 (no reasoning) → Claude 4 Sonnet
+OpenAI GPT-4.1-mini → GPT-4.1 Mini
+OpenAI GPT-4o → ChatGPT-4o
+gpt-4o-2024-05-13 → GPT-4o
+Qwen2.5-Max → Qwen2.5 Max
+hunyuan-turbos-20250226 → Hunyuan Turbos
+Mistral-Small-3.1-24B-Instruct → Mistral Small
+OpenAI GPT-4.1-nano → GPT-4.1 Nano
+Google Gemma-3-27B-Instruct → Gemma 3 27B
+Qwen2.5-72B-Instruct → Qwen2.5 72B Instruct Turbo
+google/gemini-2.0-flash-lite-001 → Gemini 2.0 Flash Lite
+Anthropic Claude-3-5-haiku → Claude 3.5 Haiku
+Cohere Command-R → Command R
+Llama-3.1-8B-Instruct → Llama 3.1 8B Instruct Turbo
+Qwen2.5-7B-Instruct → Qwen2.5 7B Instruct Turbo
+qwq-32b → QwQ 32B
+Cohere Command-A → Command A
+Google Gemma-3-4B-Instruct → Gemma 3 4B
+Microsoft Phi-4 → Phi-4
+DeepSeek-V3 → DeepSeek V3
+Google Gemini-1.5-Flash → Gemini 1.5 Flash 8B
+Google Gemma-3-12B-Instruct → Gemma 3 12B
+google/gemini-flash-1.5 → Gemini 1.5 Flash
+Google Gemini-2.0-Pro-Exp → Gemini 2.0 Pro Experimental
+gemini-2.5-pro-preview-05-06 → Gemini 2.5 Pro Preview (2025-05-06)
+Llama-3.1-70B-Instruct → Llama 3.1 70B Instruct Turbo
+GPT-4o 2024-11-20 → GPT-4o (2024-11-20)
+o3-mini → o3-Mini Medium
+Amazon Nova-Lite-V1 → Nova Lite
+Amazon Nova-Micro-V1 → Nova Micro
+Amazon Nova-Pro-V1 → Nova Pro
+step-2-16k-exp-202412 → Step 2 16K
+Qwen3-14B → Qwen 3 14B
+Qwen3-4B → Qwen 3 4B
+Qwen3-8B → Qwen 3 8B
+Qwen3-0.6B → Qwen 3 0.6B
+Qwen3-1.7B → Qwen 3 1.7B
+Google Gemma-3-1B-Instruct → Gemma 3 1B
+Grok 3 Mini Beta (low) → Grok 3 Mini Beta (Low)
+x-ai/grok-3-mini-beta → Grok 3 Mini Beta (Medium)
+mistralai/ministral-8b → Ministral-8B-2410

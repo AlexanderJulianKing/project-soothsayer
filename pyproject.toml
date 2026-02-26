@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=45"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "core"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "numpy",
+    "requests",
+    "tqdm",
+    "trueskill",
+]
+
+[project.optional-dependencies]
+benchmarks = ["pingouin", "scikit-learn"]
+predict = [
+    "scikit-learn",
+    "catboost",
+    "lightgbm",
+    "xgboost",
+    "scipy",
+    "statsmodels",
+    "joblib",
+]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["core*"]
+
+[project.scripts]
+soothsayer = "core.cli:main"

@@ -1,0 +1,703 @@
+question_id,model_name,model_id,run_number,judge_model_id,judge_model_name,replicate_id,score_density,score_confidence,duration_s
+2,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,28,22,6.25
+2,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,25,12,6.57
+3,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,68,7.62
+2,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,25,18,7.77
+3,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,68,8.14
+3,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,72,8.14
+1,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,42,10.51
+1,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,52,11.28
+5,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,42,35,6.29
+6,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,87,48,6.18
+1,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,45,14.95
+5,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,55,48,7.34
+5,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,45,8.64
+6,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,75,42,7.58
+6,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,75,48,8.75
+7,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,96,5.54
+4,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,55,62,14.16
+7,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,95,6.99
+7,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,78,92,6.07
+4,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,52,38,21.47
+9,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,48,6.73
+8,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,80,45,11.75
+9,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,62,8.11
+9,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,78,52,7.38
+8,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,60,32,9.42
+8,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,45,32,14.3
+2,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,48,32,5.75
+2,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,35,22,5.2
+1,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,38,13.16
+4,Nova Lite,amazon/nova-lite-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,37,28.76
+2,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,52,38,7.59
+3,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,78,70,8.96
+3,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,82,8.82
+3,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,82,7.33
+1,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,68,52,17.24
+4,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,38,22,6.58
+5,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,65,68,5.86
+5,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,58,52,7.23
+4,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,32,28,8.15
+5,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,55,48,6.43
+1,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,60,35,22.61
+6,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,62,7.57
+6,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,48,7.86
+7,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,78,95,7.79
+6,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,55,9.65
+8,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,52,42,7.48
+9,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,68,5.01
+8,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,45,35,6.94
+8,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,38,29,8.16
+9,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,62,7.0
+9,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,68,5.93
+7,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,94,11.8
+2,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,42,28,4.03
+2,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,28,5.6
+2,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,45,28,5.24
+7,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,78,95,14.73
+1,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,52,11.01
+4,Nova Micro,amazon/nova-micro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,32,38,27.09
+3,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,7.2
+1,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,68,42,12.04
+4,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,22,18,6.61
+4,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,25,18,6.97
+3,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,82,8.23
+1,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,68,14.17
+5,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,72,5.59
+5,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,75,82,5.1
+3,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,78,12.82
+4,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,32,25,10.25
+5,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,75,7.19
+7,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,98,4.65
+7,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,98,5.22
+6,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,52,28,8.59
+7,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,92,8.52
+6,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,68,42,8.94
+8,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,48,8.96
+9,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,82,5.06
+8,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,75,52,9.78
+9,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,75,7.01
+9,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,85,5.61
+6,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,68,32,13.06
+8,Nova Pro,amazon/nova-pro-v1,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,58,12.33
+1,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,78,8.09
+3,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,78,7.6
+2,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,52,48,7.98
+1,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,62,10.1
+1,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,72,10.59
+3,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,82,8.37
+2,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,70,48,9.81
+3,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,82,8.05
+2,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,48,52,10.67
+4,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,68,7.85
+4,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,68,6.82
+4,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,72,10.07
+7,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,98,6.3
+5,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,62,48,8.24
+6,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,68,7.48
+5,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,65,52,9.86
+6,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,68,9.24
+6,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,62,8.97
+5,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,72,68,10.67
+7,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,98,5.34
+7,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,96,4.86
+8,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,78,58,8.05
+9,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,72,6.65
+9,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,78,5.87
+8,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,55,45,6.96
+8,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,58,42,9.51
+2,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,70,82,7.28
+1,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,72,8.57
+9,Claude 3 Opus,anthropic/claude-3-opus,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,68,9.75
+2,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,88,5.09
+3,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,72,5.71
+2,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,62,78,6.8
+1,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,78,72,12.77
+1,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,68,13.66
+4,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,68,52,5.87
+3,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,68,8.95
+3,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,68,6.82
+4,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,68,54,7.7
+4,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,38,8.81
+6,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,52,4.61
+6,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,70,42,5.94
+5,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,55,32,9.11
+7,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,98,6.67
+7,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,98,7.31
+6,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,75,48,8.91
+5,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,48,11.94
+8,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,88,5.35
+5,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,65,48,11.74
+7,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,98,6.86
+8,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,92,6.31
+8,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,82,5.24
+9,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,68,7.49
+9,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,85,6.86
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,72,5.88
+9,Claude 3.5 Haiku,anthropic/claude-3.5-haiku-20241022,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,68,8.22
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,48,7.81
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,85,5.23
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,82,7.0
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,90,5.24
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,3.17
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,92,3.77
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,82,5.24
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,78,14.16
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,70,42,7.12
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,72,16.55
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,52,9.45
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,72,9.27
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,82,10.11
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,58,42,5.71
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,78,11.91
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,58,10.47
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,98,5.49
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,88,5.85
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,98,8.27
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,98,7.16
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,6.42
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,72,16.26
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,92,6.37
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,88,6.99
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,82,7.34
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,72,8.79
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,87,72,8.14
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,72,8.22
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,72,7.65
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,72,7.33
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,87,7.55
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,75,12.14
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,82,8.5
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,68,15.25
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,68,17.73
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,88,4.96
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,65,18.32
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,92,6.64
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,85,7.04
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,82,10.13
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,72,10.72
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,82,9.41
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,88,7.29
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,98,5.54
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,96,6.07
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,88,4.59
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,98,6.7
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,92,5.88
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,88,6.64
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,75,62,16.43
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,90,7.8
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,5.98
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,88,5.32
+4,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,25,4.61
+3,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,68,6.77
+2,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,32,28,7.34
+2,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,28,8.9
+3,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,75,7.12
+2,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,32,24,8.56
+1,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,92,10.22
+3,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,58,8.0
+1,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,92,11.12
+4,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,28,22,4.61
+4,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,35,22,4.61
+5,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,78,6.11
+5,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,76,78,5.76
+5,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,74,7.0
+6,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,45,6.09
+6,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,48,6.31
+6,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,48,8.2
+7,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,94,7.82
+1,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,92,19.92
+7,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,95,7.7
+9,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,78,55,5.64
+9,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,85,5.61
+8,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,72,7.11
+8,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,78,7.11
+7,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,95,9.76
+8,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,74,8.5
+2,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,42,38,5.41
+9,Command R,cohere/command-r-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,78,62,9.7
+2,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,45,25,6.59
+2,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,52,28,7.14
+1,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,78,82,11.27
+3,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,72,52,8.42
+3,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,62,9.98
+4,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,38,32,6.65
+3,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,75,48,11.36
+1,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,62,17.52
+4,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,35,28,8.72
+4,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,42,38,9.99
+1,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,75,68,19.02
+5,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,48,9.34
+6,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,52,5.95
+5,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,70,58,7.54
+6,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,48,5.26
+5,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,62,54,12.8
+6,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,48,8.92
+7,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,70,95,6.56
+7,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,96,6.86
+8,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,72,6.95
+8,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,68,7.23
+8,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,72,7.47
+7,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,45,92,8.88
+9,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,78,7.39
+9,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,78,8.9
+9,Command R Plus,cohere/command-r-plus-08-2024,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,78,6.7
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,82,4.89
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,40,25,6.16
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,50,32,6.81
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,82,6.15
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,82,6.14
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,28,9.0
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,52,12.16
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,58,15.07
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,52,7.05
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,45,6.38
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,65,8.91
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,52,12.1
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,68,21.65
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,68,11.94
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,62,13.3
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,97,5.33
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,97,5.28
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,58,18.85
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,97,5.98
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,68,5.94
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,48,11.19
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,62,6.09
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,65,7.31
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,62,21.6
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,93,88,6.69
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,87,8.01
+1,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,68,7.98
+2,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,28,25,6.52
+1,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,48,8.69
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat:free,1,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,72,13.82
+1,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,82,8.54
+1,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,72,9.22
+1,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,55,11.88
+2,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,32,24,5.62
+2,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,32,28,7.34
+1,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,68,13.25
+3,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,85,7.21
+2,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,42,28,7.15
+3,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,85,8.52
+3,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,72,58,7.12
+3,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,82,9.22
+2,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,45,25,9.11
+3,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,58,9.44
+2,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,42,28,10.44
+3,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,72,58,9.48
+5,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,72,6.88
+5,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,85,6.84
+5,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,68,7.51
+4,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,35,28,8.44
+4,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,28,25,16.35
+4,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,25,18,9.49
+6,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,62,9.19
+4,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,28,22,14.19
+4,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,28,12.87
+6,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,52,7.86
+5,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,70,42,8.07
+6,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,80,55,11.31
+5,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,45,38,7.96
+5,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,48,35,7.4
+6,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,52,9.25
+7,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,40,92,9.49
+6,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,80,52,11.5
+4,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,28,32,26.86
+6,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,42,12.0
+7,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,94,11.08
+8,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,48,8.64
+8,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,78,9.36
+7,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,97,5.12
+7,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,60,95,12.61
+8,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,58,11.64
+7,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,95,8.32
+7,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,95,9.3
+9,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,82,6.02
+1,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,68,7.62
+1,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,65,8.62
+1,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,72,7.83
+9,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,58,10.44
+9,Nova Lite,amazon/nova-lite-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,68,10.23
+1,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,68,13.9
+8,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,68,7.52
+8,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,72,7.02
+1,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,68,11.33
+8,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,52,7.93
+2,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,38,32,6.5
+2,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,52,34,7.0
+2,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,22,12.21
+3,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,62,6.65
+1,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,58,15.1
+2,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,52,38,8.65
+3,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,58,6.95
+2,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,40,35,11.52
+3,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,62,8.7
+2,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,42,35,13.67
+3,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,78,6.13
+9,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,68,6.36
+3,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,72,7.77
+3,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,72,7.65
+5,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,75,58,6.16
+9,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,68,7.86
+9,Nova Lite,amazon/nova-lite-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,62,9.28
+5,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,62,7.1
+4,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,32,24,5.42
+4,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,32,28,7.76
+6,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,62,6.3
+6,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,48,7.15
+5,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,55,48,11.98
+6,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,52,8.44
+4,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,25,32,10.42
+4,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,28,7.01
+6,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,52,9.37
+6,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,52,9.98
+6,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,48,12.46
+4,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,22,19,9.55
+5,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,45,38,8.49
+5,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,62,48,8.25
+5,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,65,52,10.02
+4,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,25,15,12.58
+8,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,55,38,7.51
+8,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,62,48,7.61
+8,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,52,42,8.05
+7,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,95,6.52
+7,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,94,7.55
+7,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,98,5.19
+7,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,98,6.2
+7,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,98,6.52
+7,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,96,8.09
+9,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,78,6.72
+8,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,28,12.18
+9,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,72,8.91
+8,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,38,12.8
+8,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,25,22,11.72
+9,Nova Micro,amazon/nova-micro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,58,11.43
+1,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,48,10.28
+1,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,38,10.68
+9,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,75,62,9.45
+3,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,90,5.04
+9,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,62,8.77
+1,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,45,14.14
+1,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,52,8.12
+3,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,85,4.34
+1,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,58,7.93
+9,Nova Micro,amazon/nova-micro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,72,9.0
+3,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,85,4.83
+1,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,62,8.2
+2,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,48,32,5.09
+2,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,32,5.05
+2,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,62,38,5.09
+2,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,75,48,5.23
+2,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,52,6.05
+3,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,38,35,6.63
+2,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,42,7.15
+3,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,40,35,7.93
+3,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,48,42,10.05
+5,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,62,5.77
+4,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,42,35,9.12
+5,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,52,42,13.43
+5,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,78,72,7.45
+5,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,48,52,12.06
+5,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,72,8.5
+5,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,70,52,15.78
+6,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,87,48,9.08
+4,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,35,25,14.54
+6,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,48,8.57
+6,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,55,8.34
+4,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,42,35,14.97
+6,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,48,7.02
+6,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,52,6.49
+6,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,80,52,9.43
+8,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,78,58,6.15
+7,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,95,5.05
+7,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,95,5.77
+4,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,48,11.62
+8,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,48,6.9
+7,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,94,8.98
+8,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,48,9.75
+8,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,65,42,6.5
+8,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,65,45,8.91
+9,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,68,6.99
+9,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,72,7.31
+9,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,68,8.05
+8,Nova Pro,amazon/nova-pro-v1,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,75,52,8.8
+7,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,88,8.47
+9,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,82,6.61
+9,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,72,5.92
+9,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,85,6.21
+7,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,55,92,11.59
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,82,7.86
+7,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,62,88,10.42
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,68,10.31
+4,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,65,42,28.07
+4,Nova Pro,amazon/nova-pro-v1,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,72,48,30.22
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,88,5.98
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,72,7.7
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,72,8.4
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,82,10.33
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,90,5.42
+1,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,62,8.01
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,92,5.49
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,92,4.39
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,4.59
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,88,4.58
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,92,4.99
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,82,4.62
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,88,5.59
+3,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,88,5.33
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,82,7.84
+2,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,58,78,8.99
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,55,8.64
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,78,8.5
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,72,65,10.08
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,78,7.76
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,88,7.68
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,87,8.73
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,87,9.04
+5,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,88,8.06
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,85,13.63
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,75,48,7.74
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,80,52,7.66
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,52,8.21
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,78,9.3
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,72,10.1
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,88,5.85
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,90,6.02
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,58,9.29
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,78,58,8.95
+4,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,58,12.24
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,92,7.01
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,90,7.72
+6,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,38,9.76
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,88,5.69
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,98,4.6
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,84,6.95
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,85,6.04
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,98,5.47
+8,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,92,8.27
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,80,8.07
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,98,7.84
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,52,4.73
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,78,9.06
+9,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,48,8.84
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,98,5.69
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,98,6.83
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,82,4.8
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,92,6.29
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,82,6.5
+7,Claude 3.5 Sonnet,anthropic/claude-3.5-sonnet,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,98,8.69
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,85,8.51
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,88,4.97
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,92,5.71
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,92,6.47
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,5.54
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,87,7.59
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,85,7.02
+2,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,82,10.89
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,55,6.29
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,72,5.32
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,85,8.94
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,90,4.94
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,4.56
+6,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,62,8.66
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,88,7.45
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,88,4.83
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,90,7.75
+8,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,90,7.46
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,98,5.89
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,98,5.61
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,88,5.3
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,98,7.98
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,95,88,6.39
+3,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,88,5.96
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,5.46
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,4.77
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,82,5.83
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,82,6.69
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,88,4.97
+9,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,88,7.85
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,80,88,7.7
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,98,5.24
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,92,8.09
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,98,7.02
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,87,8.2
+7,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,93,98,6.05
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,78,9.74
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,88,10.51
+5,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,85,11.31
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,68,11.27
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,72,5.5
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,70,72,8.51
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,62,48,9.72
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,72,9.21
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,75,11.84
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,68,71,11.65
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,82,7.34
+1,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,68,13.31
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,87,82,6.93
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,72,10.71
+4,Claude 3.7 Sonnet Thinking,anthropic/claude-3.7-sonnet:thinking,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,72,8.16
+1,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,95,82,7.48
+2,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,28,22,6.29
+2,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,32,28,5.93
+2,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,35,22,6.47
+2,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,35,25,7.51
+2,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,38,32,5.35
+1,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,88,10.32
+2,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,35,6.68
+1,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,82,14.63
+3,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,68,42,7.6
+5,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,87,6.65
+3,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,72,48,9.61
+3,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,72,48,8.51
+5,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,76,7.09
+5,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,75,9.73
+4,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,25,22,6.49
+4,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,18,22,7.22
+5,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,70,52,6.7
+1,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,48,17.58
+1,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,62,17.57
+5,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,58,52,7.87
+5,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,72,65,9.57
+4,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,12,18,6.29
+1,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,76,68,23.08
+4,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,22,24,13.74
+4,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,25,28,5.87
+4,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,25,22,9.62
+7,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,95,4.28
+3,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,68,52,8.39
+7,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,98,3.55
+7,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,98,5.21
+3,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,42,11.63
+6,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,48,11.37
+1,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,98,95,6.42
+6,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,75,58,9.81
+6,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,75,52,11.2
+6,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,62,6.77
+3,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,62,15.92
+1,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,98,92,7.43
+6,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,55,7.51
+6,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,78,52,5.94
+8,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,88,5.71
+8,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,92,6.23
+8,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,89,6.12
+1,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,95,92,12.4
+8,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,82,6.82
+8,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,87,6.43
+8,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,88,7.78
+2,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,55,42,6.31
+9,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,82,9.07
+9,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,82,9.09
+1,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,70,48,13.27
+9,Command R,cohere/command-r-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,78,8.8
+2,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,55,38,7.7
+1,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,65,42,15.06
+7,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,95,8.88
+2,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,62,48,9.16
+9,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,82,8.08
+9,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,85,8.66
+9,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,87,88,9.33
+1,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,60,48,21.75
+7,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,96,11.01
+7,Command R,cohere/command-r-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,78,94,12.03
+2,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,48,9.59
+2,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,72,48,8.58
+6,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,72,10.13
+2,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,62,38,12.71
+3,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,72,48,7.89
+6,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,62,9.17
+3,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,76,48,7.62
+6,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,72,9.91
+3,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,72,48,8.89
+3,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,48,7.67
+3,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,62,7.59
+3,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,75,52,7.33
+4,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,28,25,8.59
+5,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,52,47,5.38
+5,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,47,8.2
+4,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,32,28,12.36
+5,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,52,47,10.18
+5,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,72,58,10.15
+5,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,52,58,10.41
+4,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,32,25,13.04
+5,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,62,54,14.57
+4,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,28,22,8.63
+4,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,25,22,13.24
+6,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,82,58,7.95
+6,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,75,52,7.08
+7,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,95,8.53
+7,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,96,6.88
+6,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,75,48,9.11
+7,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,98,11.31
+4,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,28,24,15.92
+8,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,80,48,9.41
+8,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,72,58,8.03
+8,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,78,62,10.17
+7,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,75,98,8.35
+9,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,84,6.78
+9,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,78,7.0
+7,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,68,94,9.06
+7,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,68,94,11.59
+8,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,72,6.28
+9,Command R Plus,cohere/command-r-plus-08-2024,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,85,7.76
+8,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,72,5.48
+8,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,70,6.4
+9,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,78,6.91
+9,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,87,7.43
+9,Command R Plus,cohere/command-r-plus-08-2024,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,78,8.75
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,42,28,4.76
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,22,5.29
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,35,28,6.78
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,42,32,6.69
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,35,22,5.72
+2,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,42,28,6.71
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,82,5.8
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,90,78,6.6
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,42,38,6.93
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,55,42,9.4
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,60,30,17.08
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,45,32,8.63
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,85,5.52
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,58,42,16.18
+1,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,55,38,17.85
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,82,7.3
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,82,6.35
+3,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,78,9.01
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,75,62,7.5
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,72,65,7.97
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,82,38,14.16
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,62,48,14.19
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,68,42,15.46
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,75,52,13.71
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,55,48,9.44
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,75,68,12.52
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,62,48,9.0
+5,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,68,62,7.23
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,48,8.45
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,52,7.28
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,48,8.66
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,45,5.9
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,68,6.96
+6,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,87,48,9.77
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,68,7.44
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,93,72,8.72
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,78,62,28.31
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,90,65,6.7
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,98,5.17
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,88,98,7.45
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,92,98,6.19
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,82,95,5.96
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,92,98,7.0
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,90,68,5.78
+7,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,97,8.17
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,88,85,6.02
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,78,7.97
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,92,58,6.55
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,85,68,8.91
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,88,52,10.09
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,1,85,78,10.8
+9,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,85,72,12.16
+8,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,3,x-ai/grok-4.1-fast,Grok 4.1 Fast,2,80,48,8.91
+4,DeepSeek V3 (2024-12-26),deepseek/deepseek-chat,2,x-ai/grok-4.1-fast,Grok 4.1 Fast,0,76,48,66.89
