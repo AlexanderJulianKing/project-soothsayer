@@ -33,13 +33,26 @@ from joblib import Parallel, delayed
 
 
 class ColumnType(Enum):
-    """Column types for specialized imputation."""
+    """Column model family for specialized imputation."""
     CATEGORICAL = "categorical"
     LINEAR = "linear"
     NONLINEAR = "nonlinear"
-    BOUNDED = "bounded"
+    BOUNDED = "bounded"  # Legacy: kept for backward compat, treated as GP + bounded tag
     EXTRAPOLATION_PRONE = "extrapolation_prone"
     GP_LINEAR_MATERN = "gp_linear_matern"  # Safe default
+
+
+class ColumnTags:
+    """Distribution tags that control wrappers/transforms (independent of model family).
+
+    Tags are stored as a set of strings on the classification metadata.
+    They control how the target variable is transformed before fitting
+    and how predictions are post-processed, without changing which base model
+    is used.
+    """
+    BOUNDED = "bounded"              # Values in [L, U] — apply logit link
+    FLOOR_INFLATED = "floor_inflated"  # Bimodal: cluster at floor + spread above — use hurdle
+    CEILING_INFLATED = "ceiling_inflated"  # Mass at ceiling — future use
 
 
 class CorrelationWeightedImputer:
@@ -381,6 +394,196 @@ class CategoricalModel(BaseColumnModel):
         return predictions, normalized_uncertainty
 
 
+class BoundedLinkModel(BaseColumnModel):
+    """Wraps a base regression model with logit/sigmoid target transform.
+
+    For columns with values in [L, U], transforms y to logit space:
+        z = logit((y - L + eps) / (U - L + 2*eps))
+    Fits the base model on z, then inverse-transforms predictions back.
+    This expands compressed near-ceiling/floor bands so the model can
+    see meaningful differences.
+    """
+
+    def __init__(
+        self,
+        base_model: BaseColumnModel,
+        bounds: Tuple[float, float],
+        n_obs: int = 100,
+    ):
+        super().__init__(base_model.feature_names, base_model.alpha, base_model.seed)
+        self.base_model = base_model
+        self.lower = float(bounds[0])
+        self.upper = float(bounds[1])
+        self.eps = max(1e-3, 0.5 / (n_obs + 1))
+        self.range_ = self.upper - self.lower + 2 * self.eps
+        self.fitted_ = False
+
+    def _to_logit(self, y: np.ndarray) -> np.ndarray:
+        """Transform y from [L, U] to logit space."""
+        p = (y - self.lower + self.eps) / self.range_
+        p = np.clip(p, 1e-6, 1 - 1e-6)
+        return np.log(p / (1 - p))
+
+    def _from_logit(self, z: np.ndarray) -> np.ndarray:
+        """Transform z from logit space back to [L, U]."""
+        p = 1 / (1 + np.exp(-z))
+        return p * self.range_ + self.lower - self.eps
+
+    def fit(self, X: pd.DataFrame, y: pd.Series):
+        y_obs = y.dropna()
+        if len(y_obs) == 0:
+            self.fitted_ = False
+            return
+        y_logit = pd.Series(self._to_logit(y_obs.to_numpy(dtype=float)), index=y_obs.index)
+        # Check for degenerate transforms (all values map to same logit)
+        if y_logit.std() < 1e-8:
+            self.fitted_ = False
+            return
+        self.base_model.fit(X, y_logit)
+        self.fitted_ = getattr(self.base_model, 'fitted_', True)
+
+    def predict_with_uncertainty(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        if not self.fitted_:
+            return np.zeros(len(X)), np.ones(len(X)) * 1e6
+        z_mean, z_hw = self.base_model.predict_with_uncertainty(X)
+        # Transform mean back through sigmoid
+        y_mean = self._from_logit(z_mean)
+        # Approximate half-width: use derivative of sigmoid at z_mean
+        # dy/dz = p*(1-p) * range_, where p = sigmoid(z)
+        p = 1 / (1 + np.exp(-z_mean))
+        dydz = p * (1 - p) * self.range_
+        y_hw = z_hw * np.maximum(dydz, 1e-8)
+        return y_mean, y_hw
+
+
+class HurdleModel(BaseColumnModel):
+    """Two-stage model for floor-inflated (capability wall) distributions.
+
+    Stage 1 (gate): LogisticRegression predicting P(above threshold)
+    Stage 2 (value): Base regression model trained only on above-threshold data
+
+    Prediction: E[y] = p * mu_capable + (1-p) * floor_mean
+    This soft combination avoids discontinuities in the iterative imputation loop.
+    """
+
+    def __init__(
+        self,
+        feature_names: List[str],
+        threshold: float,
+        floor_mean: float,
+        alpha: float = 0.1,
+        seed: int = 42,
+        correlation_matrix: Optional[pd.DataFrame] = None,
+    ):
+        super().__init__(feature_names, alpha, seed)
+        self.threshold = threshold
+        self.floor_mean = floor_mean
+        self.correlation_matrix = correlation_matrix
+
+        # Gate: logistic classifier
+        self.gate_model = LogisticRegression(
+            random_state=seed, max_iter=1000, class_weight='balanced'
+        )
+        self.gate_scaler = StandardScaler()
+        self.gate_imputer = SimpleImputer(strategy='median')
+
+        # Value: BayesianRidge on above-threshold data
+        if correlation_matrix is not None:
+            self.value_imputer = CorrelationWeightedImputer(correlation_matrix)
+        else:
+            self.value_imputer = SimpleImputer(strategy='median')
+        self.value_model = BayesianRidge(compute_score=False, fit_intercept=True)
+        self.value_scaler = StandardScaler()
+
+        self.gate_fitted_ = False
+        self.value_fitted_ = False
+        self.fitted_ = False
+
+    def fit(self, X: pd.DataFrame, y: pd.Series):
+        y_obs = y.dropna()
+        if len(y_obs) < 10:
+            self.fitted_ = False
+            return
+
+        # Binary labels: above threshold
+        is_capable = (y_obs > self.threshold).astype(int)
+        n_capable = is_capable.sum()
+        n_floor = len(is_capable) - n_capable
+
+        if n_capable < 5 or n_floor < 3:
+            self.fitted_ = False
+            return
+
+        # Fit gate
+        X_obs_gate = X.loc[y_obs.index, self.feature_names]
+        X_gate_prep = self.gate_imputer.fit_transform(X_obs_gate)
+        X_gate_scaled = self.gate_scaler.fit_transform(X_gate_prep)
+        try:
+            self.gate_model.fit(X_gate_scaled, is_capable)
+            self.gate_fitted_ = True
+        except Exception:
+            self.fitted_ = False
+            return
+
+        # Fit value model on above-threshold data only
+        capable_mask = y_obs > self.threshold
+        y_capable = y_obs[capable_mask]
+        if len(y_capable) < 5:
+            self.fitted_ = False
+            return
+
+        if isinstance(self.value_imputer, CorrelationWeightedImputer):
+            self.value_imputer.fit(X[self.feature_names])
+            X_cap = X.loc[y_capable.index, self.feature_names]
+            X_cap_prep = self.value_imputer.transform(X_cap, self.feature_names)
+        else:
+            X_cap = X.loc[y_capable.index, self.feature_names]
+            X_cap_prep = self.value_imputer.fit_transform(X_cap)
+
+        X_cap_scaled = self.value_scaler.fit_transform(X_cap_prep)
+        self.value_model.fit(X_cap_scaled, y_capable)
+        self.value_fitted_ = True
+        self.fitted_ = self.gate_fitted_ and self.value_fitted_
+
+        # Update floor_mean from actual data
+        floor_vals = y_obs[~capable_mask]
+        if len(floor_vals) > 0:
+            self.floor_mean = float(floor_vals.mean())
+
+    def predict_with_uncertainty(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        if not self.fitted_:
+            return np.zeros(len(X)), np.ones(len(X)) * 1e6
+
+        # Gate prediction: P(capable)
+        X_gate_prep = self.gate_imputer.transform(X[self.feature_names])
+        X_gate_scaled = self.gate_scaler.transform(X_gate_prep)
+        p_capable = self.gate_model.predict_proba(X_gate_scaled)
+        # Handle case where gate only saw one class
+        if self.gate_model.classes_.shape[0] == 2:
+            p_cap = p_capable[:, 1]  # P(class=1) = P(capable)
+        else:
+            p_cap = np.ones(len(X)) * 0.5
+
+        # Value prediction: E[y | capable]
+        if isinstance(self.value_imputer, CorrelationWeightedImputer):
+            X_val_prep = self.value_imputer.transform(X, self.feature_names)
+        else:
+            X_val_prep = self.value_imputer.transform(X[self.feature_names])
+        X_val_scaled = self.value_scaler.transform(X_val_prep)
+        mu_cap, std_cap = self.value_model.predict(X_val_scaled, return_std=True)
+
+        # Combined prediction: E[y] = p * mu_capable + (1-p) * floor_mean
+        y_pred = p_cap * mu_cap + (1 - p_cap) * self.floor_mean
+
+        # Mixture variance: Var = p*sigma^2 + p*(1-p)*(mu_cap - floor_mean)^2
+        var = p_cap * std_cap**2 + p_cap * (1 - p_cap) * (mu_cap - self.floor_mean)**2
+        std_total = np.sqrt(np.maximum(var, 1e-8))
+
+        z = norm.ppf(1 - self.alpha / 2)
+        half_width = z * std_total
+        return y_pred, half_width
+
+
 class ColumnClassifier:
     """Classifies columns into appropriate model types."""
 
@@ -397,6 +600,78 @@ class ColumnClassifier:
         return np.all(np.abs(vals - np.round(vals)) <= tol)
 
     @staticmethod
+    def _detect_floor_inflation(observed: pd.Series, min_val: float, max_val: float) -> Optional[Dict[str, Any]]:
+        """Detect bimodal floor-cluster distributions (capability wall pattern).
+
+        Looks for a cluster of values near the floor with a gap before the
+        'capable' models.  Uses an adaptive threshold: the valley between
+        the floor cluster and the rest, found via a simple histogram method.
+
+        Returns metadata dict with threshold info if floor-inflated, else None.
+        """
+        if len(observed) < 20:
+            return None
+
+        vals = observed.to_numpy(dtype=float)
+        data_range = max_val - min_val
+        if data_range < 1e-8:
+            return None
+
+        # Normalize to [0, 1]
+        normed = (vals - min_val) / data_range
+
+        # Check if there's a cluster in the bottom 25% of the range
+        bottom_quarter = (normed <= 0.25).sum()
+        bottom_frac = bottom_quarter / len(vals)
+
+        # Need at least 15% in the floor cluster and at least 20 above
+        n_above_quarter = (normed > 0.25).sum()
+        if bottom_frac < 0.15 or n_above_quarter < 10:
+            return None
+
+        # Find the valley: scan percentiles 10-40 to find the best split point
+        # using the gap between the cluster and the rest
+        best_gap = 0.0
+        best_threshold_normed = 0.25
+        sorted_normed = np.sort(normed)
+
+        for pct in range(10, 45, 5):
+            idx = int(pct / 100 * len(sorted_normed))
+            if idx <= 0 or idx >= len(sorted_normed) - 10:
+                continue
+            # Gap = distance between this value and the next
+            gap = sorted_normed[idx] - sorted_normed[idx - 1]
+            # Also check: the cluster below must be at least 15% of data
+            frac_below = idx / len(sorted_normed)
+            if frac_below >= 0.15 and gap > best_gap:
+                best_gap = gap
+                best_threshold_normed = sorted_normed[idx]
+
+        # Require a meaningful gap (at least 5% of range)
+        if best_gap < 0.05:
+            return None
+
+        threshold = min_val + best_threshold_normed * data_range
+        n_floor = int((vals <= threshold).sum())
+        n_capable = int((vals > threshold).sum())
+
+        # Need enough in both clusters
+        if n_floor < 5 or n_capable < 10:
+            return None
+
+        floor_mean = float(vals[vals <= threshold].mean())
+        capable_mean = float(vals[vals > threshold].mean())
+
+        return {
+            'threshold': threshold,
+            'n_floor': n_floor,
+            'n_capable': n_capable,
+            'floor_mean': floor_mean,
+            'capable_mean': capable_mean,
+            'gap': best_gap * data_range,
+        }
+
+    @staticmethod
     def classify(
         series: pd.Series,
         predictors_df: pd.DataFrame,
@@ -404,16 +679,21 @@ class ColumnClassifier:
         force_categorical_cols: Optional[set] = None,
     ) -> Tuple[ColumnType, Dict[str, Any]]:
         """
-        Classify column into appropriate type.
+        Classify column into model family + distribution tags.
 
         Classification logic:
         1. Cardinality ≤ 10 → CATEGORICAL
-        2. All values in [0,1] or [0,100] → BOUNDED
-        3. max(Pearson) << max(Spearman) → NONLINEAR
-        4. High missingness + low correlation → EXTRAPOLATION_PRONE
-        5. Otherwise → LINEAR
+        2. Compute correlations (Pearson + Spearman) with all predictors
+        3. Determine model family from correlation evidence:
+           - Spearman >> Pearson → NONLINEAR (GP)
+           - High missingness + low correlation → EXTRAPOLATION_PRONE (GP)
+           - Otherwise → LINEAR (BayesianRidge)
+        4. Add distribution tags independently:
+           - Values in [0,1] or [0,100] → tag: bounded
+           - Bimodal floor cluster detected → tag: floor_inflated
         """
         metadata = {}
+        metadata['tags'] = set()
         observed = series.dropna()
 
         if force_categorical_cols and series.name in force_categorical_cols:
@@ -438,13 +718,22 @@ class ColumnClassifier:
             metadata['n_classes'] = n_unique
             return ColumnType.CATEGORICAL, metadata
 
-        # Check 2: Bounded
+        # --- Compute distribution tags (independent of model family) ---
         min_val, max_val = observed.min(), observed.max()
-        if (min_val >= 0 and max_val <= 1) or (min_val >= 0 and max_val <= 100):
-            metadata['bounds'] = (min_val, max_val)
-            return ColumnType.BOUNDED, metadata
 
-        # Check 3: Linearity (Pearson vs Spearman)
+        # Tag: bounded
+        is_bounded = (min_val >= 0 and max_val <= 1) or (min_val >= 0 and max_val <= 100)
+        if is_bounded:
+            metadata['tags'].add(ColumnTags.BOUNDED)
+            metadata['bounds'] = (float(min_val), float(max_val))
+
+        # Tag: floor_inflated (capability wall detection)
+        floor_info = ColumnClassifier._detect_floor_inflation(observed, float(min_val), float(max_val))
+        if floor_info is not None:
+            metadata['tags'].add(ColumnTags.FLOOR_INFLATED)
+            metadata['floor_info'] = floor_info
+
+        # --- Determine model family from correlation evidence ---
         correlations = []
         for col in predictors_df.columns:
             if col != series.name:
@@ -466,7 +755,7 @@ class ColumnClassifier:
             if max_spearman > max_pearson + 0.1:
                 return ColumnType.NONLINEAR, metadata
 
-            # Check 5: Extrapolation-prone
+            # Extrapolation-prone
             missingness = series.isna().mean()
             if missingness > 0.3 and max_pearson < 0.6:
                 metadata['missingness'] = missingness
@@ -474,7 +763,11 @@ class ColumnClassifier:
 
             return ColumnType.LINEAR, metadata
 
-        # Default: GP with Linear+Matérn (safe fallback)
+        # No correlations computed — safe fallback to GP
+        # If bounded with no correlates, still use GP (legacy behavior)
+        if is_bounded:
+            return ColumnType.BOUNDED, metadata
+
         return ColumnType.GP_LINEAR_MATERN, metadata
 
 
@@ -541,7 +834,7 @@ class DependencyAnalyzer:
 
 
 class ModelFactory:
-    """Creates appropriate model for each column type."""
+    """Creates appropriate model for each column type, with optional tag-based wrappers."""
 
     @staticmethod
     def create_model(
@@ -552,22 +845,57 @@ class ModelFactory:
         metadata: Optional[Dict] = None,
         correlation_matrix: Optional[pd.DataFrame] = None
     ) -> BaseColumnModel:
-        """Create model instance based on column type."""
-        metadata = metadata or {}
+        """Create model instance based on column type and distribution tags.
 
+        Model family is determined by column_type.
+        Distribution tags in metadata['tags'] add wrappers:
+          - FLOOR_INFLATED → HurdleModel (overrides base model entirely)
+          - BOUNDED → BoundedLinkModel wrapper (if base model is linear)
+        """
+        metadata = metadata or {}
+        tags = metadata.get('tags', set())
+
+        # --- Categorical: no wrappers ---
         if column_type == ColumnType.CATEGORICAL:
             return CategoricalModel(feature_names, metadata.get('n_classes', 2), alpha, seed)
-        elif column_type == ColumnType.LINEAR:
-            return BayesianRidgeModel(feature_names, alpha, seed, correlation_matrix=correlation_matrix)
+
+        # --- Floor-inflated: HurdleModel takes priority ---
+        if ColumnTags.FLOOR_INFLATED in tags:
+            floor_info = metadata.get('floor_info', {})
+            threshold = floor_info.get('threshold', 0.0)
+            floor_mean = floor_info.get('floor_mean', 0.0)
+            return HurdleModel(
+                feature_names, threshold, floor_mean,
+                alpha=alpha, seed=seed,
+                correlation_matrix=correlation_matrix,
+            )
+
+        # --- Build base model from family ---
+        if column_type == ColumnType.LINEAR:
+            base = BayesianRidgeModel(feature_names, alpha, seed, correlation_matrix=correlation_matrix)
         elif column_type == ColumnType.NONLINEAR:
-            return GPModel(feature_names, kernel_type="matern", alpha=alpha, seed=seed, correlation_matrix=correlation_matrix)
+            base = GPModel(feature_names, kernel_type="matern", alpha=alpha, seed=seed, correlation_matrix=correlation_matrix)
         elif column_type == ColumnType.BOUNDED:
+            # Legacy path: bounded with no correlation evidence → GP
             bounds = metadata.get('bounds', (0, 1))
-            return GPModel(feature_names, kernel_type="linear_matern", alpha=alpha, seed=seed, bounds=bounds, correlation_matrix=correlation_matrix)
+            base = GPModel(feature_names, kernel_type="linear_matern", alpha=alpha, seed=seed, bounds=bounds, correlation_matrix=correlation_matrix)
         elif column_type == ColumnType.EXTRAPOLATION_PRONE:
-            return GPModel(feature_names, kernel_type="linear_matern", alpha=alpha, seed=seed, correlation_matrix=correlation_matrix)
+            base = GPModel(feature_names, kernel_type="linear_matern", alpha=alpha, seed=seed, correlation_matrix=correlation_matrix)
         else:  # GP_LINEAR_MATERN (default)
-            return GPModel(feature_names, kernel_type="linear_matern", alpha=alpha, seed=seed, correlation_matrix=correlation_matrix)
+            base = GPModel(feature_names, kernel_type="linear_matern", alpha=alpha, seed=seed, correlation_matrix=correlation_matrix)
+
+        # --- Apply bounded-link wrapper for LINEAR models with bounded tag ---
+        if ColumnTags.BOUNDED in tags and column_type == ColumnType.LINEAR:
+            bounds = metadata.get('bounds', (0.0, 1.0))
+            data_range = bounds[1] - bounds[0]
+            # Only apply logit transform if the range is non-trivial
+            # and not too compressed (logit on [0.7, 0.9] is fine,
+            # but on [0.0, 0.001] is pointless)
+            if data_range > 0.01:
+                n_obs = metadata.get('n_obs', 100)
+                base = BoundedLinkModel(base, bounds, n_obs=n_obs)
+
+        return base
 
 
 class SpecializedColumnImputer:
@@ -645,6 +973,7 @@ class SpecializedColumnImputer:
 
         # New attributes specific to this imputer
         self.column_types_: Dict[str, ColumnType] = {}
+        self.column_metadata_: Dict[str, Dict[str, Any]] = {}  # Classification metadata (tags, bounds, etc.)
         self.imputation_order_: List[Tuple[str, float, int]] = []
         self.correlation_matrix_: Optional[pd.DataFrame] = None
         self.spearman_matrix_: Optional[pd.DataFrame] = None  # For GP mRMR selection
@@ -740,6 +1069,8 @@ class SpecializedColumnImputer:
         if self.verbose:
             print("Stage 1: Classifying columns...")
 
+        n_hurdle = 0
+        n_bounded_linear = 0
         for col in cols_to_impute:
             col_type, metadata = ColumnClassifier.classify(
                 X_df[col],
@@ -748,8 +1079,22 @@ class SpecializedColumnImputer:
                 self.force_categorical_cols
             )
             self.column_types_[col] = col_type
+            self.column_metadata_[col] = metadata
+            tags = metadata.get('tags', set())
+            if ColumnTags.FLOOR_INFLATED in tags:
+                n_hurdle += 1
+            if ColumnTags.BOUNDED in tags and col_type == ColumnType.LINEAR:
+                n_bounded_linear += 1
             if self.verbose >= 2:
-                print(f"  {col}: {col_type.value}")
+                tag_str = f" [{', '.join(sorted(tags))}]" if tags else ""
+                print(f"  {col}: {col_type.value}{tag_str}")
+        if self.verbose and (n_hurdle > 0 or n_bounded_linear > 0):
+            parts = []
+            if n_hurdle:
+                parts.append(f"{n_hurdle} hurdle (floor-inflated)")
+            if n_bounded_linear:
+                parts.append(f"{n_bounded_linear} bounded-link (linear+bounded)")
+            print(f"  New model types: {', '.join(parts)}")
 
         # Stage 2: Dependency Analysis
         if self.verbose:
@@ -779,7 +1124,13 @@ class SpecializedColumnImputer:
         def fit_column_model(col, tier, difficulty):
             # Feature selection - use mRMR for GP models, regular for others
             col_type = self.column_types_[col]
-            is_gp_model = col_type in (
+            col_metadata = self.column_metadata_.get(col, {})
+            tags = col_metadata.get('tags', set())
+
+            # Determine if this is a GP-based model (for feature selection strategy)
+            # Floor-inflated uses linear gate + value model, so use linear selection
+            is_hurdle = ColumnTags.FLOOR_INFLATED in tags
+            is_gp_model = (not is_hurdle) and col_type in (
                 ColumnType.NONLINEAR,
                 ColumnType.BOUNDED,
                 ColumnType.EXTRAPOLATION_PRONE,
@@ -802,13 +1153,12 @@ class SpecializedColumnImputer:
 
             self.predictors_map_[col] = predictors
 
-            # Create and fit model (col_type already computed above)
-            metadata = {}
+            # Build metadata for ModelFactory (use stored classification metadata)
+            metadata = dict(col_metadata)  # Copy to avoid mutation
             if col_type == ColumnType.CATEGORICAL:
                 metadata['n_classes'] = X_df[col].dropna().nunique()
-            elif col_type == ColumnType.BOUNDED:
-                obs = X_df[col].dropna()
-                metadata['bounds'] = (obs.min(), obs.max())
+            # Add n_obs for BoundedLinkModel eps calculation
+            metadata['n_obs'] = int(X_df[col].notna().sum())
 
             model = ModelFactory.create_model(
                 col_type, predictors, self.alpha, self.seed, metadata,
@@ -1512,7 +1862,8 @@ class SpecializedColumnImputer:
                 continue
 
             col_type = self.column_types_.get(col)
-            metadata: Dict[str, Any] = {}
+            # Use stored metadata from classification (includes tags, bounds, floor_info)
+            metadata = dict(self.column_metadata_.get(col, {}))
             if col_type is None:
                 col_type, metadata = ColumnClassifier.classify(
                     X_df[col],
@@ -1523,10 +1874,11 @@ class SpecializedColumnImputer:
             else:
                 if col_type == ColumnType.CATEGORICAL:
                     metadata["n_classes"] = int(X_df[col].dropna().nunique())
-                elif col_type == ColumnType.BOUNDED:
+                elif col_type == ColumnType.BOUNDED and 'bounds' not in metadata:
                     obs = X_df[col].dropna()
                     if len(obs):
                         metadata["bounds"] = (float(obs.min()), float(obs.max()))
+            metadata['n_obs'] = int(X_df[col].notna().sum())
 
             kf = KFold(
                 n_splits=n_splits,
