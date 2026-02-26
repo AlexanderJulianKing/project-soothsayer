@@ -1353,6 +1353,86 @@ class SpecializedColumnImputer:
 
         return current_df
 
+    def get_imputation_importance(self) -> pd.DataFrame:
+        """Extract per-column feature importances from fitted imputation models.
+
+        For each imputed column, reports which predictor columns contribute
+        most to its imputation. Uses model-specific importance extraction:
+        - BayesianRidge / BoundedLinkModel: |standardized coefficients|
+        - HurdleModel: combined gate + value coefficients
+        - GP: not extractable (returns equal weights)
+        - Categorical: not extractable (returns equal weights)
+
+        Returns:
+            DataFrame with columns: [target_col, predictor_col, importance,
+            model_type, rank]. Importances are normalized to sum to 1.0
+            per target column.
+        """
+        records = []
+        for col, model in self.models_.items():
+            predictors = self.predictors_map_.get(col, [])
+            if not predictors:
+                continue
+
+            importances = self._extract_model_importance(model, predictors)
+            model_type = type(model).__name__
+
+            # Normalize to sum to 1
+            total = sum(importances.values())
+            if total < 1e-12:
+                # Equal weights fallback
+                n = len(predictors)
+                importances = {p: 1.0 / n for p in predictors}
+                total = 1.0
+
+            sorted_preds = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+            for rank, (pred, imp) in enumerate(sorted_preds, 1):
+                records.append({
+                    'target_col': col,
+                    'predictor_col': pred,
+                    'importance': imp / total,
+                    'model_type': model_type,
+                    'rank': rank,
+                })
+
+        return pd.DataFrame(records)
+
+    @staticmethod
+    def _extract_model_importance(model: BaseColumnModel, predictors: List[str]) -> Dict[str, float]:
+        """Extract feature importance from a fitted model."""
+        n = len(predictors)
+        equal = {p: 1.0 / n for p in predictors}
+
+        if isinstance(model, BoundedLinkModel):
+            # Unwrap to get base model coefficients
+            return SpecializedColumnImputer._extract_model_importance(model.base_model, predictors)
+
+        if isinstance(model, HurdleModel):
+            imp = {}
+            # Gate coefficients
+            if model.gate_fitted_ and hasattr(model.gate_model, 'coef_'):
+                gate_coefs = np.abs(model.gate_model.coef_.ravel())
+                if len(gate_coefs) == n:
+                    for i, p in enumerate(predictors):
+                        imp[p] = imp.get(p, 0) + float(gate_coefs[i])
+            # Value coefficients
+            if model.value_fitted_ and hasattr(model.value_model, 'coef_'):
+                val_coefs = np.abs(model.value_model.coef_.ravel())
+                if len(val_coefs) == n:
+                    for i, p in enumerate(predictors):
+                        imp[p] = imp.get(p, 0) + float(val_coefs[i])
+            return imp if imp else equal
+
+        if isinstance(model, BayesianRidgeModel):
+            if model.fitted_ and hasattr(model.model, 'coef_'):
+                coefs = np.abs(model.model.coef_.ravel())
+                if len(coefs) == n:
+                    return {p: float(coefs[i]) for i, p in enumerate(predictors)}
+            return equal
+
+        # GP and Categorical: no extractable importances
+        return equal
+
     def _select_predictors(self, df: pd.DataFrame, target_col: str) -> List[str]:
         """Simple correlation-based feature selection."""
         correlations = []
