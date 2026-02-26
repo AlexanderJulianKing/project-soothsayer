@@ -4189,6 +4189,15 @@ def main():
         per_cell.to_csv(os.path.join(out_dir, "imputation_quality_per_cell.csv"), index=False)
         per_col.to_csv(os.path.join(out_dir, "imputation_quality_per_column.csv"), index=False)
         by_bin.to_csv(os.path.join(out_dir, "imputation_quality_by_extrapolation_bin.csv"), index=False)
+
+        # Save imputation importance (which predictors matter for each column's imputation)
+        try:
+            imp_importance = imputer.get_imputation_importance()
+            if not imp_importance.empty:
+                imp_importance.to_csv(os.path.join(out_dir, "imputation_importance.csv"), index=False)
+                print(f"  Imputation importance: {len(imp_importance)} predictor links saved")
+        except Exception as e:
+            print(f"  Warning: Could not extract imputation importance: {e}")
         # Also save to cache for future runs
         for qf in quality_files:
             shutil.copy(os.path.join(out_dir, qf), os.path.join(cache_dir, imp_key + "." + qf))

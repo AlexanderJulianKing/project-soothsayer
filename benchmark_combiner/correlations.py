@@ -1206,8 +1206,9 @@ def main(file_path):
             'contextarena_Output Cost ($)',
             'contextarena_128k (%)',
             'contextarena_Tok Eff.',
-            'contextarena_8k (%) 8 needles',
-            'contextarena_8k (%) 2 needles'
+            # contextarena_8k kept — novel signal for imputation (r=0.70-0.77 with Arena)
+            # 'contextarena_8k (%) 8 needles',
+            # 'contextarena_8k (%) 2 needles'
         ],
         'hallucinationbench': [
             'hallucinationbench_Average Summary Length (Words)',
@@ -1440,7 +1441,8 @@ def main(file_path):
             'weirdml_avg_acc_standard_error',
             'weirdml_cost_per_run_usd',
             'weirdml_mean_total_output_tokens',
-            'weirdml_code_len_p10',
+            # weirdml_code_len_p10 kept — novel signal (max_clean_r=0.63, r=0.54 with Arena)
+            # 'weirdml_code_len_p10',
             'weirdml_code_len_p90',
             'weirdml_exec_time_median_s',
             'weirdml_release_date',
@@ -1459,7 +1461,8 @@ def main(file_path):
             'weirdml_xor_easy_acc',
             'weirdml_xor_hard_acc',
             'weirdml_splash_easy_acc',
-            'weirdml_splash_hard_acc',
+            # weirdml_splash_hard_acc kept — novel signal (max_clean_r=0.72, r=0.64 with Arena)
+            # 'weirdml_splash_hard_acc',
             'weirdml_code_len_p50',
             'weirdml_number_patterns_acc',
             'weirdml_shapes_hard_acc',
