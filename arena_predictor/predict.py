@@ -1499,6 +1499,33 @@ def _fit_alt_model_on_rows(
             index=X_no_alt_all.index,
             dtype="float64",
         )
+
+        # X8: Residual additive head — fit Ridge on stage-1 residuals using raw features
+        _RESIDUAL_HEAD = True
+        if _RESIDUAL_HEAD:
+            stage1_train_pred = br.predict(X_train_combined)
+            residuals = y_fit - stage1_train_pred
+            # Select top-k raw features most correlated with residuals
+            raw_train = X_no_alt_all.loc[train_known_mask, selected].values
+            res_corrs = np.array([abs(np.corrcoef(raw_train[:, j], residuals)[0, 1])
+                                  for j in range(raw_train.shape[1])])
+            res_corrs = np.nan_to_num(res_corrs)
+            top_k_res = min(5, len(res_corrs))
+            top_idx_res = np.argsort(res_corrs)[-top_k_res:]
+            raw_top = raw_train[:, top_idx_res]
+            from sklearn.linear_model import Ridge as _Ridge
+            res_scaler = StandardScaler()
+            raw_top_scaled = res_scaler.fit_transform(raw_top)
+            res_ridge = _Ridge(alpha=10.0)
+            res_ridge.fit(raw_top_scaled, residuals)
+            # Predict residual correction for all rows
+            raw_all = X_no_alt_all[selected].values[:, top_idx_res]
+            raw_all_scaled = res_scaler.transform(raw_all)
+            res_correction = res_ridge.predict(raw_all_scaled)
+            pred_all = pd.Series(
+                pred_all.values + res_correction,
+                index=pred_all.index, dtype="float64")
+
         fitted_model = br
         pca_scaler_out = pca_scaler
         pca_out = pca
