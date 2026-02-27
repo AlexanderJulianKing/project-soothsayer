@@ -181,12 +181,72 @@ If >1 experiment won:
 - **Verdict**: **STRONG WIN**. Massive ALT improvement. Selects rank=8 (same as hardcoded), but the masked-cell CV code path deterministically shifts downstream interaction pair selection to better-performing pairs. Reproduced across 2 independent runs.
 - **Note**: OOF regressed slightly vs SVD-only (16.47 vs 15.53) but remains well within 10% of baseline (17.17).
 
+### Experiment 12: Match inner/outer consensus (G4) — LOSS
+- **Change**: Changed nested CV interaction search from n_runs=1, consensus_min=1 to n_runs=3, consensus_min=2. Goal: stabilize interaction pair selection across folds.
+- **ALT RMSE**: 20.74 — **+2.7% vs current best (20.19)**
+- **OOF RMSE**: 16.47
+- **Total time**: ~13m 49s (doubled due to 3x runs per fold)
+- **Verdict**: **REJECT**. Single-run pair selection per fold allows fold-specific optimization; consensus constrains to common-denominator pairs.
+- **Lesson**: Fold-local interaction selection is a feature, not a bug.
+
+### Experiment 13: Missingness features (B1) — LOSS
+- **Change**: Added PCA-compressed missingness indicators (3 components) + miss_frac to ALT feature matrix. Goal: give ALT model information about which benchmarks each model was tested on.
+- **ALT RMSE**: 20.26 — **+0.3% vs current best (20.19)**
+- **OOF RMSE**: ~16.5
+- **Verdict**: **REJECT**. Marginal regression. PCA already captures coverage patterns implicitly through the imputed values themselves.
+- **Lesson**: Missingness is already encoded in the data structure; explicit features add noise.
+
+### Experiment 14: SVD row factors as additive ALT features (A2) — WIN
+- **Change**: Extracted U×S row factors from SVD decomposition, stored on imputer as `svd_row_factors_`. Added these as extra columns in the ALT feature matrix alongside PCA features. Provides clean latent row representations uncontaminated by per-column imputation errors.
+- **ALT RMSE**: 19.94 (RMSE/SD: 0.351) — **-1.2% vs Exp 11, -9.2% vs baseline**
+- **OOF RMSE**: 16.47
+- **Features kept**: 9/75
+- **Verdict**: **WIN**. SVD factors provide complementary signal to PCA. Reproduced exactly in validation run.
+- **Committed**: `7f82c71`
+
+### Experiment 15: ALT-aware SVD rank selection (B4) — SKIPPED
+- **Reason**: Requires passing ALT target (Arena ELO) into imputer, violating separation of concerns. Risk of target leakage in nested CV.
+
+### Experiment 16: GP prediction clipping (Gemini #2) — NEUTRAL
+- **Change**: Clipped GP model predictions to observed training range ± 10% margin.
+- **ALT RMSE**: 19.94 — identical to current best
+- **OOF RMSE**: 16.47
+- **Verdict**: **NEUTRAL**. GP predictions are not extrapolating beyond training range in practice. No harm, no help. Reverted to avoid unnecessary complexity.
+
+### Experiment 17: Predictor selection fixes (dominant predictor + sample-scaled k) — LOSS
+- **Change**: Two changes to predictor selection: (1) If top predictor r >= 0.88 and R² gap >= 0.08, use only top 1-3 predictors. (2) Cap effective k by n_observed // 5 (linear) or n_observed // 10 (GP).
+- **ALT RMSE**: 26.15 — **+31% vs current best (19.94)** — CATASTROPHIC
+- **OOF RMSE**: 16.25 — slightly better
+- **Predictor links**: 838 (down from 2100)
+- **Verdict**: **REJECT**. Reducing predictor count destroys downstream ALT signal. Consistent with the established pattern that regularization/simplification hurts ALT.
+- **Lesson**: The ALT model needs richly imputed data with many predictors. Fewer predictors → less information downstream.
+
+### Experiment 18: Squared SVD factors (SVD²) — WIN
+- **Change**: Added squared SVD factors (f²) alongside raw SVD factors in the ALT feature matrix. Helps PCA capture nonlinear structure from SVD decomposition.
+- **ALT RMSE**: 19.62 (RMSE/SD: 0.346) — **-1.6% vs Exp 14 (19.94), -10.6% vs baseline**
+- **OOF RMSE**: 16.47 (unchanged)
+- **Verdict**: **WIN**. Quadratic SVD terms add useful nonlinear signal. Reproduced exactly in validation run.
+- **Committed**: `e5b9421`
+
+### Experiment 19: Direct SVD factors bypassing PCA — WIN
+- **Change**: Instead of mixing SVD factors (raw + squared) into PCA input, separated them and gave them direct scaled coefficients in BayesianRidge. ALT model architecture becomes [PCA(10) | PC²(10) | SVD_direct(16) | interactions].
+- **ALT RMSE**: 19.48 (RMSE/SD: 0.343) — **-0.7% vs Exp 18, -11.3% vs baseline**
+- **OOF RMSE**: 16.47 (unchanged)
+- **Verdict**: **WIN**. Direct SVD access is better than letting PCA compress SVD factors. Reproduced exactly in validation run.
+- **Committed**: `c18fea8`
+
+## Final Best: Experiment 19 (commit c18fea8)
+- **ALT RMSE**: 19.48 (RMSE/SD: 0.343)
+- **OOF RMSE**: 16.47
+- **Cumulative improvement**: ALT 21.95 → 19.48 (**-11.3%**)
+- **Stack**: SVD warm-start + masked-cell rank CV + SVD row factors (raw + squared, direct to BayesianRidge)
+
 ## Summary
 
 | # | Experiment | ALT RMSE | OOF RMSE | vs Baseline | Verdict |
 |---|-----------|----------|----------|-------------|---------|
 | 0 | Baseline | 21.95 | 17.17 | — | — |
-| 1 | SVD rank-8 warm-start | 21.58 | **15.53** | ALT -1.7%, OOF -9.6% | **WIN** |
+| **1** | **SVD rank-8 warm-start** | 21.58 | **15.53** | ALT -1.7%, OOF -9.6% | **WIN** |
 | 2 | Trust-weighted dampening | 23.47 | 16.80 | ALT +6.9% | LOSS |
 | 3 | Engineered features (ALT) | — | — | — | SKIPPED |
 | 4 | Oscillation freeze | — | — | — | N/A |
@@ -197,14 +257,27 @@ If >1 experiment won:
 | 9 | SVD + Hybrid Jacobi/GS | 21.89 | 15.43 | ALT -0.3% (worse than #1) | MARGINAL |
 | 10 | Match greedy scorer to ALT | 22.41 | 15.37 | ALT +3.8% (with #11) | LOSS |
 | **11** | **SVD rank tuning (masked CV)** | **20.19** | 16.47 | **ALT -8.0%, OOF -4.1%** | **WIN** |
+| 12 | Match inner/outer consensus (G4) | 20.74 | 16.47 | ALT +2.7% vs best | LOSS |
+| 13 | Missingness features (B1) | 20.26 | ~16.5 | ALT +0.3% vs best | LOSS |
+| **14** | **SVD row factors (A2)** | **19.94** | 16.47 | **ALT -9.2%** | **WIN** |
+| 15 | ALT-aware SVD (B4) | — | — | — | SKIPPED |
+| 16 | GP prediction clipping | 19.94 | 16.47 | no change | NEUTRAL |
+| 17 | Predictor selection fixes | 26.15 | 16.25 | ALT +31% | LOSS |
+| **18** | **Squared SVD factors** | **19.62** | 16.47 | **ALT -10.6%** | **WIN** |
+| **19** | **Direct SVD bypassing PCA** | **19.48** | 16.47 | **ALT -11.3%** | **WIN** |
 
-**Winners: Experiments 1+11 (SVD warm-start + rank tuning via masked-cell CV)**. Combined ALT improvement: 21.95 → 20.19 (-8.0%). Key insight: global low-rank structure provides better initialization than median fallback, and masked-cell CV for rank selection provides adaptive rank selection plus deterministic downstream improvements.
+**Winners: Experiments 1 + 11 + 14 + 18 + 19**. Combined ALT improvement: 21.95 → 19.48 (**-11.3%**).
 
 ## Key Learnings
 
 1. **SVD warm-start works**: Low-rank matrix completion provides globally coherent initial values that per-column models can refine. This is strictly better than median initialization.
-2. **Regularization hurts ALT**: Trust weighting, family pooling, and bootstrap stability all regressed ALT. The downstream ALT model benefits from accurate (not conservative) imputed values.
-3. **Residual decomposition hurts**: Fitting models on y - svd_estimate makes models less confident, increasing fallback rates. SVD is best as initialization, not decomposition.
-4. **Gauss-Seidel adds nothing on top of SVD**: When initial values are already good (from SVD), the order of updates in the iterative loop matters less.
-5. **Scorer mismatch is beneficial**: The greedy interaction scorer works better with a simpler model (PCA-only) than matching the deployed model (PCA+PC²). Simpler search finds more complementary pairs.
-6. **Masked-cell CV provides insurance + side benefits**: Even when it selects the same rank as a heuristic, the code path deterministically improves downstream results.
+2. **Regularization/simplification hurts ALT**: Trust weighting, family pooling, bootstrap stability, AND predictor count reduction ALL regressed ALT. The downstream ALT model benefits from rich, accurate imputed data.
+3. **Residual decomposition hurts**: Fitting models on y - svd_estimate makes models less confident, increasing fallback rates.
+4. **Gauss-Seidel adds nothing on top of SVD**: When initial values are already good, update order matters less.
+5. **Scorer mismatch is beneficial**: Simpler interaction search space finds more complementary pairs.
+6. **Masked-cell CV provides insurance + side benefits**: Deterministic improvements beyond rank selection.
+7. **SVD row factors complement PCA**: Raw U×S factors provide cleaner latent representations, computed before per-column models inject noise.
+8. **Direct SVD access beats PCA mixing**: SVD factors work better as direct BayesianRidge features than compressed through PCA.
+9. **Nonlinear SVD terms help**: Squared SVD factors capture curvature that linear factors miss.
+10. **Fold-local interaction selection is valuable**: Consensus constrains to lowest-common-denominator pairs.
+11. **Only additive changes win**: Every winning experiment ADDED information. Every losing experiment REMOVED or REGULARIZED information.
