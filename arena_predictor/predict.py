@@ -715,6 +715,7 @@ def _alt_cv_report(
 
     splits = _build_repeated_splits(len(X), int(cfg["cv"]), int(repeats), int(seed))
     fold_rows, feat_rows, int_pair_rows = [], [], []
+    oof_actual, oof_pred = np.full(len(y), np.nan), np.full(len(y), np.nan)
     total_sse = 0.0
     total_n = 0
     for k, (tr, va) in enumerate(splits):
@@ -758,6 +759,9 @@ def _alt_cv_report(
 
         feat_rows.append({"fold": k, "features": ",".join(fit["selected_features"])})
 
+        oof_actual[va] = yva
+        oof_pred[va] = pred_va
+
         fold_rmse = float(_rmse(yva, pred_va))
         fold_rows.append({"fold": k, "rmse": fold_rmse, "n_val": int(len(va))})
         total_sse += float(np.sum((yva - pred_va) ** 2))
@@ -765,7 +769,23 @@ def _alt_cv_report(
 
     rmse = float(np.sqrt(total_sse / total_n)) if total_n else float("nan")
     sd = float(np.std(y, ddof=1)) if len(y) > 1 else float("nan")
-    metrics = {"rmse": rmse, "sd": sd, "rmse_over_sd": (rmse / sd) if sd and sd > 0 else float("nan")}
+
+    # Bootstrap 95% CI on ALT RMSE
+    valid = ~np.isnan(oof_actual)
+    resid_sq = (oof_actual[valid] - oof_pred[valid]) ** 2
+    rng = np.random.RandomState(seed)
+    n_boot = len(resid_sq)
+    boot_rmses = np.array([np.sqrt(np.mean(resid_sq[rng.randint(0, n_boot, size=n_boot)])) for _ in range(2000)])
+    alt_ci_lo, alt_ci_hi = float(np.percentile(boot_rmses, 2.5)), float(np.percentile(boot_rmses, 97.5))
+
+    metrics = {
+        "rmse": rmse, "sd": sd, "rmse_over_sd": (rmse / sd) if sd and sd > 0 else float("nan"),
+        "ci_lo": round(alt_ci_lo, 4), "ci_hi": round(alt_ci_hi, 4),
+    }
+
+    # Save per-row OOF predictions
+    oof_df = pd.DataFrame({"actual": oof_actual[valid], "predicted": oof_pred[valid]})
+    oof_df.to_csv(os.path.join(out_dir, "alt_imputation_cv_oof.csv"), index=False)
 
     # write outputs
     pd.DataFrame(fold_rows).to_csv(os.path.join(out_dir, "alt_imputation_cv_folds.csv"), index=False)
@@ -4396,20 +4416,11 @@ def main():
             for col in imputer.trajectory_features_.columns:
                 alt_feature_matrix[col] = imputer.trajectory_features_[col].values
 
-        alt_poly_core = None
-        if args.poly_interactions:
-            print('expanding poly interactions')
-            alt_feature_matrix, alt_poly_core = expand_poly_interactions(
-                alt_feature_matrix,
-                include_squares=args.poly_include_squares,
-                limit=int(args.poly_limit) if args.poly_limit else 0,
-                return_core=True,
-            )
         print('impute alt for all')
         alt_result = impute_alt_for_all(alt_feature_matrix, df[ALT_TARGET], ALT_SELECTOR_CFG)
         # Store base features (pre-polynomial) for variance contribution calculation later
         alt_result["base_features"] = list(safe_features.columns)
-        alt_result["poly_core"] = alt_poly_core
+        alt_result["poly_core"] = None
         alt_result["poly_limit"] = int(args.poly_limit) if args.poly_limit else 0
         alt_result["poly_include_squares"] = bool(args.poly_include_squares)
         alt_filled = alt_result["filled"]
@@ -4500,7 +4511,7 @@ def main():
             X_base_for_search=X_base_no_alt,
         )
         if alt_cv_metrics:
-            print(f"ALT nested-CV RMSE: {alt_cv_metrics['rmse']:.2f}  (RMSE/SD: {alt_cv_metrics['rmse_over_sd']:.3f})")
+            print(f"ALT nested-CV RMSE: {alt_cv_metrics['rmse']:.2f}  (95% CI: {alt_cv_metrics['ci_lo']:.2f} – {alt_cv_metrics['ci_hi']:.2f}, RMSE/SD: {alt_cv_metrics['rmse_over_sd']:.3f})")
             # Append cv_rmse to interaction diagnostics JSON (if it exists)
             diag_json_path = os.path.join(out_dir, "alt_interaction_pairs_selected.json")
             if os.path.exists(diag_json_path):
@@ -4569,7 +4580,10 @@ def main():
         sample_weight=weights_cv,
         dense_mask=dense_cv,
     )
-    model_summary = ", ".join(f"{r['model']}: {r['rmse_mean']:.2f}" for _, r in eval_df.iterrows())
+    model_summary = ", ".join(
+        f"{r['model']}: {r['rmse_mean']:.2f} \u00b1 {r['rmse_std']:.2f}"
+        for _, r in eval_df.iterrows()
+    )
     print(f"Model comparison: {model_summary} -> {best_spec.name}")
 
     # Apply global target feature selection for final training/prediction
@@ -4996,6 +5010,13 @@ def main():
     print(f"  table:   {dep_table_path}")
     print(f"  degrees: {degrees_path}")
 
+    oof_rmse = float(np.sqrt(mean_squared_error(y_train_valid, oof_preds_valid)))
+    rng = np.random.RandomState(SEED)
+    residuals_sq = (y_train_valid - oof_preds_valid) ** 2
+    n_boot = len(residuals_sq)
+    boot_rmses = np.array([np.sqrt(np.mean(residuals_sq[rng.randint(0, n_boot, size=n_boot)])) for _ in range(2000)])
+    ci_lo, ci_hi = np.percentile(boot_rmses, [2.5, 97.5])
+
     meta = {
         "timestamp": stamp,
         "timezone": "America/Los_Angeles",
@@ -5005,6 +5026,11 @@ def main():
         "target": TARGET,
         "alt_target": ALT_TARGET,
         "best_model": best_spec.name,
+        "oof_rmse": round(oof_rmse, 4),
+        "oof_rmse_ci_lo": round(ci_lo, 4),
+        "oof_rmse_ci_hi": round(ci_hi, 4),
+        "cv_repeats_outer": int(args.cv_repeats_outer),
+        "cv_repeats_inner": int(args.cv_repeats_inner),
         "notes": [
             "Safety-filled any residual NaNs/Infs in features post-imputation with column medians, then 0 if still NaN.",
             "num_one_prob compares to current max observed lmsys_Score among training rows.",
@@ -5038,8 +5064,7 @@ def main():
             "  - predictions_all_models_long.csv\n"
             "  - feature_matrix_used.csv\n"
         )
-    oof_rmse = float(np.sqrt(mean_squared_error(y_train_valid, oof_preds_valid)))
-    print(f"OOF RMSE:  {oof_rmse:.2f}")
+    print(f"OOF RMSE:  {oof_rmse:.2f}  (95% CI: {ci_lo:.2f} \u2013 {ci_hi:.2f})")
     print(f"Done. Results saved to: {out_dir}")
     end = time.time()
     print(f"total:     {mmss(end - start)}")
