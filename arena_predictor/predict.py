@@ -4329,6 +4329,11 @@ def main():
                 ci, cj = svd_col_names[i], svd_col_names[j]
                 alt_feature_matrix[f"{ci}x{cj}"] = svd_factors[ci].values * svd_factors[cj].values
 
+        # X2: Imputation trajectory signatures
+        if imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
+            for col in imputer.trajectory_features_.columns:
+                alt_feature_matrix[col] = imputer.trajectory_features_[col].values
+
         alt_poly_core = None
         if args.poly_interactions:
             print('expanding poly interactions')

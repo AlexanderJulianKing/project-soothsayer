@@ -1484,6 +1484,32 @@ class SpecializedColumnImputer:
         if self.verbose:
             print(f"Imputation complete. Total writes: {len(self.logs_)}")
 
+        # Stage 7: Imputation trajectory — per-row divergence from SVD anchor
+        self.trajectory_features_ = None
+        if self.anchor_df_ is not None and self.original_missing_:
+            traj_mean_delta = pd.Series(0.0, index=current_df.index, dtype=float)
+            traj_max_delta = pd.Series(0.0, index=current_df.index, dtype=float)
+            for col, missing_mask in self.original_missing_.items():
+                if col in self.anchor_df_.columns and missing_mask.any():
+                    delta = (current_df.loc[missing_mask, col].values -
+                             self.anchor_df_.loc[missing_mask, col].values)
+                    abs_delta = np.abs(delta)
+                    for i, idx in enumerate(missing_mask[missing_mask].index):
+                        traj_mean_delta.loc[idx] += abs_delta[i]
+                        if abs_delta[i] > traj_max_delta.loc[idx]:
+                            traj_max_delta.loc[idx] = abs_delta[i]
+            # Normalize by number of imputed columns per row
+            n_imputed = pd.Series(0, index=current_df.index, dtype=float)
+            for col, mask in self.original_missing_.items():
+                n_imputed.loc[mask[mask].index] += 1
+            n_imputed = n_imputed.clip(lower=1)
+            traj_mean_delta = traj_mean_delta / n_imputed
+            self.trajectory_features_ = pd.DataFrame({
+                '_traj_mean_delta': traj_mean_delta,
+                '_traj_max_delta': traj_max_delta,
+                '_traj_n_imputed': n_imputed,
+            }, index=current_df.index)
+
         return current_df
 
     def get_imputation_importance(self) -> pd.DataFrame:
