@@ -805,6 +805,9 @@ ALT_KNN_K = 2        # very local neighborhood (k=2 beats k=3 in OOF CV: 17.82 v
 ALT_KNN_P = 2        # inverse-square distance weighting
 ALT_KNN_ALPHA = 0.3  # conservative shrinkage (only 30% of correction applied)
 
+# Module-level SVD factors for regime model access (set in main())
+_MODULE_SVD_ROW_FACTORS = None
+
 
 def _compute_alt_interaction_features(X_df: pd.DataFrame, scaler=None, fit=False, pairs=None):
     """Compute post-PCA interaction features from raw benchmark columns.
@@ -1500,9 +1503,9 @@ def _fit_alt_model_on_rows(
             dtype="float64",
         )
 
-        # X8: Residual additive head — fit Ridge on stage-1 residuals using raw features
-        _RESIDUAL_HEAD = True
-        if _RESIDUAL_HEAD:
+        # X8: Residual additive head — soft regime model with two Ridge heads
+        # blended by sigmoid gate on SVD factor 1 (capability proxy)
+        if _MODULE_SVD_ROW_FACTORS is not None:
             stage1_train_pred = br.predict(X_train_combined)
             residuals = y_fit - stage1_train_pred
             # Select top-k raw features most correlated with residuals
@@ -1510,18 +1513,34 @@ def _fit_alt_model_on_rows(
             res_corrs = np.array([abs(np.corrcoef(raw_train[:, j], residuals)[0, 1])
                                   for j in range(raw_train.shape[1])])
             res_corrs = np.nan_to_num(res_corrs)
-            top_k_res = min(5, len(res_corrs))
+            top_k_res = min(7, len(res_corrs))
             top_idx_res = np.argsort(res_corrs)[-top_k_res:]
             raw_top = raw_train[:, top_idx_res]
             from sklearn.linear_model import Ridge as _Ridge
+            # Soft regime: two Ridge heads blended by sigmoid on SVD factor 1
+            _svd = _MODULE_SVD_ROW_FACTORS
+            svd_f1_all = _svd.iloc[:, 0].reindex(X_no_alt_all.index).values
+            gate_train = svd_f1_all[train_known_mask.values]
+            gate_all = svd_f1_all
+            gate_mean = np.mean(gate_train)
+            gate_std = np.std(gate_train) + 1e-8
+            gate_train_z = 3.0 * (gate_train - gate_mean) / gate_std
+            gate_all_z = 3.0 * (gate_all - gate_mean) / gate_std
+            sig_train = 1.0 / (1.0 + np.exp(-gate_train_z))
+            sig_all = 1.0 / (1.0 + np.exp(-gate_all_z))
             res_scaler = StandardScaler()
             raw_top_scaled = res_scaler.fit_transform(raw_top)
-            res_ridge = _Ridge(alpha=1.0)
-            res_ridge.fit(raw_top_scaled, residuals)
-            # Predict residual correction for all rows
+            # High-capability head
+            res_ridge_hi = _Ridge(alpha=1.0)
+            res_ridge_hi.fit(raw_top_scaled, residuals, sample_weight=sig_train)
+            # Low-capability head
+            res_ridge_lo = _Ridge(alpha=1.0)
+            res_ridge_lo.fit(raw_top_scaled, residuals, sample_weight=1.0 - sig_train)
             raw_all = X_no_alt_all[selected].values[:, top_idx_res]
             raw_all_scaled = res_scaler.transform(raw_all)
-            res_correction = res_ridge.predict(raw_all_scaled)
+            corr_hi = res_ridge_hi.predict(raw_all_scaled)
+            corr_lo = res_ridge_lo.predict(raw_all_scaled)
+            res_correction = sig_all * corr_hi + (1.0 - sig_all) * corr_lo
             pred_all = pd.Series(
                 pred_all.values + res_correction,
                 index=pred_all.index, dtype="float64")
@@ -4356,8 +4375,10 @@ def main():
         alt_feature_matrix = safe_features.copy()
 
         # A2: Add SVD row factors as extra ALT features (additive, alongside PCA)
+        global _MODULE_SVD_ROW_FACTORS
         if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
             svd_factors = imputer.svd_row_factors_
+            _MODULE_SVD_ROW_FACTORS = svd_factors  # expose for regime model
             # Add raw, squared, and pairwise interaction SVD factors
             svd_col_names = list(svd_factors.columns)
             for col in svd_col_names:
