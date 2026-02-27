@@ -1218,6 +1218,15 @@ class SpecializedColumnImputer:
             Z = Z_std * col_stds + col_means
 
             self.anchor_df_ = pd.DataFrame(Z, index=X_df.index, columns=numeric_cols_for_svd)
+
+            # Extract SVD row factors (U×S) for downstream use as ALT features
+            U, s, Vt = randomized_svd(Z_std, n_components=svd_rank, random_state=42)
+            self.svd_row_factors_ = pd.DataFrame(
+                U * s[np.newaxis, :],
+                index=X_df.index,
+                columns=[f"_svd_f{i+1}" for i in range(svd_rank)],
+            )
+
             if self.verbose:
                 rank_info = f"rank={svd_rank}" if len(rank_candidates) <= 1 else f"rank={svd_rank} selected from {rank_candidates}"
                 print(f"Stage 2.75: SVD anchor computed ({rank_info})")
