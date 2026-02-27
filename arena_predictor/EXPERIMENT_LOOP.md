@@ -279,6 +279,35 @@ If >1 experiment won:
 
 **Winners: Experiments 1 + 11 + 14 + 18 + 19 + 20 + 23**. Combined ALT improvement: 21.95 → 17.90 (**-18.5%**).
 
+### Experiments 30-46 (Session 3, from 17.71 baseline after cache fix)
+
+Note: Experiments 30-33 ran against 20.19 baseline (cache bug: SVD/trajectory features not persisted). Fixed in commit 4d0bf90. Results below for 30-33 are invalid.
+
+| # | Idea | Source | ALT RMSE | Δ vs 17.71 | Verdict | Commit |
+|---|------|--------|----------|-----------|---------|--------|
+| 30 | Log trajectory (log1p) | C8 | 18.92* | +6.8%* | LOSS (invalid) | — |
+| 31 | Score-profile shape (IQR, skew) | C10/X7 | 20.68* | +16.8%* | LOSS (invalid) | — |
+| 32 | Rank-transform before PCA | C6 | 19.36* | +9.3%* | LOSS (invalid) | — |
+| 33 | SVD factors in interaction search | C7 | 20.19* | +14.0%* | LOSS (invalid) | — |
+| — | **Cache fix**: persist SVD/trajectory | bug | 17.90→17.90 | — | FIX | 4d0bf90 |
+| 34 | **Residual additive head** (Ridge on stage-1 residuals) | X8 | **17.71** | **-1.1%** | **WIN** | 20001ba |
+| 35 | Adaptive PCA (95% variance) | C9 | 19.78 | +11.7% | LOSS | — |
+| 36 | Benchmark family contrast features | X6 | 20.92 | +18.1% | LOSS | — |
+| 37 | Missingness fraction per row | X10 | 17.70 | -0.06% | NEUTRAL | — |
+| 38 | SVD features in residual head pool | — | 17.72 | +0.06% | NEUTRAL | — |
+| 39 | ARDRegression for residual head | — | 17.85 | +0.8% | LOSS | — |
+| 40 | Residual head top-10 features | — | 17.87 | +0.9% | LOSS | — |
+| 41 | Residual head top-3 features | — | 17.73 | +0.1% | NEUTRAL | — |
+| 42 | Double residual head (2 stages) | — | 17.93 | +1.2% | LOSS | — |
+| 43 | Huber loss for residual head | — | 17.81 | +0.6% | LOSS | — |
+| 44 | ElasticNet instead of BayesianRidge | — | 18.65 | +5.3% | LOSS | — |
+| 45 | Bootstrap ensemble (10 bags) | — | 19.06 | +7.6% | LOSS | — |
+| 46 | **Residual head alpha=1.0** (was 10.0) | — | **17.69** | **-0.1%** | **WIN** | 8345bc1 |
+
+*Invalid: ran without SVD/trajectory features due to cache bug
+
+**Winners: Experiments 1 + 11 + 14 + 18 + 19 + 20 + 23 + 34 + 46**. Combined ALT improvement: 21.95 → 17.69 (**-19.4%**).
+
 ## Key Learnings
 
 1. **SVD warm-start works**: Low-rank matrix completion provides globally coherent initial values that per-column models can refine. This is strictly better than median initialization.
@@ -296,3 +325,9 @@ If >1 experiment won:
 13. **Trajectory signatures are gold**: How much iterative models revised SVD estimates captures row "difficulty" — a genuine signal about model characteristics.
 14. **Meta-features must be low-dimensional**: Uncertainty (3 features), kNN disagreement (1 feature), and family SVD (8+ features) all hurt. Trajectory (3 features) and SVD interactions (6 features) work — signal-to-noise ratio matters more than dimensionality.
 15. **Squared meta-features are dangerous**: Trajectory values can be extreme, squaring amplifies outliers catastrophically. Only apply squares to bounded/standardized features like SVD factors.
+16. **Cache persistence matters**: SVD row factors and trajectory features weren't persisted in the imputation cache, silently dropping ALT from 17.90 to 20.19. Always test that cached runs reproduce fresh-run metrics.
+17. **Residual additive heads work**: 2-stage prediction (BayesianRidge → Ridge on residuals) captures signal that PCA compression loses. Top-5 raw features selected by correlation with residuals is optimal.
+18. **Residual head is fragile to hyperparameters**: Top-3 features too few, top-10 too many. Ridge alpha=1.0 slightly better than 10.0. ARD/Huber/double-stage all hurt — simplest parameterization wins.
+19. **Feature-space transforms don't help**: Rank-transform PCA, adaptive PCA, family contrasts, and profile shape features all hurt. The raw benchmark space (after imputation) is already well-conditioned.
+20. **Ensembling hurts in this regime**: Bootstrap bagging over-smooths with n=112 and a Bayesian model that already regularizes. Signal is precious; averaging destroys it.
+21. **Diminishing returns after SVD+trajectory**: Most gains came from SVD factors (exps 7-20) and trajectory features (exp 23). Subsequent tweaks yield <1% improvement. The pipeline may be near its information-theoretic limit for 75 benchmarks → 1 target with n=112.
