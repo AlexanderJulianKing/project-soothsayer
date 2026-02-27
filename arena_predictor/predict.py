@@ -4296,9 +4296,10 @@ def main():
         # A2: Add SVD row factors as extra ALT features (additive, alongside PCA)
         if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
             svd_factors = imputer.svd_row_factors_
-            # Align indices
+            # Align indices — add raw and squared SVD factors
             for col in svd_factors.columns:
                 alt_feature_matrix[col] = svd_factors[col].values
+                alt_feature_matrix[f"{col}_sq"] = svd_factors[col].values ** 2
 
         alt_poly_core = None
         if args.poly_interactions:
