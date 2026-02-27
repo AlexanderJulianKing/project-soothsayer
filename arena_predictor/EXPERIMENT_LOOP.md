@@ -266,7 +266,18 @@ If >1 experiment won:
 | **18** | **Squared SVD factors** | **19.62** | 16.47 | **ALT -10.6%** | **WIN** |
 | **19** | **Direct SVD bypassing PCA** | **19.48** | 16.47 | **ALT -11.3%** | **WIN** |
 
-**Winners: Experiments 1 + 11 + 14 + 18 + 19**. Combined ALT improvement: 21.95 → 19.48 (**-11.3%**).
+| **20** | **SVD factor interactions (C1)** | **18.48** | 16.47 | **ALT -15.8%** | **WIN** |
+| 21 | Post-imputation SVD (C2) | 18.60 | 16.47 | ALT +0.6% vs best | LOSS |
+| 22 | Per-row imputation uncertainty (C4) | 21.01 | 16.47 | ALT +13.7% vs best | LOSS |
+| **23** | **Trajectory signatures (X2)** | **17.90** | 16.47 | **ALT -18.5%** | **WIN** |
+| 24 | Benchmark-family SVD (C5) | 19.25 | 16.47 | ALT +7.5% vs best | LOSS |
+| 25 | SVD reconstruction error | 17.90 | 16.47 | no change | NEUTRAL |
+| 26 | kNN disagreement (X1) | 18.54 | 16.47 | ALT +3.6% vs best | LOSS |
+| 27 | All SVD interactions (8→28 pairs) | 20.74 | 16.47 | ALT +15.9% vs best | LOSS |
+| 28 | Trajectory × SVD interactions | 18.19 | 16.47 | ALT +1.6% vs best | LOSS |
+| 29 | Squared trajectory features | 129.55 | 16.47 | catastrophic | LOSS |
+
+**Winners: Experiments 1 + 11 + 14 + 18 + 19 + 20 + 23**. Combined ALT improvement: 21.95 → 17.90 (**-18.5%**).
 
 ## Key Learnings
 
@@ -281,3 +292,7 @@ If >1 experiment won:
 9. **Nonlinear SVD terms help**: Squared SVD factors capture curvature that linear factors miss.
 10. **Fold-local interaction selection is valuable**: Consensus constrains to lowest-common-denominator pairs.
 11. **Only additive changes win**: Every winning experiment ADDED information. Every losing experiment REMOVED or REGULARIZED information.
+12. **SVD factor interactions are powerful**: Top-4 pairwise products capture latent nonlinear structure. BUT all-pairs (28) overfits — sweet spot is top-4 (6 pairs).
+13. **Trajectory signatures are gold**: How much iterative models revised SVD estimates captures row "difficulty" — a genuine signal about model characteristics.
+14. **Meta-features must be low-dimensional**: Uncertainty (3 features), kNN disagreement (1 feature), and family SVD (8+ features) all hurt. Trajectory (3 features) and SVD interactions (6 features) work — signal-to-noise ratio matters more than dimensionality.
+15. **Squared meta-features are dangerous**: Trajectory values can be extreme, squaring amplifies outliers catastrophically. Only apply squares to bounded/standardized features like SVD factors.
