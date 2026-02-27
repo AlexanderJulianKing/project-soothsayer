@@ -81,12 +81,11 @@ echo "Executing Python script"
 #   --cv_splits_path "$CV_SPLITS_PATH"
 
 
-python3 predict.py --passes 100 \
+python3 predict.py \
     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
-    --calibrate_tolerances \
     --poly_interactions \
     --poly_include_squares --cv_repeats_outer 5 \
-    --cv_repeats_inner 1 \
+    --cv_repeats_inner 3 \
     --feature_cv_repeats 1 \
     --alt_cv_repeats 1
 
