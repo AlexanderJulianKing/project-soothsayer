@@ -4103,6 +4103,15 @@ def main():
                     }
             except Exception as exc:
                 print(f"WARNING: failed to load imputer metadata cache ({exc}).", file=sys.stderr)
+        # Restore SVD row factors and trajectory features from cache
+        class _CachedImputer:
+            pass
+        svd_cache = cache_csv + ".svd_factors.csv"
+        traj_cache = cache_csv + ".trajectory.csv"
+        if os.path.exists(svd_cache) or os.path.exists(traj_cache):
+            imputer = _CachedImputer()
+            imputer.svd_row_factors_ = pd.read_csv(svd_cache, index_col=0) if os.path.exists(svd_cache) else None
+            imputer.trajectory_features_ = pd.read_csv(traj_cache, index_col=0) if os.path.exists(traj_cache) else None
         already_done = True
         load_end = time.time()
         print(f"load data: {mmss(load_end - start)}")
@@ -4147,6 +4156,11 @@ def main():
                 "predictors_map": imputer_predictors_map,
                 "important_predictors": {col: sorted(deps) for col, deps in imputer_important_predictors.items()},
             }, fh, indent=2)
+        # Cache SVD row factors and trajectory features
+        if hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
+            imputer.svd_row_factors_.to_csv(cache_csv + ".svd_factors.csv", index=True)
+        if hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
+            imputer.trajectory_features_.to_csv(cache_csv + ".trajectory.csv", index=True)
         already_done = False
 
     # Always write the copy for this run
