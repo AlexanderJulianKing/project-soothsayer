@@ -1371,8 +1371,9 @@ def _fit_alt_model_on_rows(
     known_mask = alt_numeric.notna()
     train_known_mask = train_mask & known_mask
 
-    # Base features = all columns (no interactions injected pre-PCA)
-    selected = list(X_no_alt_all.columns)
+    # Separate SVD factor columns from base features — SVD factors bypass PCA
+    svd_cols = [c for c in X_no_alt_all.columns if c.startswith("_svd_f")]
+    selected = [c for c in X_no_alt_all.columns if c not in svd_cols]
 
     n_known = int(train_known_mask.sum())
     fallback = float(np.nanmean(alt_numeric.loc[train_known_mask])) if n_known else float("nan")
@@ -1423,21 +1424,34 @@ def _fit_alt_model_on_rows(
             pc_nl_train = np.empty((len(X_train_pca), 0))
             pc_nl_scaler = None
 
+        # 1c. Direct SVD factors (bypass PCA, get own coefficients)
+        svd_direct_names = []
+        if svd_cols:
+            svd_train_raw = X_no_alt_all.loc[train_known_mask, svd_cols].values
+            svd_direct_scaler = StandardScaler()
+            svd_train_scaled = svd_direct_scaler.fit_transform(svd_train_raw)
+            svd_direct_names = [c for c in svd_cols]
+        else:
+            svd_train_scaled = np.empty((int(train_known_mask.sum()), 0))
+            svd_direct_scaler = None
+
         # 2. Compute interaction columns from raw (pre-PCA) DataFrame — fit scaler
         int_train, int_names, int_scaler = _compute_alt_interaction_features(
             X_no_alt_all.loc[train_known_mask], scaler=None, fit=True,
             pairs=interaction_pairs,
         )
 
-        # 3. Concatenate [PCA | PC-nonlinear | scaled interactions]
+        # 3. Concatenate [PCA | PC-nonlinear | SVD-direct | scaled interactions]
         blocks_train = [X_train_pca]
         if pc_nl_train.shape[1]:
             blocks_train.append(pc_nl_train)
+        if svd_train_scaled.shape[1]:
+            blocks_train.append(svd_train_scaled)
         if int_train.shape[1]:
             blocks_train.append(int_train)
         X_train_combined = np.hstack(blocks_train)
         pc_names = [f"PC{i+1}" for i in range(n_pca)]
-        combined_names = pc_names + pc_nl_names + int_names
+        combined_names = pc_names + pc_nl_names + svd_direct_names + int_names
 
         # 4. Fit plain BayesianRidge on the combined matrix
         br = BayesianRidge(compute_score=False)
@@ -1463,6 +1477,11 @@ def _fit_alt_model_on_rows(
             pc_nl_all = pc_nl_scaler.transform(np.column_stack(pc_nl_all_cols))
         else:
             pc_nl_all = np.empty((len(X_all_pca), 0))
+        # SVD direct features for all rows
+        if svd_direct_scaler is not None and svd_cols:
+            svd_all_scaled = svd_direct_scaler.transform(X_no_alt_all[svd_cols].values)
+        else:
+            svd_all_scaled = np.empty((len(X_all_pca), 0))
         int_all, _, _ = _compute_alt_interaction_features(
             X_no_alt_all, scaler=int_scaler, fit=False,
             pairs=interaction_pairs,
@@ -1470,6 +1489,8 @@ def _fit_alt_model_on_rows(
         blocks_all = [X_all_pca]
         if pc_nl_all.shape[1]:
             blocks_all.append(pc_nl_all)
+        if svd_all_scaled.shape[1]:
+            blocks_all.append(svd_all_scaled)
         if int_all.shape[1]:
             blocks_all.append(int_all)
         X_all_combined = np.hstack(blocks_all)
