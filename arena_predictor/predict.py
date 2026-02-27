@@ -1516,7 +1516,7 @@ def _fit_alt_model_on_rows(
             from sklearn.linear_model import Ridge as _Ridge
             res_scaler = StandardScaler()
             raw_top_scaled = res_scaler.fit_transform(raw_top)
-            res_ridge = _Ridge(alpha=10.0)
+            res_ridge = _Ridge(alpha=1.0)
             res_ridge.fit(raw_top_scaled, residuals)
             # Predict residual correction for all rows
             raw_all = X_no_alt_all[selected].values[:, top_idx_res]
