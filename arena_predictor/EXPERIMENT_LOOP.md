@@ -308,6 +308,28 @@ Note: Experiments 30-33 ran against 20.19 baseline (cache bug: SVD/trajectory fe
 
 **Winners: Experiments 1 + 11 + 14 + 18 + 19 + 20 + 23 + 34 + 46**. Combined ALT improvement: 21.95 → 17.69 (**-19.4%**).
 
+### Experiments 47-58 (Session 4, from 17.69 baseline — capability×personality interactions)
+
+| # | Idea | Source | ALT RMSE | Δ vs 17.69 | Verdict | Commit |
+|---|------|--------|----------|-----------|---------|--------|
+| 47 | All 15 personality residuals as features | X1 | 17.99 | +1.7% | LOSS | — |
+| 48 | Top 3 personality residuals | X1b | 19.61 | +10.8% | LOSS | — |
+| 49 | Capability-gated personality (4 hinge terms) | C1 | 19.86 | +12.3% | LOSS | — |
+| 50 | Low-rank cross-block (4 terms) | C4 | 19.11 | +8.0% | LOSS | — |
+| 51 | Single personality PC1×SVD_f1 | X4 | 18.00 | +1.8% | LOSS | — |
+| 52 | **Soft regime model** (two Ridge heads gated by SVD f1) | C5 | **17.56** | **-0.7%** | **WIN** | efd9272 |
+| 53 | Personality mismatch features in residual head | X2 | 18.29 | +3.4% | LOSS | — |
+| 54 | PCA components in residual head (instead of raw) | — | 17.84 | +0.8% | LOSS | — |
+| 55 | Tail-weighted BayesianRidge | — | 18.36 | +3.8% | LOSS | — |
+| 56 | **Residual head k=7** (was 5) under regime model | — | **17.39** | **-1.7%** | **WIN** | efd9272 |
+| 57 | Ridge alpha tuning (0.5-3.0) under regime | — | 17.39-17.42 | ~0% | NEUTRAL | — |
+| 58 | **Sigmoid steepness=3.0** (was 1.0) | — | **17.33** | **-2.0%** | **WIN** | efd9272 |
+
+k sweep for residual head under regime model: k=5→17.56, k=6→17.51, **k=7→17.39**, k=8→17.46, k=10→17.66
+Sigmoid steepness sweep: s=1→17.39, s=2→17.34, **s=3→17.33**, s=4→17.33, s=5→17.33 (plateau at 3+)
+
+**Winners: Experiments 1 + 11 + 14 + 18 + 19 + 20 + 23 + 34 + 46 + 52 + 56 + 58**. Combined ALT improvement: 21.95 → 17.33 (**-21.0%**).
+
 ## Key Learnings
 
 1. **SVD warm-start works**: Low-rank matrix completion provides globally coherent initial values that per-column models can refine. This is strictly better than median initialization.
@@ -331,3 +353,7 @@ Note: Experiments 30-33 ran against 20.19 baseline (cache bug: SVD/trajectory fe
 19. **Feature-space transforms don't help**: Rank-transform PCA, adaptive PCA, family contrasts, and profile shape features all hurt. The raw benchmark space (after imputation) is already well-conditioned.
 20. **Ensembling hurts in this regime**: Bootstrap bagging over-smooths with n=112 and a Bayesian model that already regularizes. Signal is precious; averaging destroys it.
 21. **Diminishing returns after SVD+trajectory**: Most gains came from SVD factors (exps 7-20) and trajectory features (exp 23). Subsequent tweaks yield <1% improvement. The pipeline may be near its information-theoretic limit for 75 benchmarks → 1 target with n=112.
+22. **Personality interaction features consistently fail**: All 6 attempts to explicitly model capability×personality interactions (exps 47-51, 53) worsened RMSE by 1.7-12.3%. The personality signal exists (tone_confidence appears in residual heads) but is too weak/noisy to add as explicit features at n=112.
+23. **Regime models work when feature addition doesn't**: The soft regime model (exp 52) was the ONLY personality-aware idea that worked — because it changes HOW existing features are used (different coefficients for high/low capability) rather than adding new features. Same information, more flexible function class.
+24. **Regime model unlocks more features**: Single Ridge optimal at k=5 features. Regime model optimal at k=7. The two specialized heads can each use the extra features without overfitting because each effectively sees a sample-weighted subset.
+25. **Sigmoid steepness matters**: Default z-scored sigmoid (steepness=1) gives too-gradual blending. Steepness=3 creates sharper regime boundaries. Plateau at 3-5 suggests there's a genuine bifurcation in how capability interacts with benchmark scores.
