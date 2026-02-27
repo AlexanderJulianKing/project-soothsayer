@@ -4292,6 +4292,14 @@ def main():
             print(f"ALT interactions: selected {len(selected_pairs)} pairs in {search_elapsed:.1f}s")
 
         alt_feature_matrix = safe_features.copy()
+
+        # A2: Add SVD row factors as extra ALT features (additive, alongside PCA)
+        if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
+            svd_factors = imputer.svd_row_factors_
+            # Align indices
+            for col in svd_factors.columns:
+                alt_feature_matrix[col] = svd_factors[col].values
+
         alt_poly_core = None
         if args.poly_interactions:
             print('expanding poly interactions')
