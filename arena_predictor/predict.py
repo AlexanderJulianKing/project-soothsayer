@@ -571,6 +571,7 @@ def expand_poly_interactions(
     limit: int = 0,
     preset_core: Optional[List[str]] = None,
     return_core: bool = False,
+    exclude_cols: Optional[List[str]] = None,
 ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, List[str]]]:
     """Generate degree-2 polynomial interaction features.
 
@@ -608,16 +609,18 @@ def expand_poly_interactions(
     if X.empty:
         return X.copy()
     cols_all = X.columns.tolist()
+    _excl = set(exclude_cols or [])
     if preset_core is not None:
         core = [c for c in preset_core if c in cols_all]
         if not core:
             preset_core = None  # fallback to default logic if nothing matched
     if preset_core is None:
-        if limit and limit < len(cols_all):
-            var = X.var(ddof=0).sort_values(ascending=False)
+        eligible = [c for c in cols_all if c not in _excl]
+        if limit and limit < len(eligible):
+            var = X[eligible].var(ddof=0).sort_values(ascending=False)
             core = var.index[:limit].tolist()
         else:
-            core = cols_all
+            core = eligible
 
     poly = PolynomialFeatures(
         degree=2,
@@ -639,6 +642,89 @@ def expand_poly_interactions(
     return Zdf
 
 
+def expand_alt_centric_interactions(
+    X: pd.DataFrame,
+    y: Optional[np.ndarray] = None,
+    alt_col: str = "lmarena_Score",
+    top_k: int = 6,
+    preset_interactions: Optional[List[str]] = None,
+    return_interactions: bool = False,
+) -> Union[pd.DataFrame, Tuple[pd.DataFrame, List[str]]]:
+    """Generate ALT-centric interaction features ranked by residual correlation.
+
+    Instead of generic top-variance poly, creates ALT×feature interactions and
+    ranks them by |correlation| with the residual after an ALT-only linear fit.
+
+    Args:
+        X: Feature DataFrame including alt_col.
+        y: Target array (training only). Required if preset_interactions is None.
+        alt_col: Name of ALT column.
+        top_k: Number of ALT×feature interactions to keep.
+        preset_interactions: Pre-selected interaction column names (for test data).
+        return_interactions: If True, return (DataFrame, interaction_names).
+
+    Returns:
+        DataFrame with original columns + ALT² + top-K ALT×feature interactions.
+    """
+    if alt_col not in X.columns:
+        return (X.copy(), []) if return_interactions else X.copy()
+
+    alt = X[alt_col].values.astype(float)
+    non_alt_cols = [c for c in X.columns if c != alt_col]
+    out = X.copy()
+
+    # Always add ALT²
+    out[f"{alt_col}^2"] = alt ** 2
+
+    if preset_interactions is not None:
+        # Test mode: apply same interactions as selected on training data
+        for iname in preset_interactions:
+            if iname == f"{alt_col}^2":
+                continue  # already added
+            # Parse "ALT*feature" name
+            parts = iname.split("*", 1)
+            if len(parts) == 2 and parts[1] in X.columns:
+                out[iname] = alt * X[parts[1]].values.astype(float)
+        chosen = preset_interactions
+    else:
+        # Training mode: rank ALT×feature by |corr with residual|
+        if y is None:
+            raise ValueError("y required when preset_interactions is None")
+        obs = ~np.isnan(y) & ~np.isnan(alt)
+        if obs.sum() < 5:
+            chosen = []
+        else:
+            # Residual after ALT-only linear fit
+            alt_obs = alt[obs]
+            y_obs = y[obs]
+            slope = np.cov(alt_obs, y_obs)[0, 1] / (np.var(alt_obs) + 1e-12)
+            intercept = np.mean(y_obs) - slope * np.mean(alt_obs)
+            resid = y_obs - (slope * alt_obs + intercept)
+
+            # Rank ALT×feature interactions by |corr with residual|
+            scores = []
+            for col in non_alt_cols:
+                fvals = X[col].values.astype(float)
+                interaction = alt * fvals
+                int_obs = interaction[obs]
+                if np.std(int_obs) < 1e-12:
+                    continue
+                corr = np.corrcoef(int_obs, resid)[0, 1]
+                if np.isnan(corr):
+                    continue
+                scores.append((col, abs(corr), corr))
+
+            scores.sort(key=lambda x: x[1], reverse=True)
+            chosen_cols = [s[0] for s in scores[:top_k]]
+
+            # Create interaction columns
+            chosen = [f"{alt_col}^2"]
+            for col in chosen_cols:
+                iname = f"{alt_col}*{col}"
+                out[iname] = alt * X[col].values.astype(float)
+                chosen.append(iname)
+
+    return (out, chosen) if return_interactions else out
 
 
 
@@ -1517,11 +1603,9 @@ def _fit_alt_model_on_rows(
         if int_all.shape[1]:
             blocks_all.append(int_all)
         X_all_combined = np.hstack(blocks_all)
-        pred_all = pd.Series(
-            br.predict(X_all_combined),
-            index=X_no_alt_all.index,
-            dtype="float64",
-        )
+        pred_mu, pred_std = br.predict(X_all_combined, return_std=True)
+        pred_all = pd.Series(pred_mu, index=X_no_alt_all.index, dtype="float64")
+        pred_std_all = pd.Series(pred_std, index=X_no_alt_all.index, dtype="float64")
 
         # X8: Residual additive head — soft regime model with two Ridge heads
         # blended by sigmoid gate on SVD factor 1 (capability proxy)
@@ -1584,6 +1668,7 @@ def _fit_alt_model_on_rows(
 
     return {
         "pred_all": pred_all.astype(float),
+        "pred_std_all": pred_std_all.astype(float),
         "selected_features": selected,
         "fallback_value": float(fallback),
         "n_known": n_known,
@@ -1644,6 +1729,7 @@ def impute_alt_for_all(
     return {
         "filled": filled.astype(float),
         "predicted": pred_all.astype(float),
+        "pred_std": fit.get("pred_std_all", pd.Series(dtype=float)),
         "selected_features": fit["selected_features"],
         "fallback_value": fit["fallback_value"],
         "n_known": fit["n_known"],
@@ -2266,7 +2352,7 @@ def build_model_specs() -> List[ModelSpec]:
         else:
             pipe.fit(Xtr, ytr)
         return pipe
-    specs.append(ModelSpec("BayesianRidge", fit_bayes, "linear"))
+    # specs.append(ModelSpec("BayesianRidge", fit_bayes, "linear"))
 
     # ARDRegression - Bayesian with per-feature relevance determination
     def fit_ard(Xtr, ytr, wtr=None):
@@ -2274,6 +2360,27 @@ def build_model_specs() -> List[ModelSpec]:
         pipe.fit(Xtr, ytr)  # ARDRegression does not support sample_weight
         return pipe
     specs.append(ModelSpec("ARDRegression", fit_ard, "linear"))
+
+    # HuberRegressor - robust to outliers via Huber loss
+    from sklearn.linear_model import HuberRegressor
+    def fit_huber(Xtr, ytr, wtr=None):
+        pipe = Pipeline([("scaler", StandardScaler()), ("huber", HuberRegressor(max_iter=10000, epsilon=1.35))])
+        if wtr is not None:
+            pipe.fit(Xtr, ytr, huber__sample_weight=wtr)
+        else:
+            pipe.fit(Xtr, ytr)
+        return pipe
+    specs.append(ModelSpec("HuberRegressor", fit_huber, "linear"))
+
+    # BayesianRidge with Yeo-Johnson target transform
+    from sklearn.compose import TransformedTargetRegressor
+    from sklearn.preprocessing import PowerTransformer
+    def fit_br_yj(Xtr, ytr, wtr=None):
+        inner = Pipeline([("scaler", StandardScaler()), ("br", BayesianRidge(compute_score=True, max_iter=10000))])
+        ttr = TransformedTargetRegressor(regressor=inner, transformer=PowerTransformer(method="yeo-johnson"))
+        ttr.fit(Xtr, ytr)  # sample_weight not easily forwarded through TTR
+        return ttr
+    # specs.append(ModelSpec("BR_YeoJohnson", fit_br_yj, "linear"))
 
     return specs
 
@@ -3015,23 +3122,9 @@ def fit_and_predict_all_with_alt(
                 upper = mu + 1.96 * std
 
         if np.isnan(std).all():
-            base_df_for_cv = cv_base_features if cv_base_features is not None else X_df
-            X_train_df_for_cv = base_df_for_cv.iloc[train_idx]
-            y_train_for_cv = y_all[train_idx]
-            mean_rmse, _ = cross_val_rmse_with_alt(
-                spec,
-                X_train_df_for_cv,
-                y_train_for_cv,
-                alt_col,
-                n_splits=5,
-                n_jobs=cv_n_jobs,
-                selector_cfg=selector_cfg,
-                poly_cfg=poly_cfg,
-                splits=cv_splits,
-                cv_repeats=cv_repeats,
-                seed=cv_seed,
-                oof_repeats=oof_repeats,
-            )
+            # Use training residual RMSE as flat uncertainty (avoids expensive fallback CV)
+            train_resid = y_all[train_idx] - mu[train_idx]
+            mean_rmse = float(np.sqrt(np.mean(train_resid ** 2)))
             std = np.full_like(mu, mean_rmse)
             lower = mu - 1.96 * std
             upper = mu + 1.96 * std
@@ -3225,6 +3318,8 @@ def cross_val_rmse_with_alt(
     poly_enabled = bool(poly_cfg.get("enabled", False))
     poly_limit = int(poly_cfg.get("limit", 0) or 0)
     poly_include_squares = bool(poly_cfg.get("include_squares", False))
+    alt_centric_poly = bool(poly_cfg.get("alt_centric", False))
+    alt_centric_k = int(poly_cfg.get("alt_centric_k", 6))
 
     def _eval_fold(tr, va):
         # 1. Generate OOF predictions for the TRAINING set of this fold
@@ -3246,7 +3341,6 @@ def cross_val_rmse_with_alt(
         alt_fit_full = _fit_alt_model_on_rows(X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, tr,
                                               sample_weight=sample_weight)
         alt_pred_all = alt_fit_full["pred_all"]
-
         # 3. Prepare Training Data for Final Model (using OOF)
         Xtr_df = X_df.iloc[tr].copy()
         Xtr_df[alt_col] = oof_preds_tr.values
@@ -3255,24 +3349,34 @@ def cross_val_rmse_with_alt(
         Xva_df = X_df.iloc[va].copy()
         Xva_df[alt_col] = alt_pred_all.loc[Xva_df.index].values
 
-        # 5. Feature selection on THIS fold's training data
+        # 5. Feature selection and expansion for THIS fold's data
         sel_cols = _select_target_cols_for_train(Xtr_df, y[tr], selector_cfg)
         Xtr_sel = Xtr_df[sel_cols].copy()
         Xva_sel = Xva_df[sel_cols].copy()
 
         if poly_enabled:
-            Xtr_sel, core = expand_poly_interactions(
-                Xtr_sel,
-                include_squares=poly_include_squares,
-                limit=poly_limit,
-                return_core=True,
-            )
-            Xva_sel = expand_poly_interactions(
-                Xva_sel,
-                include_squares=poly_include_squares,
-                limit=poly_limit,
-                preset_core=core,
-            )
+            if alt_centric_poly and alt_col in Xtr_sel.columns:
+                Xtr_sel, chosen_ints = expand_alt_centric_interactions(
+                    Xtr_sel, y[tr], alt_col=alt_col,
+                    top_k=alt_centric_k, return_interactions=True,
+                )
+                Xva_sel = expand_alt_centric_interactions(
+                    Xva_sel, alt_col=alt_col,
+                    preset_interactions=chosen_ints, return_interactions=False,
+                )
+            else:
+                Xtr_sel, core = expand_poly_interactions(
+                    Xtr_sel,
+                    include_squares=poly_include_squares,
+                    limit=poly_limit,
+                    return_core=True,
+                )
+                Xva_sel = expand_poly_interactions(
+                    Xva_sel,
+                    include_squares=poly_include_squares,
+                    limit=poly_limit,
+                    preset_core=core,
+                )
 
         model = spec.build(Xtr_sel.values, y[tr], w_tr)
         pred = model.predict(Xva_sel.values)
@@ -3352,11 +3456,47 @@ def choose_best_model_with_alt(
             delayed(_eval_spec)(spec) for spec in specs
         )
 
+    # Blend50: equal-weight average of all models' OOF predictions
+    if len(rows) >= 2:
+        obs_mask = ~np.isnan(y)
+        all_oof = np.column_stack([r["oof_preds"] for r in rows])
+        blend_oof = np.nanmean(all_oof, axis=1)
+        blend_valid = obs_mask & ~np.isnan(blend_oof)
+        blend_rmse_vals = []
+        # Use same fold structure as first model for per-fold RMSE
+        ref_folds = rows[0]["oof_folds"]
+        for fold_id in np.unique(ref_folds[~np.isnan(ref_folds)]):
+            fold_mask = (ref_folds == fold_id) & blend_valid
+            if fold_mask.sum() > 0:
+                blend_rmse_vals.append(float(np.sqrt(np.mean((y[fold_mask] - blend_oof[fold_mask]) ** 2))))
+        blend_mean = float(np.mean(blend_rmse_vals)) if blend_rmse_vals else float("nan")
+        blend_std = float(np.std(blend_rmse_vals, ddof=1)) if len(blend_rmse_vals) > 1 else 0.0
+        rows.append({"model": "Blend50", "rmse_mean": blend_mean, "rmse_std": blend_std,
+                      "oof_preds": blend_oof, "oof_folds": rows[0]["oof_folds"]})
+
+        # Inverse-RMSE weighted blend
+        rmses_arr = np.array([r["rmse_mean"] for r in rows if r["model"] != "Blend50"])
+        inv_w = 1.0 / rmses_arr
+        inv_w /= inv_w.sum()
+        non_blend = [r for r in rows if r["model"] != "Blend50"]
+        blend_w_oof = sum(w * r["oof_preds"] for w, r in zip(inv_w, non_blend))
+        blend_w_rmse_vals = []
+        for fold_id in np.unique(ref_folds[~np.isnan(ref_folds)]):
+            fold_mask = (ref_folds == fold_id) & blend_valid
+            if fold_mask.sum() > 0:
+                blend_w_rmse_vals.append(float(np.sqrt(np.mean((y[fold_mask] - blend_w_oof[fold_mask]) ** 2))))
+        bw_mean = float(np.mean(blend_w_rmse_vals)) if blend_w_rmse_vals else float("nan")
+        bw_std = float(np.std(blend_w_rmse_vals, ddof=1)) if len(blend_w_rmse_vals) > 1 else 0.0
+        rows.append({"model": "BlendWeighted", "rmse_mean": bw_mean, "rmse_std": bw_std,
+                      "oof_preds": blend_w_oof, "oof_folds": rows[0]["oof_folds"]})
+
     eval_df = pd.DataFrame([{k: v for k, v in r.items() if k not in ("oof_preds", "oof_folds")}
                             for r in rows]).sort_values("rmse_mean", ascending=True).reset_index(drop=True)
     best_name = eval_df.iloc[0]["model"]
-    best_spec = next(sp for sp in specs if sp.name == best_name)
     best_row = next(r for r in rows if r["model"] == best_name)
+    # For blended winner, return the best individual spec for final training
+    best_spec = next((sp for sp in specs if sp.name == best_name), specs[0])
+    blend_winner = best_name == "Blend50"
     return best_spec, eval_df, best_row["oof_preds"], best_row["oof_folds"]
 
 def choose_best_model(
@@ -3981,6 +4121,10 @@ def main():
                     help="Also include squared terms (A^2).")
     ap.add_argument("--poly_limit", type=int, default=6,
                     help="If >0, only interact top-K variance columns; keep others as main effects.")
+    ap.add_argument("--alt_centric_poly", action="store_true",
+                    help="Use ALT-centric interactions (ALT*feature) ranked by residual correlation instead of variance-based poly.")
+    ap.add_argument("--alt_centric_k", type=int, default=6,
+                    help="Number of ALT*feature interactions to keep when using alt-centric poly.")
     ap.add_argument("--alt_feature_selector", choices=["none", "lgbm", "xgb"], default="lgbm",
                 help="Tree-based selector for the ALT model (per-fold).")
     ap.add_argument("--alt_top_k_features", default="auto",
@@ -4490,6 +4634,8 @@ def main():
         "enabled": bool(args.poly_interactions),
         "include_squares": bool(args.poly_include_squares),
         "limit": int(args.poly_limit) if args.poly_limit else 0,
+        "alt_centric": bool(args.alt_centric_poly),
+        "alt_centric_k": int(args.alt_centric_k),
     }
     print('more matrix making')
     y_all = pd.to_numeric(df[TARGET], errors="coerce").to_numpy()
@@ -4584,7 +4730,8 @@ def main():
         f"{r['model']}: {r['rmse_mean']:.2f} \u00b1 {r['rmse_std']:.2f}"
         for _, r in eval_df.iterrows()
     )
-    print(f"Model comparison: {model_summary} -> {best_spec.name}")
+    cv_winner = eval_df.iloc[0]["model"]
+    print(f"Model comparison: {model_summary} -> {cv_winner}")
 
     # Apply global target feature selection for final training/prediction
     ranking_df = None
@@ -4614,11 +4761,17 @@ def main():
         selected_cols = list(safe_features.columns)
 
     if poly_cfg.get("enabled", False):
-        safe_features = expand_poly_interactions(
-            safe_features,
-            include_squares=poly_cfg["include_squares"],
-            limit=poly_cfg["limit"],
-        )
+        if poly_cfg.get("alt_centric", False) and ALT_TARGET in safe_features.columns:
+            safe_features = expand_alt_centric_interactions(
+                safe_features, y_all, alt_col=ALT_TARGET,
+                top_k=poly_cfg.get("alt_centric_k", 6),
+            )
+        else:
+            safe_features = expand_poly_interactions(
+                safe_features,
+                include_squares=poly_cfg["include_squares"],
+                limit=poly_cfg["limit"],
+            )
 
     X_for_pred = safe_features.copy()
     used_feature_names = list(X_for_pred.columns)
@@ -4645,12 +4798,34 @@ def main():
     train_end = time.time()
     print(f"train:     {mmss(train_end - preprocess_end)}")
 
-    best = predictions_by_model[best_spec.name]
-    mu = best["mu"]
-    std = best["std"]
-    lower = best["lower"]
-    upper = best["upper"]
-    fitted = best["fitted"]
+    # If a blend or delta model won CV, handle final predictions accordingly
+    cv_winner = eval_df.iloc[0]["model"]
+    model_names = list(predictions_by_model.keys())
+    if cv_winner.startswith("Blend") and len(predictions_by_model) >= 2:
+        # Compute weights
+        if cv_winner == "BlendWeighted":
+            rmses_arr = np.array([eval_df.loc[eval_df["model"] == m, "rmse_mean"].iloc[0]
+                                  for m in model_names if m in eval_df["model"].values])
+            inv_w = 1.0 / rmses_arr
+            weights = inv_w / inv_w.sum()
+        else:
+            weights = np.ones(len(model_names)) / len(model_names)
+        mu = sum(w * predictions_by_model[m]["mu"] for w, m in zip(weights, model_names))
+        std = np.max([predictions_by_model[m]["std"] for m in model_names], axis=0)
+        lower = mu - 1.96 * std
+        upper = mu + 1.96 * std
+        fitted = predictions_by_model[model_names[0]]["fitted"]
+        w_str = ", ".join(f"{m}={w:.2f}" for m, w in zip(model_names, weights))
+        print(f"{cv_winner} active: {w_str}")
+    else:
+        # Use best individual spec (or fallback for Delta_ winners)
+        use_name = best_spec.name
+        best = predictions_by_model[use_name]
+        mu = best["mu"]
+        std = best["std"]
+        lower = best["lower"]
+        upper = best["upper"]
+        fitted = best["fitted"]
 
     # Save OOF predictions from model selection CV (moved up — needed for conformal)
     train_names = imputed_df[ID_COL].values[~y_missing_mask]
