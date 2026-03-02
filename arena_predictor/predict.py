@@ -4596,6 +4596,14 @@ def main():
         with open(os.path.join(out_dir, "alt_imputation_summary.json"), "w") as f:
             json.dump(diag, f, indent=2)
 
+    # Snapshot safe_features BEFORE adding trajectory (for ALT CV search later)
+    _safe_features_pre_traj = safe_features.copy()
+
+    # Add imputation trajectory features to target model (if available)
+    if imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
+        for col in imputer.trajectory_features_.columns:
+            safe_features[col] = imputer.trajectory_features_[col].values
+
     target_base_features = safe_features.copy()
 
     to_save = safe_features if id_series is None else pd.concat([id_series, safe_features], axis=1)
@@ -4646,7 +4654,7 @@ def main():
         # (Do NOT add ALT column here; selector uses only non-ALT columns)
         # Base features (pre-poly, no ALT) for inner greedy search —
         # matches the search space used by the global greedy selector
-        X_base_no_alt = safe_features.drop(columns=[ALT_TARGET], errors="ignore")
+        X_base_no_alt = _safe_features_pre_traj.drop(columns=[ALT_TARGET], errors="ignore")
         alt_cv_metrics = _alt_cv_report(
             X_no_alt_all,
             df[ALT_TARGET],
