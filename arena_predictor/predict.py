@@ -123,7 +123,7 @@ except Exception as e:
     raise
 
 # ML stack
-from sklearn.model_selection import KFold # type: ignore
+from sklearn.model_selection import KFold, GroupKFold # type: ignore
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures, SplineTransformer # type: ignore
 from sklearn.decomposition import PCA # type: ignore
 from sklearn.pipeline import Pipeline # type: ignore
@@ -3907,6 +3907,73 @@ def _normalize_cv_repeats(repeats: int) -> int:
     return max(1, reps)
 
 
+def _extract_model_groups(model_names: pd.Series) -> np.ndarray:
+    """Classify model names into provider groups for GroupKFold."""
+    _PREFIX_MAP = [
+        (["claude", "anthropic"], "Anthropic"),
+        (["gpt", "o3", "o4", "chatgpt", "openai"], "OpenAI"),
+        (["gemini", "gemma"], "Google"),
+        (["qwen", "qwq"], "Alibaba"),
+        (["deepseek"], "DeepSeek"),
+        (["llama"], "Meta"),
+        (["grok"], "xAI"),
+        (["mistral", "mixtral", "codestral", "pixtral"], "Mistral"),
+        (["command", "aya"], "Cohere"),
+        (["phi"], "Microsoft"),
+        (["nova"], "Amazon"),
+        (["jamba"], "AI21"),
+        (["reka"], "Reka"),
+        (["yi"], "01.AI"),
+    ]
+    groups = []
+    for name in model_names.astype(str).str.lower():
+        matched = "Other"
+        for prefixes, label in _PREFIX_MAP:
+            if any(name.startswith(p) for p in prefixes):
+                matched = label
+                break
+        groups.append(matched)
+    return np.array(groups)
+
+
+def _build_group_splits(
+    n_rows: int,
+    n_splits: int,
+    group_labels: np.ndarray,
+    repeats: int,
+    seed: int,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Build CV splits using GroupKFold (groups stay together).
+
+    For repeats > 1, permute the group→fold mapping to create
+    different fold assignments while keeping groups intact.
+    """
+    reps = _normalize_cv_repeats(repeats)
+    base_seed = int(seed) if seed is not None else SEED
+    unique_groups = np.unique(group_labels)
+    n_groups = len(unique_groups)
+    effective_splits = min(n_splits, n_groups)
+    if effective_splits < 2:
+        raise ValueError(
+            f"GroupKFold needs >= 2 groups but found {n_groups}. "
+            "Consider merging small groups or using standard KFold."
+        )
+
+    splits: List[Tuple[np.ndarray, np.ndarray]] = []
+    X_dummy = np.arange(n_rows)
+    for rep in range(reps):
+        rng = np.random.RandomState(base_seed + rep)
+        # Permute group labels so each repeat has a different fold assignment
+        perm = {g: rng.randint(0, 10**9) for g in unique_groups}
+        permuted_labels = np.array([perm[g] for g in group_labels])
+        gkf = GroupKFold(n_splits=effective_splits)
+        splits.extend(
+            (np.asarray(tr, dtype=int), np.asarray(va, dtype=int))
+            for tr, va in gkf.split(X_dummy, groups=permuted_labels)
+        )
+    return splits
+
+
 def _build_repeated_splits(
     n_rows: int,
     n_splits: int,
@@ -4143,6 +4210,14 @@ def main():
                     help="Minimum RMSE improvement to continue adding interaction pairs.")
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Margin for 'top_by_margin_prob' column (default 20 points).")
+    ap.add_argument("--group_cv", action="store_true",
+                    help="Use GroupKFold by model provider (diagnostic).")
+    ap.add_argument("--no_traj_in_alt", dest="traj_in_alt", action="store_false",
+                    help="Exclude trajectory features from ALT model.")
+    ap.set_defaults(traj_in_alt=True)
+    ap.add_argument("--no_traj_in_target", dest="traj_in_target", action="store_false",
+                    help="Exclude trajectory features from target model.")
+    ap.set_defaults(traj_in_target=True)
     args = ap.parse_args()
     args.cv_repeats = max(1, int(args.cv_repeats))
     def _resolve_repeats(value: Optional[int], default: int) -> int:
@@ -4153,6 +4228,7 @@ def main():
     args.alt_cv_repeats = _resolve_repeats(args.alt_cv_repeats, args.cv_repeats)
     args.cv_seed = int(args.cv_seed)
     _configure_parallelism(args)
+    print(f"Trajectory features: ALT={'ON' if args.traj_in_alt else 'OFF'}, Target={'ON' if args.traj_in_target else 'OFF'}")
 
     tier_quantiles: Optional[List[float]] = None
     parsed_tiers: List[float] = []
@@ -4409,6 +4485,9 @@ def main():
         "poly_limit": int(args.poly_limit),
         "max_workers": int(args.max_workers),
         "cv_splits_path": args.cv_splits_path,
+        "traj_in_alt": bool(args.traj_in_alt),
+        "traj_in_target": bool(args.traj_in_target),
+        "group_cv": bool(args.group_cv),
         "feature_selector": args.feature_selector,
         "alt_feature_selector": args.alt_feature_selector,
         "alt_regressor": "bayes",
@@ -4556,7 +4635,7 @@ def main():
                 alt_feature_matrix[f"{ci}x{cj}"] = svd_factors[ci].values * svd_factors[cj].values
 
         # X2: Imputation trajectory signatures
-        if imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
+        if args.traj_in_alt and imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
             for col in imputer.trajectory_features_.columns:
                 alt_feature_matrix[col] = imputer.trajectory_features_[col].values
 
@@ -4600,7 +4679,7 @@ def main():
     _safe_features_pre_traj = safe_features.copy()
 
     # Add imputation trajectory features to target model (if available)
-    if imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
+    if args.traj_in_target and imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
         for col in imputer.trajectory_features_.columns:
             safe_features[col] = imputer.trajectory_features_[col].values
 
@@ -4709,7 +4788,23 @@ def main():
     weights_cv = sample_weights_all[~y_missing_mask]
     dense_cv = dense_mask_all[~y_missing_mask]
     target_cv_splits = None
-    if args.cv_splits_path:
+    if args.group_cv:
+        train_model_names = imputed_df[ID_COL].values[~y_missing_mask]
+        group_labels_cv = _extract_model_groups(pd.Series(train_model_names))
+        group_counts = dict(pd.Series(group_labels_cv).value_counts())
+        # Merge groups with < 4 training models into "Other"
+        small_groups = {g for g, c in group_counts.items() if c < 4 and g != "Other"}
+        if small_groups:
+            group_labels_cv = np.array([
+                "Other" if g in small_groups else g for g in group_labels_cv
+            ])
+            group_counts = dict(pd.Series(group_labels_cv).value_counts())
+        print(f"GroupKFold: {len(set(group_labels_cv))} groups, "
+              f"sizes: {group_counts}")
+        target_cv_splits = _build_group_splits(
+            len(X_cv), args.selector_cv, group_labels_cv,
+            args.cv_repeats_outer, args.cv_seed)
+    elif args.cv_splits_path:
         target_cv_splits = get_or_create_splits(
             len(X_cv),
             args.selector_cv,
@@ -5214,6 +5309,9 @@ def main():
         "oof_rmse_ci_hi": round(ci_hi, 4),
         "cv_repeats_outer": int(args.cv_repeats_outer),
         "cv_repeats_inner": int(args.cv_repeats_inner),
+        "traj_in_alt": bool(args.traj_in_alt),
+        "traj_in_target": bool(args.traj_in_target),
+        "group_cv": bool(args.group_cv),
         "notes": [
             "Safety-filled any residual NaNs/Infs in features post-imputation with column medians, then 0 if still NaN.",
             "num_one_prob compares to current max observed lmsys_Score among training rows.",

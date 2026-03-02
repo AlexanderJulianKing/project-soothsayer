@@ -327,7 +327,7 @@ The trajectory features encode three distinct signals — *coverage*, *imputatio
 
 3. **Surviving imputation smoothing.** Every actual benchmark score gets homogenized by the imputer — outlier scores are pulled toward the mean, distinctive patterns are smoothed. But missingness patterns are binary facts from the raw data that pass through untouched. In a pipeline that aggressively regularizes and works with imputed features, the few bits of ground truth that survive carry disproportionate weight.
 
-**Important caveat:** The trajectory features are present in both the ALT model and the target model. The -0.69 OOF improvement was measured by adding them to the target model only (they were already in the ALT model). A full 2×2 ablation (ALT-only / target-only / both / neither) has not been run, so the attribution to the target model path specifically is not fully isolated. See Section 8 for discussion.
+**Important caveat (resolved):** The trajectory features are present in both the ALT model and the target model. The -0.69 OOF improvement was measured by adding them to the target model only (they were already in the ALT model). A 2×2 ablation (Section 9.1) confirmed that the gain comes entirely from the target model pathway — ALT trajectory features have zero effect on the final prediction.
 
 **Contrast with explicit missingness features:** Earlier experiments (Experiment 13 in the imputer loop, and the row completeness experiment in the target model session) tried adding explicit missingness indicators (PCA-compressed missing flags, raw missing fraction). These consistently failed. The trajectory features succeed where raw missingness fails because they encode *imputation dynamics* — not just "which cells were missing" but "how hard was it to fill them." A model missing 40% of benchmarks that are all highly correlated (easy to impute) is fundamentally different from one missing 40% of weakly correlated benchmarks (hard to impute). The trajectory captures this distinction; raw missingness counts don't.
 
@@ -433,8 +433,85 @@ These are genuine exogenous signals orthogonal to benchmark scores. They wouldn'
 
 In priority order:
 
-1. **GroupKFold evaluation** of the current pipeline — tests whether trajectory features generalize across model families
-2. **2×2 trajectory ablation** — isolates trajectory contribution in ALT vs. target model
+1. ~~**GroupKFold evaluation** of the current pipeline — tests whether trajectory features generalize across model families~~ **Done.** See Section 9.
+2. ~~**2×2 trajectory ablation** — isolates trajectory contribution in ALT vs. target model~~ **Done.** See Section 9.
 3. **Sliced error analysis** — RMSE by ALT-observed/imputed, by missingness quintile, by score range
 4. **Exogenous metadata features** — provider, release date, parameter count as additional features
 5. **Arena vote count as sample weight** — downweight models with unreliable ELO
+
+---
+
+## 9. Trajectory Ablation & GroupKFold Evaluation (Mar 2026)
+
+Addresses the top two open questions from Section 8: (1) isolating trajectory feature contribution via a 2×2 ablation, and (2) testing cross-provider generalization with GroupKFold.
+
+### 9.1 2×2 Trajectory Feature Ablation
+
+CLI flags `--no_traj_in_alt` and `--no_traj_in_target` were added to independently control trajectory feature injection into the ALT model and target model. All 4 configurations were run with identical settings (5× outer CV, 3× inner CV, ALT-centric poly k=5).
+
+| ALT Traj | Target Traj | CV RMSE | OOF RMSE | ALT nested-CV RMSE |
+|----------|-------------|---------|----------|---------------------|
+| ON | ON | **14.78** | **14.92** | 17.33 |
+| ON | OFF | 15.40 | 15.62 | 17.33 |
+| OFF | ON | **14.78** | **14.92** | 18.11 |
+| OFF | OFF | 15.40 | 15.62 | 18.11 |
+
+**Key findings:**
+
+1. **Target trajectory features account for the entire gain.** The CV/OOF RMSE depends *only* on whether trajectory features are in the target model (rows 1≡3 at 14.78/14.92, rows 2≡4 at 15.40/15.62). The ALT trajectory flag has zero effect on the final prediction.
+
+2. **ALT trajectory does improve the ALT model itself** — ALT nested-CV goes from 17.33 (ON) to 18.11 (OFF), a meaningful 0.78-point degradation. But this improvement doesn't propagate to the target model. The target model's feature selector apparently compensates: the ALT prediction is one feature among 78, and the selector picks the same ~10 features regardless of ALT quality.
+
+3. **The trajectory → target pathway is direct, not mediated through ALT.** This resolves the attribution question raised in Section 8.1. The -0.62 OOF improvement from trajectory features comes from the target model using them directly as predictors (alongside benchmark features), not from trajectory improving ALT imputation quality which then flows through as a better ALT feature.
+
+4. **The "important caveat" from Section 7.3 is now resolved.** The ablation confirms that trajectory features help the target model *directly*. The three mechanisms described there (coverage proxy, epistemic uncertainty, surviving imputation smoothing) are operating at the target model level.
+
+**Implication:** The ALT trajectory features could be removed without affecting predictions. They currently add 21 columns to the ALT feature matrix that the feature selector ultimately ignores. However, keeping them is harmless (no runtime penalty since the ALT imputation result is cached), and they do help the ALT model's own cross-validation diagnostic.
+
+### 9.2 GroupKFold Evaluation
+
+GroupKFold holds out entire model provider families per fold, testing whether the pipeline generalizes to unseen providers. Models were classified by name prefix into 9 groups (after merging groups with <4 training models into "Other"):
+
+| Group | Training Models |
+|-------|----------------|
+| Other | 21 |
+| Anthropic | 19 |
+| OpenAI | 19 |
+| Alibaba | 13 |
+| Google | 13 |
+| DeepSeek | 12 |
+| Meta | 6 |
+| xAI | 5 |
+| Amazon | 4 |
+
+| Metric | Standard KFold | GroupKFold | Delta |
+|--------|---------------|------------|-------|
+| CV RMSE | 14.78 ± 2.23 | 18.77 ± 4.99 | **+3.99** |
+| OOF RMSE | 14.92 | 19.18 | **+4.26** |
+| 95% CI | [12.39, 17.27] | [15.99, 22.36] | wider |
+
+**Key findings:**
+
+1. **The ~4-point degradation is substantial.** This represents a ~27% increase in RMSE when the model must predict scores for an entirely unseen provider family. It indicates that the pipeline is learning provider-specific patterns.
+
+2. **Higher variance across folds.** GroupKFold CV std is 4.99 vs. 2.23 for standard KFold, indicating that some provider families are much harder to predict than others when held out entirely.
+
+3. **Sources of provider-specific signal.** The degradation likely comes from multiple sources:
+   - **Trajectory features encode coverage patterns.** All Claude models have similar benchmark coverage → similar trajectory features. When all Claude models are held out, the model has never seen that coverage pattern.
+   - **ALT score carries provider identity.** Models from the same provider tend to cluster in Arena ELO (e.g., Anthropic models are all high-ELO). The ALT feature — the strongest predictor — implicitly encodes provider.
+   - **Benchmark profiles are provider-correlated.** OpenAI models tend to excel at coding benchmarks, Google models at multilingual, etc. These benchmark "signatures" are partially provider-specific.
+
+4. **Context: the original pipeline had similar degradation.** Section 1 showed PCA→BayesianRidge going from 0.345 RMSE/SD (standard) to 0.407 (GroupKFold), a ~18% increase. The current pipeline's 27% increase is larger, suggesting the trajectory features and ALT-centric interactions may have amplified provider-specific fitting.
+
+5. **This is a realistic deployment concern, but not disqualifying.** In practice, the pipeline is used to predict scores for models from *known* providers (new Claude, new GPT, etc.), not entirely novel providers. The GroupKFold result is a worst-case bound. However, it does suggest caution when predicting scores for models from providers with few training examples (e.g., Amazon with only 4 models).
+
+### 9.3 Implications
+
+1. **Trajectory features are confirmed valuable.** The 2×2 ablation cleanly attributes the -0.62 OOF improvement to the target model pathway. The gain is robust and not an artifact of ALT mediation.
+
+2. **Provider generalization is a real weakness.** The GroupKFold degradation (18.77 vs. 14.78 CV RMSE) is the largest known gap in the pipeline's evaluation. Future work on exogenous metadata features (Section 8.4) could help — if provider/organization is explicitly modeled as a feature, the model might learn provider-invariant patterns instead of implicitly memorizing provider signatures through benchmark coverage.
+
+3. **Remaining open questions from Section 8.5:**
+   - Sliced error analysis (RMSE by ALT-observed/imputed, missingness quintile, score range)
+   - Exogenous metadata features (provider, release date, parameter count)
+   - Arena vote count as sample weight
