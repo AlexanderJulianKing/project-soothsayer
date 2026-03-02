@@ -85,7 +85,7 @@ python3 predict.py \
     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
     --poly_interactions \
     --poly_include_squares \
-    --alt_centric_poly --alt_centric_k 4 \
+    --alt_centric_poly --alt_centric_k 5 \
     --cv_repeats_outer 5 \
     --cv_repeats_inner 3 \
     --feature_cv_repeats 1 \
