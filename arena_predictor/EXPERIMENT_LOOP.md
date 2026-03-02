@@ -357,3 +357,12 @@ Sigmoid steepness sweep: s=1→17.39, s=2→17.34, **s=3→17.33**, s=4→17.33,
 23. **Regime models work when feature addition doesn't**: The soft regime model (exp 52) was the ONLY personality-aware idea that worked — because it changes HOW existing features are used (different coefficients for high/low capability) rather than adding new features. Same information, more flexible function class.
 24. **Regime model unlocks more features**: Single Ridge optimal at k=5 features. Regime model optimal at k=7. The two specialized heads can each use the extra features without overfitting because each effectively sees a sample-weighted subset.
 25. **Sigmoid steepness matters**: Default z-scored sigmoid (steepness=1) gives too-gradual blending. Steepness=3 creates sharper regime boundaries. Plateau at 3-5 suggests there's a genuine bifurcation in how capability interacts with benchmark scores.
+26. **Trajectory features are gold for the target model too**: Adding trajectory features (`_traj_mean_delta`, `_traj_max_delta`, `_traj_n_imputed`) to the target model (not just ALT) produced the single largest target model improvement (-0.69 OOF RMSE). See `docs/FINDINGS.md` Section 6-7 for full analysis.
+
+## Related: Target Model Experiments
+
+The target model optimization campaign (separate from the imputer experiments above) is documented in `docs/FINDINGS.md`, Sections 6-7. Key target model improvements:
+- Imputation trajectory features in target model: OOF 15.63 → 14.92 (-0.71)
+- ALT-centric polynomial interactions (k=5): -0.15 CV
+- HuberRegressor + ARDRegression 2-model blend: -0.30 CV
+- Combined: OOF 15.94 → 14.92 (-1.02, -6.4%)
