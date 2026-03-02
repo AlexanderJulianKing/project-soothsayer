@@ -285,9 +285,11 @@ Poly: ALT² + top-5 ALT×feature interactions ranked by residual correlation.
 
 ## 7. What the Experiments Reveal About the Prediction Task
 
+*Note: These findings were reviewed by an independent model (GPT-5.3 Codex) which identified several caveats and blind spots. See Section 8 for the full critique and open questions.*
+
 ### 7.1 This is a radically small-n, high-dimensional problem
 
-~90 training rows, 75+ features, ~40% missing. This single fact explains most experiment outcomes:
+~90 training rows, 75+ features, ~40% missing. This single fact explains most experiment outcomes, though the failure mode is more precisely *small n + strong ALT proxy + high search variance*, not small n alone:
 
 - **Nonlinear models catastrophically overfit.** KernelRidge (RBF): 220. PLS: 20.5. LightGBM direct: 0.417 RMSE/SD (Section 1). Random Forest: 0.456 RMSE/SD. These models have far too many effective parameters for n=90.
 - **Stacking and meta-learning overfit.** BlendRidge (learning blend weights from OOF predictions): worse than equal-weight average. With n=90, there isn't enough data to reliably estimate even 2-3 blend weights.
@@ -315,15 +317,17 @@ This has a key implication: **prediction quality is gated by ALT imputation qual
 
 The trajectory features (`_traj_mean_delta`, `_traj_max_delta`, `_traj_n_imputed`) were the single largest improvement across all target model experiments: -0.69 OOF RMSE, a bigger gain than any model architecture change, polynomial expansion, or hyperparameter tune.
 
-**Why missingness is so predictive:**
+**Why trajectory features are so predictive (three complementary mechanisms):**
 
-1. **Missingness proxies for model "establishment status."** Models that appear on many benchmarks are typically from major labs (OpenAI, Anthropic, Google) — the same labs whose models get the most Arena votes. More votes → more stable ELO → more predictable. Models with sparse benchmark coverage are often smaller labs, fine-tunes, or very new releases with volatile ELO. The trajectory feature `_traj_n_imputed` (count of missing cells) directly encodes this.
+The trajectory features encode three distinct signals — *coverage*, *imputation difficulty*, and *out-of-distribution-ness* — which together explain their outsize impact:
 
-2. **Imputation noise compounds, and the model can't otherwise detect it.** When a row has 40% missing features, those values are filled by BayesianRidge predictions trained on other incomplete rows. Each imputed value carries prediction error. The target model trains on a mix of real and synthetic values but has no way to distinguish them. The trajectory features (`_traj_mean_delta`, `_traj_max_delta`) effectively tell the model: "trust this row's features less" or "this row's feature vector is partly synthetic." Without that signal, the model treats a cleanly-measured GPT-4o row identically to a heavily-imputed niche model row.
+1. **Coverage: missingness proxies for model characteristics.** `_traj_n_imputed` (count of missing cells) encodes how many benchmarks a model was tested on. Models that appear on many benchmarks are typically from major labs (OpenAI, Anthropic, Google) — the same labs whose models get the most Arena votes. More votes → more stable ELO → more predictable. Missing benchmarks are not missing at random: a model missing LiveBench probably launched before LiveBench existed; a model missing ARC-AGI-2 might not support tool-use. These patterns encode model *type* (old vs. new, reasoning vs. chat, large vs. small) which is genuinely predictive of Arena ELO.
 
-3. **Missing benchmarks are not missing at random.** A model missing LiveBench scores probably launched before LiveBench existed. A model missing ARC-AGI-2 might not support the required tool-use interface. These missingness patterns encode model *type* — reasoning-focused vs. chat-focused, large vs. small, old vs. new — which is genuinely predictive of Arena ELO. Trajectory features are a compressed representation of that structure.
+2. **Imputation difficulty: row-level epistemic uncertainty.** `_traj_mean_delta` and `_traj_max_delta` measure how much each row's imputed values changed across iterative passes — essentially, how hard it was for the imputer to settle on values for this row. When a row has 40% missing features, those values are filled by BayesianRidge predictions trained on other incomplete rows. Each imputed value carries prediction error. The trajectory features effectively tell the target model: "this row's feature vector is partly synthetic and the imputer was uncertain about it." Without that signal, the model treats a cleanly-measured GPT-4o row identically to a heavily-imputed niche model row. A model missing 40% of highly-correlated benchmarks (easy to impute, low delta) is fundamentally different from one missing 40% of weakly-correlated benchmarks (hard to impute, high delta). The trajectory captures this distinction; raw missingness counts don't.
 
-4. **It's the one signal that survives imputation.** Every actual benchmark score gets smoothed by the imputer — outlier scores are pulled toward the mean, distinctive patterns are homogenized. But missingness patterns are binary facts from the raw data that pass through untouched. In a pipeline that aggressively regularizes and works with imputed features, the few bits of ground truth that survive carry disproportionate weight.
+3. **Surviving imputation smoothing.** Every actual benchmark score gets homogenized by the imputer — outlier scores are pulled toward the mean, distinctive patterns are smoothed. But missingness patterns are binary facts from the raw data that pass through untouched. In a pipeline that aggressively regularizes and works with imputed features, the few bits of ground truth that survive carry disproportionate weight.
+
+**Important caveat:** The trajectory features are present in both the ALT model and the target model. The -0.69 OOF improvement was measured by adding them to the target model only (they were already in the ALT model). A full 2×2 ablation (ALT-only / target-only / both / neither) has not been run, so the attribution to the target model path specifically is not fully isolated. See Section 8 for discussion.
 
 **Contrast with explicit missingness features:** Earlier experiments (Experiment 13 in the imputer loop, and the row completeness experiment in the target model session) tried adding explicit missingness indicators (PCA-compressed missing flags, raw missing fraction). These consistently failed. The trajectory features succeed where raw missingness fails because they encode *imputation dynamics* — not just "which cells were missing" but "how hard was it to fill them." A model missing 40% of benchmarks that are all highly correlated (easy to impute) is fundamentally different from one missing 40% of weakly correlated benchmarks (hard to impute). The trajectory captures this distinction; raw missingness counts don't.
 
@@ -335,18 +339,20 @@ The mechanism: ARD uses Bayesian shrinkage (pulls coefficients toward zero, impl
 
 This explains why adding similar models (BayesianRidge, Ridge, ElasticNet) consistently hurts: they use the same loss function (MSE) with similar regularization, so they make the same mistakes. The blend only gains from members with genuinely different inductive biases.
 
-### 7.5 The signal is nearly linear and low-dimensional
+### 7.5 Extra nonlinearity is not estimable at this sample size
 
-Across 50+ experiments spanning both the imputer and target model:
+Across 50+ experiments spanning both the imputer and target model, nonlinear approaches consistently failed:
 
 - **Linear models dominate.** PCA→BayesianRidge beats CatBoost, LightGBM, Random Forest, and GaussianProcess in both standard and family-aware CV.
 - **The only useful nonlinearity is low-order polynomial.** ALT² and 5 ALT×feature interaction terms are the only nonlinear features selected. Generic squared terms, cubic terms, and kernel methods all overfit.
 - **10 features suffice.** Out of 78 available features, the selector consistently keeps ~10. Adding more degrades performance.
-- **PCA works because the signal is latent and linear.** The first 10 PCA components capture "general capability," "reasoning vs. chat," "code vs. language" — the actual latent factors Arena scores depend on. Polynomial interactions on PCA components show zero significant signal (Section 1).
+- **PCA works because the signal is latent and approximately linear.** The first 10 PCA components capture "general capability," "reasoning vs. chat," "code vs. language" — the actual latent factors Arena scores depend on. Polynomial interactions on PCA components show zero significant signal (Section 1).
 
-This makes physical sense: Arena ELO measures overall user preference, which is approximately a weighted sum of individual capabilities (reasoning + creativity + instruction following + ...). Each benchmark measures a noisy linear projection of the same underlying qualities. The relationship between benchmarks and ELO is therefore approximately linear in the latent capability space.
+A plausible physical explanation: Arena ELO measures overall user preference, which is approximately a weighted sum of individual capabilities (reasoning + creativity + instruction following + ...). Each benchmark measures a noisy linear projection of the same underlying qualities. The relationship between benchmarks and ELO is therefore approximately linear in the latent capability space.
 
-### 7.6 The ceiling is real
+**Caveat:** We can defensibly say that extra nonlinearity is not estimable with this feature set and sample size. Claiming the underlying relationship is *genuinely* linear is a stronger claim than our evidence supports — with more data (n=500+), nonlinear components might become estimable and useful.
+
+### 7.6 Diminishing returns suggest an approaching ceiling
 
 The 95% CI on our best OOF RMSE of 14.92 is [12.39, 17.27]. With Arena ELO ranging ~900–1400 (SD≈56), that's an RMSE/SD of ~0.27. The residual error likely comes from:
 
@@ -354,7 +360,9 @@ The 95% CI on our best OOF RMSE of 14.92 is [12.39, 17.27]. With Arena ELO rangi
 2. **Omitted variables.** Arena captures conversational qualities (humor, helpfulness, tone) that no benchmark fully measures. The heteroscedasticity analysis (Section 2) confirms this: the model systematically overpredicts weak models where arena-specific qualities diverge most from benchmark performance.
 3. **Imputation noise for the ~40% of models missing key features.** Even with trajectory features informing the model about imputation quality, heavily-imputed rows remain fundamentally noisier.
 
-The diminishing returns observed across the experiment campaign support this interpretation. The first few wins (SVD warm-start, trajectory features, ALT-centric interactions) each improved OOF by 0.3–0.7 points. Later experiments consistently yield <0.1 improvement or degrade performance. The pipeline is approaching the information-theoretic limit of what 75 benchmarks can predict about Arena ELO with n≈90 training rows.
+The diminishing returns observed across the experiment campaign are consistent with an approaching ceiling. The first few wins (SVD warm-start, trajectory features, ALT-centric interactions) each improved OOF by 0.3–0.7 points. Later experiments consistently yield <0.1 improvement or degrade performance.
+
+**Caveat:** We have evidence of diminishing returns, not a proven hard ceiling. After 70+ human-guided experiments on the same dataset, the final OOF RMSE of 14.92 is almost certainly somewhat optimistic vs. true out-of-sample performance due to selection bias in the experiment search. More training data (n=120+), exogenous metadata features (see Section 8), or fundamentally different approaches could potentially push further.
 
 ### 7.7 Implications for the pipeline
 
@@ -363,3 +371,70 @@ The diminishing returns observed across the experiment campaign support this int
 3. **Feature engineering should focus on meta-features, not more benchmarks.** The trajectory features were worth more than any new benchmark column. Additional benchmark sources measuring the same abilities would be redundant; features that encode *data quality* and *model characteristics* have higher marginal value.
 4. **The 2-model blend (ARD+Huber) is near-optimal for n≈90.** Adding models only helps if they bring genuinely different inductive biases. At this sample size, there isn't enough data to support more than 2 diverse models in the blend.
 5. **The pipeline rewards restraint.** Almost every attempt at more expressiveness — more models, more features, nonlinear kernels, stacking, learned blend weights — made things worse. The best improvements came from giving the model information it didn't have (trajectory features, ALT-centric interactions) rather than making the model more complex.
+
+---
+
+## 8. Critique and Open Questions (GPT-5.3 Codex Review)
+
+The findings in Sections 6–7 were reviewed by GPT-5.3 Codex, which examined the pipeline code, experiment logs, and analysis. Below is a synthesis of its critique, organized by severity.
+
+### 8.1 Methodological concerns
+
+**Post-search optimism.** After 70+ human-guided experiments on the same dataset, the reported OOF RMSE of 14.92 is almost certainly somewhat optimistic. Each experiment was evaluated against the same OOF predictions, and winning experiments were kept while losers were reverted. This is a form of adaptive data analysis — the final number reflects the best of many tries, not a single pre-registered evaluation. A lockbox holdout (held out before any experimentation) would provide a more honest estimate.
+
+**Metric mismatch between model selection and reporting.** Model selection CV in `cross_val_rmse_with_alt` can score on dense rows only (via `dense_mask` — rows with ≤51% missing features), but the headline OOF RMSE reported at the end is computed on *all* valid rows. If model selection preferentially picks models that do well on dense rows, the reported OOF on all rows could paint a different picture than the CV that chose the model. This deserves investigation.
+
+**Trajectory feature attribution is not fully isolated.** The trajectory features exist in both the ALT model and the target model. The -0.69 OOF improvement was measured by adding them to the target model (they were already in the ALT model). But the ALT model's predictions — which include trajectory feature influence — flow *into* the target model as the dominant feature. A proper 2×2 ablation is needed:
+
+| | Trajectory in ALT | No trajectory in ALT |
+|---|---|---|
+| **Trajectory in target** | Current pipeline | ? |
+| **No trajectory in target** | Previous baseline | ? |
+
+Without this, we can't cleanly separate "trajectory helps the target model directly" from "trajectory improves ALT imputation, which flows through as a better feature."
+
+### 8.2 Evaluation blind spots
+
+**GroupKFold / leave-provider-out CV not tested on final pipeline.** The original PCA→BR pipeline was tested with GroupKFold (Section 1), but the optimized pipeline (ARD+Huber blend, trajectory features, ALT-centric poly) has not been. Trajectory features could act as family/era shortcuts: all Claude models have similar benchmark coverage → similar trajectory features → model learns "if Claude-like coverage pattern, predict Claude-like ELO." GroupKFold would reveal whether the trajectory features generalize to truly unseen model families.
+
+**No sliced error analysis.** The headline OOF RMSE averages over all models. Critical deployment-relevant questions are unanswered:
+- What's the RMSE for models where ALT is *observed* vs. *imputed*? (The easy vs. hard case)
+- How does error vary by missingness quintile?
+- Is the low-score tail (models with ELO < 1200) still systematically overpredicted?
+These slices would reveal whether the trajectory features improved predictions for the models that actually *need* prediction (those without Arena scores) or just reduced noise on models that already have one.
+
+**Transductive vs. inductive imputation.** The imputer sees the full data matrix (all rows, including inference rows) at prediction time. This matches deployment (where you'd impute all models at once) but means the CV doesn't test the scenario where a truly novel model appears with no influence on the imputation. If a new model is added and the imputer is re-run, that model's values influence the imputation of all other models. This is realistic but worth noting.
+
+### 8.3 Framing corrections
+
+**"Only additive changes win" has search-path bias.** This pattern is real but partly an artifact of our experimental sequence. Subtractive experiments were often tested on top of already-optimized additive changes, where removing information is more likely to hurt. The causal claim "information addition is the only viable strategy" is stronger than the evidence supports. A fair test would require testing both additive and subtractive changes from the *same* baseline.
+
+**"Small-n dominates everything" needs qualification.** The failure mode is more precisely: small n + strong ALT proxy (which concentrates signal in one feature) + high search variance (from 70+ experiments). PLS and KernelRidge would likely fail at n=500 too, but stacking and 3+ model blends might succeed with more data.
+
+### 8.4 Unexplored directions
+
+Codex identified several categories of features and experiments that haven't been tried:
+
+**Exogenous metadata (highest priority).** Features not derived from benchmarks:
+- Provider / organization (OpenAI, Google, Meta, etc.)
+- Release date or model age
+- Parameter count / model scale
+- Open-source vs. closed-source
+- Modality support (text-only, multimodal, tool-use)
+- Context window length
+
+These are genuine exogenous signals orthogonal to benchmark scores. They wouldn't be redundant with existing features and could break through the current ceiling.
+
+**Benchmark-family coverage features.** Instead of raw per-column missingness (which failed) or row-level trajectory (which succeeded), try *semantic* coverage fractions: "what fraction of coding benchmarks does this model have?", "what fraction of reasoning benchmarks?", "what fraction of style benchmarks?" This is a middle ground between the too-granular (per-column flags) and too-compressed (single row count) approaches.
+
+**Arena label reliability for weighting.** Use Arena vote count, leaderboard confidence interval, or recent ELO volatility as *sample weights* (not features). Models with 10,000 Arena votes have much more reliable ELO than models with 500 votes. Downweighting noisy labels during training could improve calibration without adding features.
+
+### 8.5 Recommended next experiments
+
+In priority order:
+
+1. **GroupKFold evaluation** of the current pipeline — tests whether trajectory features generalize across model families
+2. **2×2 trajectory ablation** — isolates trajectory contribution in ALT vs. target model
+3. **Sliced error analysis** — RMSE by ALT-observed/imputed, by missingness quintile, by score range
+4. **Exogenous metadata features** — provider, release date, parameter count as additional features
+5. **Arena vote count as sample weight** — downweight models with unreliable ELO
