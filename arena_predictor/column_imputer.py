@@ -14,6 +14,7 @@ Key features:
 
 from enum import Enum
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any
 import warnings
 
@@ -2289,5 +2290,1180 @@ class SpecializedColumnImputer:
 
         if self.verbose:
             print(f"evaluate_quality_oof: {len(per_cell)} cells probed across {len(per_col)} columns")
+
+        return per_cell, per_col, by_bin
+
+
+# =============================================================================
+# ModelBankImputer — Per-Cell Predictor Selection with Uncertainty Tracking
+# =============================================================================
+
+
+@dataclass
+class FittedCellModel:
+    """Cached fitted model for a (column, predictor_subset) combination."""
+    predictor_names: List[str]
+    sigma2_loo: float
+    n_train: int
+    model_kind: str  # 'ridge', 'bounded_ridge', 'hurdle', 'categorical'
+    _model: Any = field(default=None, repr=False)
+    _scaler: Any = field(default=None, repr=False)
+    # Original-space coefficients for σ² propagation in pass 2
+    _coefficients: Optional[np.ndarray] = field(default=None, repr=False)
+    # Bounded model extras
+    _lower: float = 0.0
+    _upper: float = 1.0
+    _logit_eps: float = 1e-3
+    _logit_range: float = 1.0
+    # Hurdle model extras
+    _gate_model: Any = field(default=None, repr=False)
+    _gate_scaler: Any = field(default=None, repr=False)
+    _threshold: float = 0.0
+    _floor_mean: float = 0.0
+
+
+class ModelBankImputer:
+    """Per-cell predictor selection imputer with uncertainty tracking.
+
+    Drop-in replacement for SpecializedColumnImputer.  Each missing cell uses
+    the best model compatible with what that specific row actually has observed,
+    tracks uncertainty per cell, and only uses imputed values as predictors
+    when they are confident enough.
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.1,
+        seed: int = 42,
+        verbose: int = 1,
+        n_jobs: int = -1,
+        selector_k_max: int = 30,
+        categorical_threshold: int = 10,
+        force_categorical_cols: Optional[List[str]] = None,
+        skew_threshold: float = 2.0,
+        confidence_threshold: float = 0.4,
+        redundancy_threshold: float = 0.85,
+        min_support: int = 10,
+        coherence_lambda: float = 1.0,
+        **kwargs,
+    ):
+        self.alpha = alpha
+        self.seed = seed
+        self.verbose = verbose
+        self.n_jobs = n_jobs
+        self.selector_k_max = selector_k_max
+        self.categorical_threshold = categorical_threshold
+        self.force_categorical_cols = set(force_categorical_cols or [])
+        self.skew_threshold = skew_threshold
+        self.confidence_threshold = confidence_threshold
+        self.redundancy_threshold = redundancy_threshold
+        self.min_support = min_support
+        self.coherence_lambda = coherence_lambda
+
+        # ---- populated by fit_transform ----
+        self.model_bank_: Dict[Tuple[str, frozenset], Optional[FittedCellModel]] = {}
+        self.sigma2_matrix_: Optional[pd.DataFrame] = None
+        self.cell_predictors_: Dict[Tuple, List[str]] = {}
+        self.logs_: List[Dict[str, Any]] = []
+        # API-compatible attributes (representative per-column)
+        self.models_: Dict[str, BaseColumnModel] = {}
+        self.predictors_map_: Dict[str, List[str]] = {}
+        self.predictor_freqs_: Dict[str, Dict[str, int]] = {}
+        self.svd_row_factors_: Optional[pd.DataFrame] = None
+        self.trajectory_features_: Optional[pd.DataFrame] = None
+        self.column_types_: Dict[str, ColumnType] = {}
+        self.column_metadata_: Dict[str, Dict[str, Any]] = {}
+        self.log_transforms_: Dict[str, Dict[str, Any]] = {}
+        self.correlation_matrix_: Optional[pd.DataFrame] = None
+        self.spearman_matrix_: Optional[pd.DataFrame] = None
+        self.original_missing_: Dict[str, pd.Series] = {}
+        self._candidate_rankings: Dict[str, List[Tuple[str, float, int]]] = {}
+        self._col_sd: Dict[str, float] = {}
+        self._svd_rank: Optional[int] = None
+
+    # --------------------------------------------------------------------- #
+    #  fit_transform — main entry point                                      #
+    # --------------------------------------------------------------------- #
+    def fit_transform(self, X_df: pd.DataFrame) -> pd.DataFrame:
+        cols_to_impute = [c for c in X_df.columns if X_df[c].isna().any()]
+        if not cols_to_impute:
+            if self.verbose:
+                print("No missing values to impute")
+            return X_df.copy()
+
+        X_df = X_df.copy()
+
+        if self.verbose:
+            print(f"ModelBankImputer: {len(cols_to_impute)} columns to impute")
+
+        # ---- Phase 0: preprocessing ----
+        self._apply_log_transforms(X_df)
+        for col in cols_to_impute:
+            self.original_missing_[col] = X_df[col].isna().copy()
+        self._classify_columns(X_df, cols_to_impute)
+        self._compute_correlations(X_df)
+        self._compute_svd_factors(X_df, cols_to_impute)
+
+        # Store column SDs for normalization
+        for col in cols_to_impute:
+            obs = X_df[col].dropna()
+            self._col_sd[col] = float(obs.std()) if len(obs) > 1 else 1.0
+
+        # ---- Phase 1: per-column candidate rankings ----
+        self._build_candidate_rankings(X_df, cols_to_impute)
+
+        # ---- Phase 2: pass 1 — observed-only imputation ----
+        self.sigma2_matrix_ = pd.DataFrame(
+            np.inf, index=X_df.index, columns=X_df.columns, dtype=float
+        )
+        # Mark observed cells as 0 uncertainty
+        for col in X_df.columns:
+            observed_mask = X_df[col].notna()
+            self.sigma2_matrix_.loc[observed_mask, col] = 0.0
+
+        self._pass1_observed_only(X_df, cols_to_impute)
+
+        # ---- Phase 3: pass 2 — uncertainty-gated expansion ----
+        self._pass2_expansion(X_df, cols_to_impute)
+
+        # ---- Phase 4: fallback — fill remaining with median ----
+        for col in cols_to_impute:
+            still_missing = X_df[col].isna()
+            if still_missing.any():
+                median = X_df[col].median()
+                if pd.isna(median):
+                    median = 0.0
+                n_fill = int(still_missing.sum())
+                X_df.loc[still_missing, col] = median
+                col_var = self._col_sd.get(col, 1.0) ** 2
+                self.sigma2_matrix_.loc[still_missing, col] = col_var
+                if self.verbose >= 2:
+                    print(f"  Fallback: {n_fill} cells in {col} filled with median")
+
+        # ---- Phase 4b: low-rank coherence projection ----
+        self._coherence_projection(X_df, cols_to_impute)
+
+        # ---- Phase 5: post-processing ----
+        # Inverse log transforms
+        if self.log_transforms_:
+            for col, info in self.log_transforms_.items():
+                if col in X_df.columns:
+                    X_df[col] = np.expm1(X_df[col]) - info['shift']
+            if self.verbose:
+                print(f"Inverse-transformed {len(self.log_transforms_)} columns")
+
+        # Trajectory features from σ² matrix
+        self._compute_trajectory_features(X_df, cols_to_impute)
+
+        # Representative models for API compatibility
+        self._build_representative_models(X_df, cols_to_impute)
+
+        if self.verbose:
+            print(f"ModelBankImputer complete. {len(self.logs_)} cell writes, "
+                  f"{len(self.model_bank_)} cached models")
+
+        return X_df
+
+    # --------------------------------------------------------------------- #
+    #  Phase 0 helpers                                                       #
+    # --------------------------------------------------------------------- #
+    def _apply_log_transforms(self, X_df: pd.DataFrame) -> None:
+        """Variance-stabilizing log transforms for highly skewed columns."""
+        if self.skew_threshold <= 0:
+            return
+        numeric_cols = X_df.select_dtypes(include=[np.number]).columns.tolist()
+        n_transformed = 0
+        for col in numeric_cols:
+            observed = X_df[col].dropna()
+            if len(observed) < 20:
+                continue
+            try:
+                obs_vals = observed.to_numpy(dtype=float)
+            except (ValueError, TypeError):
+                continue
+            col_skew = float(compute_skew(obs_vals))
+            if col_skew <= self.skew_threshold:
+                continue
+            min_val = float(observed.min())
+            shift = -min_val + 1.0 if min_val < 0 else 0.0
+            log_obs = np.log1p(obs_vals + shift)
+            best_r_orig, best_r_log = 0.0, 0.0
+            for other_col in numeric_cols:
+                if other_col == col:
+                    continue
+                other = X_df[other_col].dropna()
+                common_idx = observed.index.intersection(other.index)
+                if len(common_idx) < 20:
+                    continue
+                try:
+                    r_orig = abs(float(pearsonr(
+                        observed.loc[common_idx].to_numpy(dtype=float),
+                        other.loc[common_idx].to_numpy(dtype=float),
+                    )[0]))
+                    r_log = abs(float(pearsonr(
+                        np.log1p(observed.loc[common_idx].to_numpy(dtype=float) + shift),
+                        other.loc[common_idx].to_numpy(dtype=float),
+                    )[0]))
+                except (ValueError, TypeError):
+                    continue
+                best_r_orig = max(best_r_orig, r_orig)
+                best_r_log = max(best_r_log, r_log)
+            if best_r_log <= best_r_orig + 0.02:
+                continue
+            self.log_transforms_[col] = {'shift': shift, 'skew_before': col_skew}
+            X_df[col] = np.log1p(X_df[col] + shift)
+            n_transformed += 1
+        if self.verbose and n_transformed > 0:
+            print(f"  Log-transformed {n_transformed} skewed columns")
+
+    def _classify_columns(self, X_df: pd.DataFrame, cols: List[str]) -> None:
+        for col in cols:
+            col_type, metadata = ColumnClassifier.classify(
+                X_df[col], X_df, self.categorical_threshold,
+                self.force_categorical_cols,
+            )
+            self.column_types_[col] = col_type
+            self.column_metadata_[col] = metadata
+            if self.verbose >= 2:
+                tags = metadata.get('tags', set())
+                tag_str = f" [{', '.join(sorted(tags))}]" if tags else ""
+                print(f"  {col}: {col_type.value}{tag_str}")
+
+    def _compute_correlations(self, X_df: pd.DataFrame) -> None:
+        numeric_cols = X_df.select_dtypes(include=[np.number]).columns.tolist()
+        self.correlation_matrix_ = X_df[numeric_cols].corr(method='pearson')
+        self.spearman_matrix_ = X_df[numeric_cols].corr(method='spearman')
+        if self.verbose:
+            print("  Correlation matrices computed")
+
+    # --------------------------------------------------------------------- #
+    #  Phase 4b: low-rank coherence projection                               #
+    # --------------------------------------------------------------------- #
+    def _coherence_projection(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        """Blend imputed values toward a low-rank SVD reconstruction.
+
+        High-uncertainty cells are pulled more toward the SVD estimate (which
+        preserves cross-column structure), while confident cells keep their
+        per-cell model-bank predictions.  Observed cells are never touched.
+        """
+        if self._svd_rank is None or self.coherence_lambda <= 0:
+            return
+
+        numeric_cols = X_df.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = {c for c, t in self.column_types_.items()
+                    if t == ColumnType.CATEGORICAL}
+        proj_cols = [c for c in numeric_cols if c not in cat_cols]
+        if len(proj_cols) < 3:
+            return
+
+        col_idx = {c: i for i, c in enumerate(proj_cols)}
+
+        # Standardize the completed matrix
+        X_mat = X_df[proj_cols].to_numpy(dtype=float)
+        col_means = X_mat.mean(axis=0)
+        col_sds = np.array([self._col_sd.get(c, 1.0) for c in proj_cols])
+        col_sds = np.where(col_sds < 1e-10, 1.0, col_sds)
+        X_std = (X_mat - col_means) / col_sds
+
+        # Rank-k SVD reconstruction
+        k = self._svd_rank
+        U, s, Vt = randomized_svd(X_std, n_components=k, random_state=self.seed)
+        X_lowrank_std = U @ np.diag(s) @ Vt
+        X_lowrank = X_lowrank_std * col_sds + col_means
+
+        # Per-column SVD residual variance (on observed cells)
+        sigma2_svd_col = {}
+        for c in proj_cols:
+            j = col_idx[c]
+            if c in self.original_missing_:
+                obs_mask = ~self.original_missing_[c].values
+            else:
+                obs_mask = np.ones(X_mat.shape[0], dtype=bool)
+            if obs_mask.sum() > 0:
+                resid = X_std[obs_mask, j] - X_lowrank_std[obs_mask, j]
+                sigma2_svd_col[c] = float(np.mean(resid ** 2)) * (col_sds[j] ** 2)
+            else:
+                sigma2_svd_col[c] = col_sds[j] ** 2
+
+        # Blend imputed cells toward low-rank estimate, weighted by uncertainty
+        lam = self.coherence_lambda
+        n_adjusted = 0
+        for c in cols_to_impute:
+            if c not in col_idx or c in cat_cols:
+                continue
+            j = col_idx[c]
+            miss_mask = self.original_missing_.get(c, pd.Series(False, index=X_df.index))
+            miss_idx = miss_mask[miss_mask].index
+            if len(miss_idx) == 0:
+                continue
+
+            sd2 = col_sds[j] ** 2
+            s2_svd = sigma2_svd_col.get(c, sd2)
+
+            sigma2_vals = self.sigma2_matrix_.loc[miss_idx, c].values
+            finite = np.isfinite(sigma2_vals) & (sigma2_vals > 0)
+            if not finite.any():
+                continue
+
+            active_idx = miss_idx[finite]
+            s2 = sigma2_vals[finite]
+            tau = s2 / max(sd2, 1e-10)
+            w = tau / (tau + lam)
+
+            row_positions = np.array([X_df.index.get_loc(idx) for idx in active_idx])
+            old_vals = X_df.loc[active_idx, c].values
+            svd_vals = X_lowrank[row_positions, j]
+
+            X_df.loc[active_idx, c] = (1.0 - w) * old_vals + w * svd_vals
+            self.sigma2_matrix_.loc[active_idx, c] = (
+                (1.0 - w) ** 2 * s2 + w ** 2 * s2_svd
+            )
+            n_adjusted += len(active_idx)
+
+        if self.verbose:
+            print(f"  Coherence projection: {n_adjusted} cells adjusted "
+                  f"(rank={k}, lambda={lam})")
+
+    def _compute_svd_factors(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        """Extract SVD row factors for downstream use — NO warm-start filling."""
+        numeric_cols = X_df.select_dtypes(include=[np.number]).columns.tolist()
+        if len(numeric_cols) < 3 or not cols_to_impute:
+            return
+
+        X_mat = X_df[numeric_cols].to_numpy(dtype=float, na_value=np.nan)
+        col_means = np.nanmean(X_mat, axis=0)
+        col_stds = np.nanstd(X_mat, axis=0)
+        col_stds[col_stds < 1e-10] = 1.0
+        X_std = (X_mat - col_means) / col_stds
+
+        rank_max = min(12, len(numeric_cols) // 3, X_mat.shape[0] // 5)
+        rank_candidates = [r for r in [4, 6, 8, 10, 12] if 2 <= r <= rank_max]
+        if not rank_candidates:
+            rank_candidates = [max(2, rank_max)]
+
+        if len(rank_candidates) > 1:
+            observed_mask = ~np.isnan(X_std)
+            obs_rows, obs_cols_idx = np.where(observed_mask)
+            n_obs = len(obs_rows)
+            rng = np.random.RandomState(self.seed)
+            holdout_idx = rng.choice(n_obs, size=max(1, n_obs // 10), replace=False)
+            holdout_rows = obs_rows[holdout_idx]
+            holdout_cols = obs_cols_idx[holdout_idx]
+            holdout_vals = X_std[holdout_rows, holdout_cols]
+            X_masked = X_std.copy()
+            X_masked[holdout_rows, holdout_cols] = np.nan
+            best_rank, best_err = rank_candidates[0], float('inf')
+            for r in rank_candidates:
+                Z_trial = _iterative_svd_impute(X_masked, rank=r)
+                recon = Z_trial[holdout_rows, holdout_cols]
+                err = float(np.sqrt(np.mean((recon - holdout_vals) ** 2)))
+                if err < best_err:
+                    best_err = err
+                    best_rank = r
+            svd_rank = best_rank
+        else:
+            svd_rank = rank_candidates[0]
+
+        Z_std = _iterative_svd_impute(X_std, rank=svd_rank)
+        U, s, Vt = randomized_svd(Z_std, n_components=svd_rank, random_state=self.seed)
+        self.svd_row_factors_ = pd.DataFrame(
+            U * s[np.newaxis, :],
+            index=X_df.index,
+            columns=[f"_svd_f{i+1}" for i in range(svd_rank)],
+        )
+        self._svd_rank = svd_rank
+        if self.verbose:
+            print(f"  SVD factors: rank={svd_rank}")
+
+    # --------------------------------------------------------------------- #
+    #  Phase 1: per-column candidate rankings                                #
+    # --------------------------------------------------------------------- #
+    def _build_candidate_rankings(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        """For each target column, rank candidate predictors by |corr| * sqrt(n_common)."""
+        for col in cols_to_impute:
+            target_obs = X_df[col].notna()
+            candidates = []
+            for other in X_df.columns:
+                if other == col:
+                    continue
+                common = target_obs & X_df[other].notna()
+                n_common = int(common.sum())
+                if n_common < self.min_support:
+                    continue
+                # Use precomputed Pearson correlation
+                if (self.correlation_matrix_ is not None and
+                        col in self.correlation_matrix_.index and
+                        other in self.correlation_matrix_.columns):
+                    corr = self.correlation_matrix_.loc[col, other]
+                else:
+                    try:
+                        corr, _ = pearsonr(
+                            X_df.loc[common, col].to_numpy(dtype=float),
+                            X_df.loc[common, other].to_numpy(dtype=float),
+                        )
+                    except Exception:
+                        continue
+                if pd.isna(corr):
+                    continue
+                score = abs(corr) * np.sqrt(n_common)
+                candidates.append((other, score, n_common))
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            self._candidate_rankings[col] = candidates[:self.selector_k_max]
+        if self.verbose:
+            print(f"  Candidate rankings built for {len(cols_to_impute)} columns")
+
+    # --------------------------------------------------------------------- #
+    #  Phase 2: pass 1 — observed-only imputation                            #
+    # --------------------------------------------------------------------- #
+    def _select_cell_predictors(
+        self,
+        available_cols: set,
+        col: str,
+        extra_cols: Optional[set] = None,
+    ) -> List[str]:
+        """Greedy predictor selection for a single cell from available columns."""
+        candidates = self._candidate_rankings.get(col, [])
+        pool = set(available_cols)
+        if extra_cols:
+            pool = pool | extra_cols
+        pool.discard(col)
+
+        filtered = [(n, s, nc) for n, s, nc in candidates if n in pool]
+        if not filtered:
+            return []
+
+        # Adaptive k: conservative to avoid insufficient joint support.
+        # With missingness p_miss per column, joint support for k predictors
+        # + target ≈ n_common * (1-p_miss)^(k-1).  We need this above min_support.
+        approx_support = filtered[0][2] if filtered else 0
+        if approx_support < 15:
+            k_max = 1
+        elif approx_support < 30:
+            k_max = 2
+        elif approx_support < 50:
+            k_max = 3
+        elif approx_support < 80:
+            k_max = 5
+        else:
+            k_max = 8
+
+        selected: List[str] = []
+        for name, score, n_common in filtered:
+            if len(selected) >= k_max:
+                break
+            needed_support = max(self.min_support, 5 * (len(selected) + 2))
+            if n_common < needed_support:
+                continue
+            # Redundancy check against already-selected
+            redundant = False
+            if self.correlation_matrix_ is not None:
+                for sel in selected:
+                    if (sel in self.correlation_matrix_.index and
+                            name in self.correlation_matrix_.columns):
+                        r = self.correlation_matrix_.loc[sel, name]
+                        if not pd.isna(r) and abs(r) > self.redundancy_threshold:
+                            redundant = True
+                            break
+            if not redundant:
+                selected.append(name)
+        return selected
+
+    def _get_best_single_predictor(self, col: str, available: set) -> Optional[str]:
+        """Return the highest-ranked single predictor that is available."""
+        for name, score, n_common in self._candidate_rankings.get(col, []):
+            if name in available and n_common >= self.min_support:
+                return name
+        return None
+
+    # ---- hat-matrix LOO σ² ----
+    @staticmethod
+    def _hat_matrix_loo(model, X_scaled: np.ndarray, y: np.ndarray):
+        """Compute LOO σ² analytically via hat matrix for BayesianRidge.
+
+        Returns (sigma2, ill_conditioned).  ill_conditioned=True means
+        the predictor set should be rejected.
+        """
+        y_hat = model.predict(X_scaled)
+        n, p = X_scaled.shape
+        # BayesianRidge stores regularisation precision as alpha_
+        reg = getattr(model, 'alpha_', 1e-3)
+        XtX = X_scaled.T @ X_scaled
+        try:
+            XtX_reg_inv = np.linalg.solve(
+                XtX + reg * np.eye(p), np.eye(p)
+            )
+        except np.linalg.LinAlgError:
+            resid = y - y_hat
+            return float(np.mean(resid ** 2)), False
+
+        H = X_scaled @ XtX_reg_inv @ X_scaled.T
+        h_ii = np.diag(H)
+        if np.max(h_ii) > 0.95:
+            return float('inf'), True  # ill-conditioned
+        h_ii = np.clip(h_ii, 0, 0.99)
+        e_loo = (y - y_hat) / (1.0 - h_ii)
+        return float(np.mean(e_loo ** 2)), False
+
+    # ---- model fitting ----
+    def _fit_ridge(self, pred_list, X_train, y_train):
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_train)
+        model = BayesianRidge(compute_score=False, fit_intercept=True)
+        model.fit(X_scaled, y_train)
+        sigma2, ill = self._hat_matrix_loo(model, X_scaled, y_train)
+        if ill:
+            return None
+        coefficients = model.coef_ / scaler.scale_
+        return FittedCellModel(
+            predictor_names=pred_list, sigma2_loo=sigma2,
+            n_train=len(y_train), model_kind='ridge',
+            _model=model, _scaler=scaler, _coefficients=coefficients,
+        )
+
+    def _fit_bounded_ridge(self, pred_list, X_train, y_train, bounds):
+        lower, upper = float(bounds[0]), float(bounds[1])
+        n_obs = len(y_train)
+        eps = max(1e-3, 0.5 / (n_obs + 1))
+        range_ = upper - lower + 2 * eps
+        p = (y_train - lower + eps) / range_
+        p = np.clip(p, 1e-6, 1 - 1e-6)
+        y_logit = np.log(p / (1 - p))
+        if np.std(y_logit) < 1e-8:
+            return None
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_train)
+        model = BayesianRidge(compute_score=False, fit_intercept=True)
+        model.fit(X_scaled, y_logit)
+        sigma2, ill = self._hat_matrix_loo(model, X_scaled, y_logit)
+        if ill:
+            return None
+        coefficients = model.coef_ / scaler.scale_
+        return FittedCellModel(
+            predictor_names=pred_list, sigma2_loo=sigma2,
+            n_train=len(y_train), model_kind='bounded_ridge',
+            _model=model, _scaler=scaler, _coefficients=coefficients,
+            _lower=lower, _upper=upper, _logit_eps=eps, _logit_range=range_,
+        )
+
+    def _fit_hurdle(self, pred_list, X_train, y_train, floor_info):
+        threshold = floor_info.get('threshold', 0.0)
+        floor_mean = floor_info.get('floor_mean', 0.0)
+        is_capable = (y_train > threshold).astype(int)
+        n_cap, n_floor = int(is_capable.sum()), len(is_capable) - int(is_capable.sum())
+        if n_cap < 5 or n_floor < 3:
+            return self._fit_ridge(pred_list, X_train, y_train)
+
+        gate_scaler = StandardScaler()
+        X_gate = gate_scaler.fit_transform(X_train)
+        gate = LogisticRegression(random_state=self.seed, max_iter=1000, class_weight='balanced')
+        try:
+            gate.fit(X_gate, is_capable)
+        except Exception:
+            return self._fit_ridge(pred_list, X_train, y_train)
+
+        cap_mask = y_train > threshold
+        X_cap = X_train[cap_mask]
+        y_cap = y_train[cap_mask]
+        if len(y_cap) < 5:
+            return self._fit_ridge(pred_list, X_train, y_train)
+
+        val_scaler = StandardScaler()
+        X_val = val_scaler.fit_transform(X_cap)
+        val_model = BayesianRidge(compute_score=False, fit_intercept=True)
+        val_model.fit(X_val, y_cap)
+
+        # Update floor_mean from data
+        floor_vals = y_train[~cap_mask]
+        if len(floor_vals) > 0:
+            floor_mean = float(floor_vals.mean())
+
+        # σ² via residual with DoF correction
+        p_proba = gate.predict_proba(X_gate)
+        p_cap = p_proba[:, 1] if gate.classes_.shape[0] == 2 else np.full(len(y_train), 0.5)
+        mu_cap = val_model.predict(val_scaler.transform(X_train))
+        y_hat = p_cap * mu_cap + (1.0 - p_cap) * floor_mean
+        resid = y_train - y_hat
+        dof = max(1, len(y_train) - len(pred_list) - 2)
+        sigma2 = float(np.sum(resid ** 2) / dof)
+
+        return FittedCellModel(
+            predictor_names=pred_list, sigma2_loo=sigma2,
+            n_train=len(y_train), model_kind='hurdle',
+            _model=val_model, _scaler=val_scaler, _coefficients=None,
+            _gate_model=gate, _gate_scaler=gate_scaler,
+            _threshold=threshold, _floor_mean=floor_mean,
+        )
+
+    def _fit_categorical(self, pred_list, X_train, y_train):
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_train)
+        n_classes = len(np.unique(y_train))
+        if n_classes <= 2:
+            model = LogisticRegression(random_state=self.seed, max_iter=1000)
+        else:
+            model = RandomForestClassifier(
+                n_estimators=100, max_depth=6, min_samples_leaf=2,
+                random_state=self.seed, n_jobs=1,
+            )
+        try:
+            model.fit(X_scaled, y_train)
+        except Exception:
+            return None
+        # σ² = classification entropy (proxy)
+        probas = model.predict_proba(X_scaled)
+        ent = entropy(probas.T)
+        sigma2 = float(np.mean(ent)) if len(ent) else 1.0
+        return FittedCellModel(
+            predictor_names=pred_list, sigma2_loo=sigma2,
+            n_train=len(y_train), model_kind='categorical',
+            _model=model, _scaler=scaler,
+        )
+
+    def _fit_or_lookup(
+        self, col: str, pred_key: frozenset, X_df: pd.DataFrame,
+    ) -> Optional[FittedCellModel]:
+        cache_key = (col, pred_key)
+        if cache_key in self.model_bank_:
+            return self.model_bank_[cache_key]
+
+        pred_list = sorted(pred_key)
+        # Training data: rows where target AND all predictors are observed
+        mask = X_df[col].notna()
+        for p in pred_list:
+            mask = mask & X_df[p].notna()
+        train_idx = mask[mask].index
+        n_train = len(train_idx)
+        min_needed = max(self.min_support, 5 * (len(pred_list) + 1))
+        if n_train < min_needed:
+            self.model_bank_[cache_key] = None
+            return None
+
+        X_train = X_df.loc[train_idx, pred_list].to_numpy(dtype=float)
+        y_train = X_df.loc[train_idx, col].to_numpy(dtype=float)
+
+        col_type = self.column_types_.get(col, ColumnType.LINEAR)
+        tags = self.column_metadata_.get(col, {}).get('tags', set())
+
+        if col_type == ColumnType.CATEGORICAL:
+            fitted = self._fit_categorical(pred_list, X_train, y_train)
+        elif ColumnTags.FLOOR_INFLATED in tags:
+            floor_info = self.column_metadata_.get(col, {}).get('floor_info', {})
+            fitted = self._fit_hurdle(pred_list, X_train, y_train, floor_info)
+        elif ColumnTags.BOUNDED in tags:
+            bounds = self.column_metadata_.get(col, {}).get('bounds', (0.0, 100.0))
+            fitted = self._fit_bounded_ridge(pred_list, X_train, y_train, bounds)
+        else:
+            fitted = self._fit_ridge(pred_list, X_train, y_train)
+
+        self.model_bank_[cache_key] = fitted
+        return fitted
+
+    # ---- prediction ----
+    def _predict_cell(self, fitted: FittedCellModel, X_row: np.ndarray) -> float:
+        X_2d = X_row.reshape(1, -1)
+        if fitted.model_kind == 'hurdle':
+            X_gate = fitted._gate_scaler.transform(X_2d)
+            proba = fitted._gate_model.predict_proba(X_gate)
+            p_cap = float(proba[0, 1]) if fitted._gate_model.classes_.shape[0] == 2 else 0.5
+            X_val = fitted._scaler.transform(X_2d)
+            mu_cap = float(fitted._model.predict(X_val)[0])
+            return p_cap * mu_cap + (1.0 - p_cap) * fitted._floor_mean
+
+        X_scaled = fitted._scaler.transform(X_2d)
+
+        if fitted.model_kind == 'categorical':
+            return float(fitted._model.predict(X_scaled)[0])
+
+        y_pred = float(fitted._model.predict(X_scaled)[0])
+
+        if fitted.model_kind == 'bounded_ridge':
+            p = 1.0 / (1.0 + np.exp(-y_pred))
+            y_pred = p * fitted._logit_range + fitted._lower - fitted._logit_eps
+
+        return y_pred
+
+    # ---- pass 1 ----
+    def _pass1_observed_only(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        if self.verbose:
+            print("Pass 1: observed-only imputation")
+
+        # Precompute per-row observed column sets (fast numpy check)
+        obs_matrix = X_df.notna().values
+        col_names = list(X_df.columns)
+        col_to_pos = {c: i for i, c in enumerate(col_names)}
+        idx_list = list(X_df.index)
+        idx_to_pos = {idx: i for i, idx in enumerate(idx_list)}
+
+        total_writes = 0
+        for col in cols_to_impute:
+            missing_mask = self.original_missing_[col]
+            missing_indices = missing_mask[missing_mask].index.tolist()
+            if not missing_indices:
+                continue
+
+            col_pos = col_to_pos[col]
+
+            # Group rows by predictor subset
+            groups: Dict[frozenset, List] = {}
+
+            for row_idx in missing_indices:
+                row_pos = idx_to_pos[row_idx]
+                observed = {col_names[j] for j in range(len(col_names))
+                            if obs_matrix[row_pos, j] and j != col_pos}
+
+                predictors = self._select_cell_predictors(observed, col)
+                if not predictors:
+                    best = self._get_best_single_predictor(col, observed)
+                    if best:
+                        predictors = [best]
+                    else:
+                        continue
+
+                key = frozenset(predictors)
+                groups.setdefault(key, []).append(row_idx)
+
+            # Fit and predict per group
+            for pred_key, row_indices in groups.items():
+                fitted = self._fit_or_lookup(col, pred_key, X_df)
+
+                # Single-proxy challenger (shared across group)
+                single_fitted = None
+                if len(pred_key) > 1 or fitted is None:
+                    all_available = set()
+                    for ri in row_indices:
+                        rp = idx_to_pos[ri]
+                        all_available |= {col_names[j] for j in range(len(col_names))
+                                          if obs_matrix[rp, j] and j != col_pos}
+                    best_single = self._get_best_single_predictor(col, all_available)
+                    if best_single:
+                        single_key = frozenset([best_single])
+                        single_fitted = self._fit_or_lookup(col, single_key, X_df)
+
+                # If multi-predictor failed, use single proxy as primary
+                if fitted is None:
+                    if single_fitted is None:
+                        continue
+                    fitted = single_fitted
+
+                for row_idx in row_indices:
+                    use_fitted = fitted
+
+                    # Check single-proxy challenger (only when multi succeeded)
+                    if (single_fitted is not None and single_fitted is not fitted and
+                            single_fitted.sigma2_loo < fitted.sigma2_loo):
+                        single_name = single_fitted.predictor_names[0]
+                        sp = col_to_pos.get(single_name)
+                        rp = idx_to_pos[row_idx]
+                        if sp is not None and obs_matrix[rp, sp]:
+                            use_fitted = single_fitted
+
+                    X_row = np.array([float(X_df.loc[row_idx, p])
+                                      for p in use_fitted.predictor_names])
+                    y_pred = self._predict_cell(use_fitted, X_row)
+
+                    X_df.loc[row_idx, col] = y_pred
+                    self.sigma2_matrix_.loc[row_idx, col] = use_fitted.sigma2_loo
+                    self.cell_predictors_[(row_idx, col)] = list(use_fitted.predictor_names)
+
+                    freq = self.predictor_freqs_.setdefault(col, {})
+                    for p in use_fitted.predictor_names:
+                        freq[p] = freq.get(p, 0) + 1
+
+                    self.logs_.append({
+                        'col': col, 'row': row_idx,
+                        'y_pred': float(y_pred),
+                        'h_blend': float(np.sqrt(max(0, use_fitted.sigma2_loo))),
+                        'pass_num': 1,
+                    })
+                    total_writes += 1
+
+        if self.verbose:
+            print(f"  Pass 1: {total_writes} cells written, "
+                  f"{len(self.model_bank_)} models cached")
+
+    # ---- pass 2: uncertainty-gated expansion ----
+    def _pass2_expansion(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        """One expansion pass using confident imputations as additional predictors."""
+        if self.verbose:
+            print("Pass 2: uncertainty-gated expansion")
+
+        # Snapshot pass-1 state (Jacobi-style: reads from snapshot, writes to X_df)
+        snapshot = X_df.copy()
+        sigma2_snap = self.sigma2_matrix_.copy()
+
+        obs_matrix_orig = pd.DataFrame(False, index=X_df.index, columns=X_df.columns)
+        for col in X_df.columns:
+            if col in self.original_missing_:
+                obs_matrix_orig[col] = ~self.original_missing_[col]
+            else:
+                obs_matrix_orig[col] = True
+
+        # Collect all imputed cells, sorted worst-first
+        imputed_cells = []
+        for col in cols_to_impute:
+            missing_mask = self.original_missing_[col]
+            for row_idx in missing_mask[missing_mask].index:
+                s2 = self.sigma2_matrix_.loc[row_idx, col]
+                if np.isfinite(s2) and s2 > 0:
+                    imputed_cells.append((row_idx, col, s2))
+        imputed_cells.sort(key=lambda x: x[2], reverse=True)
+
+        # Precompute confident imputed columns per row
+        confident_per_row: Dict[Any, set] = {}
+        for row_idx in X_df.index:
+            confident = set()
+            for col in cols_to_impute:
+                if not obs_matrix_orig.loc[row_idx, col]:
+                    s2 = sigma2_snap.loc[row_idx, col]
+                    sd_col = self._col_sd.get(col, 1.0)
+                    if sd_col > 0 and np.isfinite(s2):
+                        if np.sqrt(s2) / sd_col < self.confidence_threshold:
+                            confident.add(col)
+            confident_per_row[row_idx] = confident
+
+        n_improved = 0
+        for row_idx, col, old_sigma2 in imputed_cells:
+            observed = set(c for c in X_df.columns
+                           if c != col and obs_matrix_orig.loc[row_idx, c])
+            confident = confident_per_row.get(row_idx, set()) - {col} - observed
+            if not confident:
+                continue
+
+            # Pick best confident imputed column (highest relevance to target)
+            best_extra = None
+            best_score = -1.0
+            for cc in confident:
+                for name, score, _ in self._candidate_rankings.get(col, []):
+                    if name == cc and score > best_score:
+                        best_score = score
+                        best_extra = cc
+                        break
+            if best_extra is None:
+                continue
+
+            new_predictors = self._select_cell_predictors(
+                observed, col, extra_cols={best_extra}
+            )
+            if not new_predictors:
+                continue
+
+            old_predictors = self.cell_predictors_.get((row_idx, col), [])
+            if set(new_predictors) == set(old_predictors):
+                continue
+
+            new_key = frozenset(new_predictors)
+            new_fitted = self._fit_or_lookup(col, new_key, snapshot)
+            if new_fitted is None:
+                continue
+
+            # Compute σ²_total with input uncertainty propagation
+            sigma2_model = new_fitted.sigma2_loo
+            sigma2_input = 0.0
+            if new_fitted._coefficients is not None and best_extra in new_fitted.predictor_names:
+                try:
+                    coef_idx = new_fitted.predictor_names.index(best_extra)
+                    beta = new_fitted._coefficients[coef_idx]
+                    s2_in = sigma2_snap.loc[row_idx, best_extra]
+                    if np.isfinite(s2_in):
+                        sigma2_input = beta ** 2 * s2_in
+                except (ValueError, IndexError):
+                    pass
+            sigma2_total = sigma2_model + sigma2_input
+
+            if sigma2_total >= old_sigma2 * 0.95:
+                continue
+
+            # Predict from snapshot (Jacobi-style)
+            X_row = np.array([float(snapshot.loc[row_idx, p])
+                              for p in new_fitted.predictor_names])
+            y_pred = self._predict_cell(new_fitted, X_row)
+
+            X_df.loc[row_idx, col] = y_pred
+            self.sigma2_matrix_.loc[row_idx, col] = sigma2_total
+            self.cell_predictors_[(row_idx, col)] = list(new_fitted.predictor_names)
+
+            freq = self.predictor_freqs_.setdefault(col, {})
+            for p in new_fitted.predictor_names:
+                freq[p] = freq.get(p, 0) + 1
+
+            self.logs_.append({
+                'col': col, 'row': row_idx,
+                'y_pred': float(y_pred),
+                'h_blend': float(np.sqrt(max(0, sigma2_total))),
+                'pass_num': 2,
+            })
+            n_improved += 1
+
+        if self.verbose:
+            print(f"  Pass 2: {n_improved} cells improved, "
+                  f"{len(self.model_bank_)} total cached models")
+
+    # --------------------------------------------------------------------- #
+    #  Phase 5: trajectory features and representative models                #
+    # --------------------------------------------------------------------- #
+    def _compute_trajectory_features(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        """Compute σ²-based trajectory features: mean/max normalized σ per row."""
+        traj_mean = pd.Series(0.0, index=X_df.index, dtype=float)
+        traj_max = pd.Series(0.0, index=X_df.index, dtype=float)
+        n_imputed = pd.Series(0.0, index=X_df.index, dtype=float)
+
+        for col in cols_to_impute:
+            missing_mask = self.original_missing_.get(col, pd.Series(False, index=X_df.index))
+            if not missing_mask.any():
+                continue
+            sd = self._col_sd.get(col, 1.0)
+            if sd < 1e-10:
+                sd = 1.0
+            for row_idx in missing_mask[missing_mask].index:
+                s2 = self.sigma2_matrix_.loc[row_idx, col]
+                if np.isfinite(s2):
+                    normalized = np.sqrt(max(0, s2)) / sd
+                else:
+                    normalized = 1.0
+                n_imputed.loc[row_idx] += 1
+                traj_mean.loc[row_idx] += normalized
+                if normalized > traj_max.loc[row_idx]:
+                    traj_max.loc[row_idx] = normalized
+
+        n_imputed_safe = n_imputed.clip(lower=1)
+        traj_mean = traj_mean / n_imputed_safe
+
+        self.trajectory_features_ = pd.DataFrame({
+            '_traj_mean_delta': traj_mean,
+            '_traj_max_delta': traj_max,
+            '_traj_n_imputed': n_imputed,
+        }, index=X_df.index)
+
+    def _build_representative_models(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        """Build one representative BaseColumnModel per column for API compat."""
+        for col in cols_to_impute:
+            freq = self.predictor_freqs_.get(col, {})
+            if not freq:
+                continue
+            sorted_preds = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+            k = min(8, len(sorted_preds))
+            top_preds = [p for p, _ in sorted_preds[:k]]
+            self.predictors_map_[col] = top_preds
+
+            col_type = self.column_types_.get(col, ColumnType.LINEAR)
+            metadata = dict(self.column_metadata_.get(col, {}))
+            if col_type == ColumnType.CATEGORICAL:
+                metadata['n_classes'] = int(X_df[col].dropna().nunique())
+            metadata['n_obs'] = int(X_df[col].notna().sum())
+            try:
+                model = ModelFactory.create_model(
+                    col_type, top_preds, self.alpha, self.seed, metadata,
+                    correlation_matrix=self.correlation_matrix_,
+                )
+                model.fit(X_df, X_df[col])
+                self.models_[col] = model
+            except Exception:
+                pass
+
+    # --------------------------------------------------------------------- #
+    #  API-compatible methods                                                #
+    # --------------------------------------------------------------------- #
+    def get_imputation_importance(self) -> pd.DataFrame:
+        """Extract per-column feature importances (delegates to representative models)."""
+        records = []
+        for col, model in self.models_.items():
+            predictors = self.predictors_map_.get(col, [])
+            if not predictors:
+                continue
+            importances = SpecializedColumnImputer._extract_model_importance(model, predictors)
+            model_type = type(model).__name__
+            total = sum(importances.values())
+            if total < 1e-12:
+                n = len(predictors)
+                importances = {p: 1.0 / n for p in predictors}
+                total = 1.0
+            sorted_preds = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+            for rank, (pred, imp) in enumerate(sorted_preds, 1):
+                records.append({
+                    'target_col': col,
+                    'predictor_col': pred,
+                    'importance': imp / total,
+                    'model_type': model_type,
+                    'rank': rank,
+                })
+        return pd.DataFrame(records)
+
+    def evaluate_quality_oof(
+        self,
+        X_df: pd.DataFrame,
+        n_splits: int = 5,
+        n_rounds: int = 1,
+        frac: float = 0.2,
+        random_state: Optional[int] = None,
+        knn_bins: Tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0, np.inf),
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """OOF mask-eval that emulates per-cell predictor selection.
+
+        For each fold, held-out rows get per-cell predictor selection and
+        model fitting on the training fold only.
+        """
+        if not self.models_:
+            raise RuntimeError("Call fit_transform before evaluate_quality_oof.")
+
+        orig_X_df = X_df
+        if self.log_transforms_:
+            X_df = X_df.copy()
+            for col, info in self.log_transforms_.items():
+                if col in X_df.columns:
+                    X_df[col] = np.log1p(X_df[col] + info['shift'])
+
+        rng = np.random.default_rng(self.seed if random_state is None else random_state)
+        records: List[Dict[str, Any]] = []
+
+        for col in self.models_.keys():
+            candidates = self._candidate_rankings.get(col, [])
+            if not candidates:
+                continue
+
+            obs_mask = ~X_df[col].isna().values
+            idx_obs = np.where(obs_mask)[0]
+            if idx_obs.size < max(5, n_splits * 2):
+                continue
+
+            col_type = self.column_types_.get(col)
+            metadata = dict(self.column_metadata_.get(col, {}))
+            if col_type == ColumnType.CATEGORICAL:
+                metadata['n_classes'] = int(X_df[col].dropna().nunique())
+            metadata['n_obs'] = int(X_df[col].notna().sum())
+
+            kf = KFold(
+                n_splits=n_splits, shuffle=True,
+                random_state=self.seed if random_state is None else random_state,
+            )
+
+            for tr_pos, va_pos in kf.split(idx_obs):
+                tr_idx = idx_obs[tr_pos]
+                va_idx = idx_obs[va_pos]
+                if tr_idx.size < 3 or va_idx.size == 0:
+                    continue
+
+                m = max(1, int(frac * len(va_idx)))
+                m = min(m, len(va_idx))
+                probe = rng.choice(va_idx, size=m, replace=False)
+
+                fold_bank: Dict[frozenset, Optional[FittedCellModel]] = {}
+
+                for ridx in probe:
+                    row = X_df.iloc[ridx]
+                    observed = set(c for c in X_df.columns
+                                   if c != col and pd.notna(row[c]))
+                    predictors = self._select_cell_predictors(observed, col)
+                    if not predictors:
+                        best = self._get_best_single_predictor(col, observed)
+                        if best:
+                            predictors = [best]
+                        else:
+                            continue
+                    pred_key = frozenset(predictors)
+
+                    if pred_key not in fold_bank:
+                        pred_list = sorted(pred_key)
+                        mask = X_df[col].notna()
+                        for p_name in pred_list:
+                            mask = mask & X_df[p_name].notna()
+                        train_rows = set(X_df.index[tr_idx])
+                        valid = mask & X_df.index.isin(train_rows)
+                        tidx = valid[valid].index
+                        min_needed = max(self.min_support, 5 * (len(pred_list) + 1))
+                        if len(tidx) < min_needed:
+                            fold_bank[pred_key] = None
+                            continue
+                        X_tr = X_df.loc[tidx, pred_list].to_numpy(dtype=float)
+                        y_tr = X_df.loc[tidx, col].to_numpy(dtype=float)
+                        tags = metadata.get('tags', set())
+                        if col_type == ColumnType.CATEGORICAL:
+                            fitted = self._fit_categorical(pred_list, X_tr, y_tr)
+                        elif ColumnTags.FLOOR_INFLATED in tags:
+                            fi = metadata.get('floor_info', {})
+                            fitted = self._fit_hurdle(pred_list, X_tr, y_tr, fi)
+                        elif ColumnTags.BOUNDED in tags:
+                            bounds = metadata.get('bounds', (0.0, 100.0))
+                            fitted = self._fit_bounded_ridge(pred_list, X_tr, y_tr, bounds)
+                        else:
+                            fitted = self._fit_ridge(pred_list, X_tr, y_tr)
+                        fold_bank[pred_key] = fitted
+
+                    fitted = fold_bank[pred_key]
+                    if fitted is None:
+                        continue
+
+                    X_row = np.array([float(X_df.iloc[ridx][p_name])
+                                      for p_name in fitted.predictor_names])
+                    try:
+                        y_pred = self._predict_cell(fitted, X_row)
+                    except Exception:
+                        continue
+                    h_blend = float(np.sqrt(max(0, fitted.sigma2_loo)))
+
+                    y_true = float(X_df.iloc[ridx][col])
+                    abs_err = abs(y_true - y_pred)
+                    within = float(abs_err <= h_blend) if h_blend > 0 else 0.0
+
+                    records.append({
+                        "col": col, "row": int(ridx),
+                        "y_true": y_true, "y_pred": y_pred,
+                        "abs_err": float(abs_err), "within": within,
+                        "h_blend": h_blend, "log_knn_ratio": 0.0,
+                    })
+
+        # Inverse-transform for log-transformed columns
+        if self.log_transforms_ and records:
+            for rec in records:
+                if rec['col'] in self.log_transforms_:
+                    info = self.log_transforms_[rec['col']]
+                    rec['y_true'] = float(np.expm1(rec['y_true'])) - info['shift']
+                    rec['y_pred'] = float(np.expm1(rec['y_pred'])) - info['shift']
+                    rec['abs_err'] = abs(rec['y_true'] - rec['y_pred'])
+
+        per_cell = pd.DataFrame.from_records(records)
+        if per_cell.empty:
+            if self.verbose:
+                print("Warning: evaluate_quality_oof produced no records")
+            return per_cell, pd.DataFrame(), pd.DataFrame()
+
+        def _rmse(x: pd.Series) -> float:
+            return float(np.sqrt(np.mean(np.square(x))))
+
+        per_col = (
+            per_cell.groupby("col")
+            .agg(
+                n=("row", "count"),
+                mae=("abs_err", "mean"),
+                rmse=("abs_err", _rmse),
+                coverage=("within", "mean"),
+                med_h=("h_blend", "median"),
+                med_log_knn=("log_knn_ratio", "median"),
+            )
+            .reset_index()
+        )
+        sd_map = {c: float(np.nanstd(orig_X_df[c].to_numpy(dtype=float, na_value=np.nan)))
+                   for c in per_col["col"]}
+        per_col["sd_y"] = per_col["col"].map(sd_map)
+        per_col["rmse_over_sd"] = per_col["rmse"] / per_col["sd_y"].astype(float).clip(lower=1e-8)
+
+        bins = np.array(knn_bins, dtype=float)
+        labels = [f"[{bins[i]}, {bins[i+1]})" for i in range(len(bins) - 1)]
+        cut = pd.cut(
+            np.expm1(per_cell["log_knn_ratio"]),
+            bins=bins, labels=labels, include_lowest=True, right=False,
+        )
+        tmp_eval = per_cell.assign(knn_bin=cut)
+        by_bin = (
+            tmp_eval.groupby("knn_bin", observed=True)
+            .agg(n=("row", "count"), mae=("abs_err", "mean"),
+                 rmse=("abs_err", _rmse), coverage=("within", "mean"))
+            .reset_index()
+        )
+        sd_by_bin = tmp_eval.groupby("knn_bin", observed=True)["y_true"].std(ddof=0)
+        by_bin["sd_y"] = by_bin["knn_bin"].map(sd_by_bin).astype(float)
+        by_bin["rmse_over_sd"] = by_bin["rmse"] / by_bin["sd_y"].astype(float).clip(lower=1e-8)
+
+        if self.verbose:
+            print(f"evaluate_quality_oof: {len(per_cell)} cells across {len(per_col)} columns")
 
         return per_cell, per_col, by_bin
