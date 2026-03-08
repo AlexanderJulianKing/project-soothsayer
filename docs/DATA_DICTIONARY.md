@@ -527,8 +527,8 @@ Complete imputed benchmark matrix.
 | `{Benchmark}_uncertainty` | float | Uncertainty estimate (half-width) |
 
 **Imputation Details:**
-- Uses Gated Iterative Imputation algorithm
-- Missing values filled iteratively, refining estimates each pass
+- **SpecializedColumnImputer** (default): SVD warm-start, one model per column, iterative 14-pass refinement
+- **ModelBankImputer** (`--imputer_type model_bank`): Per-cell predictor selection, cached model bank keyed by (column, predictor_subset), per-cell σ² tracking via analytical hat-matrix LOO, low-rank coherence projection
 - Uncertainty quantified via conformal-style calibration
 
 ### predictions_best_model.csv

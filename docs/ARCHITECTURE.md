@@ -4,7 +4,7 @@
 
 This pipeline aggregates benchmark data from 13+ sources, performs statistical transformations, and uses advanced imputation techniques to predict missing benchmark scores (particularly LMSYS/Arena ELO ratings) for large language models.
 
-The system is designed around a **per-column specialized imputation** architecture that auto-classifies columns by type (categorical, linear, nonlinear, bounded) and assigns appropriate models with native uncertainty quantification.
+The system supports two imputation architectures: the original **per-column specialized imputer** (`SpecializedColumnImputer`) that auto-classifies columns by type and assigns one model per column, and the newer **per-cell model-bank imputer** (`ModelBankImputer`) that selects the best predictor subset for each individual missing cell based on what that row actually has observed, with per-cell uncertainty tracking and low-rank coherence projection.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -41,11 +41,10 @@ The system is designed around a **per-column specialized imputation** architectu
 │                                                                              │
 │  Key Components:                                                             │
 │  • Column type classification (categorical, linear, nonlinear, bounded)     │
-│  • Specialized models per type (BayesianRidge, GP, LogisticRegression)      │
-│  • Dependency-aware ordering (easy columns first, organized into tiers)     │
-│  • Native model uncertainty (no learned gate)                               │
-│  • mRMR feature selection for GP models (Spearman correlation)              │
-│  • Per-column tolerance calibration via masked evaluation                   │
+│  • Two imputer backends: SpecializedColumnImputer, ModelBankImputer         │
+│  • ModelBankImputer: per-cell predictor selection + σ² tracking             │
+│  • SpecializedColumnImputer: SVD warm-start + per-column models             │
+│  • Low-rank coherence projection (ModelBankImputer)                         │
 │  • ALT target imputation via OOF stacking                                   │
 │                                                                              │
 │  Output: imputed_full.csv, predictions_best_model.csv, quality reports      │
@@ -174,7 +173,7 @@ The system is designed around a **per-column specialized imputation** architectu
 1. **Feature selection** - Tree-based ranking (LightGBM/XGBoost) with 1-SE rule
 2. **GP-specific feature selection** - mRMR with Spearman correlation for GP models (v7.2)
 3. **Collinearity pruning** - Remove redundant features via R² threshold
-4. **Imputation orchestration** - Interface with SpecializedColumnImputer
+4. **Imputation orchestration** - Interface with SpecializedColumnImputer or ModelBankImputer (selected via `--imputer_type`)
 5. **Per-column tolerance calibration** - Calibrate uncertainty thresholds via masked evaluation (v7.2)
 6. **Periodic recalibration** - Optionally recalibrate tolerances every N passes (v7.2)
 7. **ALT target handling** - Out-of-fold stacking for alternative targets
@@ -246,6 +245,37 @@ Instead of filling missing predictor values with median (causing regression to m
 2. Weights those percentiles by R² correlation with the missing column
 3. Fills missing values at the weighted-average percentile
 This preserves the "performance tier" of a model across benchmarks.
+
+### 1b. Per-Cell Model-Bank Imputation (ModelBankImputer)
+
+An alternative imputation architecture selected via `--imputer_type model_bank`. Instead of one model per column, it builds a **model bank** of cached models keyed by `(target_col, frozenset(predictor_subset))` and selects the best model for each individual missing cell.
+
+**Key differences from SpecializedColumnImputer:**
+
+| Aspect | SpecializedColumnImputer | ModelBankImputer |
+|--------|--------------------------|------------------|
+| Predictor selection | One fixed set per column | Per-cell, based on row's observed values |
+| Missing predictors | SVD warm-start fills all cells upfront | Only uses observed (or confident) predictors |
+| Iteration | 14-pass tier-based refinement | Pass 1 (observed-only) + Pass 2 (expansion) |
+| Uncertainty | Per-column tolerance thresholds | Per-cell σ² via analytical hat-matrix LOO |
+| Trajectory features | SVD divergence | σ²-based (mean_delta, max_delta, n_imputed) |
+
+**Algorithm:**
+
+1. **Phase 0 - Preprocessing:** Log transforms, column classification, correlation matrices, SVD factor extraction (for row features only, no warm-start filling)
+2. **Phase 1 - Candidate Rankings:** For each target column, rank predictors by `|corr| × sqrt(n_common_rows)` with redundancy filtering (skip predictor if `|r| > 0.85` with already-selected ones)
+3. **Phase 2 - Pass 1 (observed-only):** For each missing cell, select the best predictor subset from columns observed in that row. Fit BayesianRidge (cached by predictor subset). Single-proxy challenger: if 1-predictor model has lower LOO σ² than multi-predictor, use the simpler model. Adaptive k: `k_max` scales with training support (k=1 for n<15, up to k=8 for n>80)
+4. **Phase 3 - Pass 2 (expansion):** Revisit cells with high σ². Allow at most one confidently-imputed value (σ/sd < threshold) as an additional predictor. Accept only if σ²_new < 0.95 × σ²_old. Jacobi-style frozen inputs prevent oscillation
+5. **Phase 4 - Fallback:** Remaining cells filled with column median
+6. **Phase 4b - Coherence Projection:** SVD of the completed matrix at the same rank used for factor extraction. Blend each imputed cell toward the low-rank estimate with shrinkage weight `w = τ/(τ + λ)` where `τ = σ²_cell/sd²_col`. High-uncertainty cells are pulled more toward the coherent SVD; confident cells keep their model-bank value. Default `λ = 1.0`
+7. **Phase 5 - Post-processing:** Inverse log transforms, σ²-based trajectory features, representative models for API compatibility
+
+**Coherence Projection Rationale:** Per-cell imputation produces individually accurate values but they may be inconsistent across columns within a row (a "Frankenstein" profile). The low-rank projection restores cross-column coherence by blending toward the SVD estimate, weighted by uncertainty. This recovered ~60% of the downstream RMSE gap vs the baseline imputer in testing.
+
+**CLI flags:**
+- `--imputer_type model_bank` — select ModelBankImputer
+- `--confidence_threshold 0.4` — σ/sd threshold for pass 2 expansion
+- `--coherence_lambda 1.0` — shrinkage strength (higher = less SVD pulling, 0 = disable)
 
 ### 2. Per-Column Feature Selection
 
@@ -355,6 +385,9 @@ Optionally recalibrate tolerances every N imputation passes:
 | `--calibration_n_rounds` | 3 | Monte Carlo rounds for calibration |
 | `--calibration_holdout_frac` | 0.2 | Fraction of known values to hold out |
 | `--recalibrate_every_n_passes` | 1 | Recalibrate every N passes (0 = only at start) |
+| `--imputer_type` | specialized | Imputer backend: `specialized` or `model_bank` |
+| `--confidence_threshold` | 0.4 | ModelBankImputer: σ/sd threshold for pass 2 |
+| `--coherence_lambda` | 1.0 | ModelBankImputer: coherence projection shrinkage |
 
 ### column_imputer.py Parameters
 
@@ -371,6 +404,15 @@ Optionally recalibrate tolerances every N imputation passes:
 | `calibration_target_rmse_ratio` | 0.69 | Target RMSE/std ratio |
 | `recalibrate_every_n_passes` | 1 | Recalibrate every N passes |
 | `n_jobs_oof` | -1 | Parallel jobs for OOF fitting |
+
+### ModelBankImputer Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `confidence_threshold` | 0.4 | Normalized σ/sd threshold for confident imputations in pass 2 |
+| `coherence_lambda` | 1.0 | Shrinkage strength for low-rank coherence projection (0 = disable) |
+| `redundancy_threshold` | 0.85 | Max |r| between selected predictors before filtering |
+| `min_support` | 10 | Minimum training rows for a model to be fitted |
 
 ### Model-Specific Parameters (SpecializedColumnImputer)
 
