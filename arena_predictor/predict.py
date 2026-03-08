@@ -117,7 +117,7 @@ from joblib import Parallel, delayed
 # ==============================================================================
 
 try:
-    from column_imputer import SpecializedColumnImputer
+    from column_imputer import SpecializedColumnImputer, ModelBankImputer
 except Exception as e:
     print("ERROR: Could not import column_imputer.py. Make sure the file is alongside this script.", file=sys.stderr)
     raise
@@ -1614,7 +1614,14 @@ def _fit_alt_model_on_rows(
             residuals = y_fit - stage1_train_pred
             # Select top-k raw features most correlated with residuals
             raw_train = X_no_alt_all.loc[train_known_mask, selected].values
-            res_corrs = np.array([abs(np.corrcoef(raw_train[:, j], residuals)[0, 1])
+            def _safe_corr(a, b):
+                if len(a) < 2 or np.std(a) == 0 or np.std(b) == 0:
+                    return 0.0
+                try:
+                    return abs(np.corrcoef(a, b)[0, 1])
+                except (AttributeError, ValueError):
+                    return 0.0
+            res_corrs = np.array([_safe_corr(raw_train[:, j], residuals)
                                   for j in range(raw_train.shape[1])])
             res_corrs = np.nan_to_num(res_corrs)
             top_k_res = min(7, len(res_corrs))
@@ -2100,13 +2107,18 @@ def hgb_quantile_preds(X_train, y_train, X, q_low=0.05, q_high=0.95, seed=SEED):
     std = (upper - lower) / (2.0 * 1.96)
     return mu, std, lower, upper
 
-def prob_above_threshold(mu: np.ndarray, std: np.ndarray, threshold: float) -> np.ndarray:
+def prob_above_threshold(mu: np.ndarray, std: np.ndarray, threshold: float,
+                         t_df: Optional[float] = None) -> np.ndarray:
+    """P(score > threshold) using t-distribution when t_df is provided, else Gaussian."""
+    scale = np.where(std <= 1e-12, 1e-12, std)
+    z = (threshold - mu) / scale
     try:
-        from scipy.stats import norm # type: ignore
-        z = (threshold - mu) / np.where(std <= 1e-12, 1e-12, std)
-        return 1.0 - norm.cdf(z) 
+        if t_df is not None and t_df > 0:
+            from scipy.stats import t as t_dist  # type: ignore
+            return 1.0 - t_dist.cdf(z, t_df)
+        from scipy.stats import norm  # type: ignore
+        return 1.0 - norm.cdf(z)
     except Exception:
-        z = (threshold - mu) / np.where(std <= 1e-12, 1e-12, std)
         return 0.5 * (1.0 - np.erf(z / np.sqrt(2.0)))
 
 def run_imputation(
@@ -2131,12 +2143,16 @@ def run_imputation(
     calibration_n_rounds: int = 3,
     calibration_holdout_frac: float = 0.2,
     recalibrate_every_n_passes: int = 0,
+    # v7.3: Imputer type selection
+    imputer_type: str = "specialized",
+    confidence_threshold: float = 0.4,
+    coherence_lambda: float = 1.0,
 ):
-    """Run the specialized column imputer on benchmark data.
+    """Run the column imputer on benchmark data.
 
-    This is a convenience wrapper around SpecializedColumnImputer that:
+    This is a convenience wrapper that:
     1. Extracts numeric columns (excluding ID and target)
-    2. Configures the imputer with appropriate hyperparameters
+    2. Configures the selected imputer with appropriate hyperparameters
     3. Runs fit_transform and returns the imputed DataFrame
 
     Args:
@@ -2165,11 +2181,14 @@ def run_imputation(
         calibration_n_rounds: Monte Carlo rounds for calibration.
         calibration_holdout_frac: Fraction of known values to hold out for calibration.
         recalibrate_every_n_passes: Recalibrate every N passes (0 = only at start).
+        imputer_type: 'specialized' (default) or 'model_bank'.
+        confidence_threshold: For model_bank imputer, σ/sd threshold for confident
+            imputations in pass 2. Defaults to 0.4.
 
     Returns:
         Tuple of (imputed_df, imputer) where:
         - imputed_df: DataFrame with ID_COL and imputed numeric columns
-        - imputer: Fitted SpecializedColumnImputer instance
+        - imputer: Fitted imputer instance (SpecializedColumnImputer or ModelBankImputer)
     """
     numeric_cols = [c for c in df.columns
                     if c not in (ID_COL, TARGET, ALT_TARGET)
@@ -2182,29 +2201,43 @@ def run_imputation(
         n_jobs_fit = -1
     else:
         n_jobs_fit = max(1, int(imputer_n_jobs))
-    imputer = SpecializedColumnImputer(
-        passes=passes,  # Number of rounds over all tiers
-        alpha=alpha,
-        seed=SEED,
-        verbose=verbose,
-        n_jobs=n_jobs_fit,  # Simplified: single n_jobs parameter
-        use_feature_selector=use_feature_selector,
-        selector_tau=selector_tau,
-        selector_k_max=selector_k_max,
-        gp_selector_k_max=gp_selector_k_max,
-        tier_quantiles=tier_quantiles,
-        categorical_threshold=categorical_threshold,
-        force_categorical_cols=force_categorical_cols,
-        tolerance_percentile=tolerance_percentile,
-        tolerance_relaxation_factor=tolerance_relaxation_factor,
-        tolerance_multiplier=tolerance_multiplier,
-        # v7.2: Per-column tolerance calibration
-        calibrate_tolerances=calibrate_tolerances,
-        calibration_target_rmse_ratio=calibration_target_rmse_ratio,
-        calibration_n_rounds=calibration_n_rounds,
-        calibration_holdout_frac=calibration_holdout_frac,
-        recalibrate_every_n_passes=recalibrate_every_n_passes,
-    )
+
+    if imputer_type == "model_bank":
+        imputer = ModelBankImputer(
+            alpha=alpha,
+            seed=SEED,
+            verbose=verbose,
+            n_jobs=n_jobs_fit,
+            selector_k_max=selector_k_max,
+            categorical_threshold=categorical_threshold,
+            force_categorical_cols=force_categorical_cols,
+            skew_threshold=2.0,
+            confidence_threshold=confidence_threshold,
+            coherence_lambda=coherence_lambda,
+        )
+    else:
+        imputer = SpecializedColumnImputer(
+            passes=passes,
+            alpha=alpha,
+            seed=SEED,
+            verbose=verbose,
+            n_jobs=n_jobs_fit,
+            use_feature_selector=use_feature_selector,
+            selector_tau=selector_tau,
+            selector_k_max=selector_k_max,
+            gp_selector_k_max=gp_selector_k_max,
+            tier_quantiles=tier_quantiles,
+            categorical_threshold=categorical_threshold,
+            force_categorical_cols=force_categorical_cols,
+            tolerance_percentile=tolerance_percentile,
+            tolerance_relaxation_factor=tolerance_relaxation_factor,
+            tolerance_multiplier=tolerance_multiplier,
+            calibrate_tolerances=calibrate_tolerances,
+            calibration_target_rmse_ratio=calibration_target_rmse_ratio,
+            calibration_n_rounds=calibration_n_rounds,
+            calibration_holdout_frac=calibration_holdout_frac,
+            recalibrate_every_n_passes=recalibrate_every_n_passes,
+        )
     X_imp = imputer.fit_transform(X)
     writes_by_col: Dict[str, int] = {}
     for entry in getattr(imputer, "logs_", []):
@@ -2612,7 +2645,8 @@ def compute_normalized_conformal_intervals(
 
     Returns:
         Dict with keys: std, lower, upper, sigma_hat, q_hat, sigma_floor,
-        oof_sigma, sigma_cv, oof_coverage, scale_model_coef, uncertainty_features.
+        oof_sigma, sigma_cv, oof_coverage, scale_model_coef,
+        uncertainty_features.
     """
     n_all = len(mu)
     n_train = len(y_train)
@@ -2768,7 +2802,7 @@ def compute_normalized_conformal_intervals(
 
     lower = mu - q_hat * sigma_hat
     upper = mu + q_hat * sigma_hat
-    std_new = q_hat * sigma_hat / 1.96  # equivalent std for prob_above_threshold
+    std_new = q_hat * sigma_hat / 1.96  # Gaussian-equivalent std (may be overridden by caller)
 
     sigma_cv = float(np.std(sigma_hat) / np.mean(sigma_hat)) if np.mean(sigma_hat) > 0 else 0.0
 
@@ -3062,7 +3096,7 @@ def fit_and_predict_all_with_alt(
     # We replace the Alt column with OOF predictions
     X_train_final_df = X_train_df.copy()
     X_train_final_df[alt_col] = oof_preds_train.values
-    
+
     X_train = X_train_final_df.values
     y_train = y_all[train_idx]
 
@@ -3412,6 +3446,140 @@ def cross_val_rmse_with_alt(
     return float(np.mean(rmses)), float(np.std(rmses, ddof=1)), oof_preds, oof_folds
 
 
+def _precompute_single_fold(
+    tr: np.ndarray,
+    va: np.ndarray,
+    X_df: pd.DataFrame,
+    y: np.ndarray,
+    alt_col: str,
+    X_no_alt_df: pd.DataFrame,
+    alt_numeric: pd.Series,
+    oof_repeats: int,
+    seed: int,
+    sample_weight: Optional[np.ndarray],
+    selector_cfg: dict,
+    poly_enabled: bool,
+    poly_include_squares: bool,
+    poly_limit: int,
+    alt_centric_poly: bool,
+    alt_centric_k: int,
+) -> dict:
+    """Compute ALT-augmented train/val data for a single CV fold."""
+    X_tr_fold = X_df.iloc[tr]
+    y_alt_tr_fold = alt_numeric.iloc[tr]
+    w_tr = sample_weight[tr] if sample_weight is not None else None
+
+    oof_preds_tr = _generate_oof_alt_predictions(
+        X_tr_fold, y_alt_tr_fold, ALT_SELECTOR_CFG,
+        n_splits=5, repeats=oof_repeats, seed=seed,
+        sample_weight=w_tr,
+    )
+
+    alt_fit_full = _fit_alt_model_on_rows(
+        X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, tr,
+        sample_weight=sample_weight,
+    )
+    alt_pred_all = alt_fit_full["pred_all"]
+
+    Xtr_df = X_df.iloc[tr].copy()
+    Xtr_df[alt_col] = oof_preds_tr.values
+    Xva_df = X_df.iloc[va].copy()
+    Xva_df[alt_col] = alt_pred_all.loc[Xva_df.index].values
+
+    sel_cols = _select_target_cols_for_train(Xtr_df, y[tr], selector_cfg)
+    Xtr_sel = Xtr_df[sel_cols].copy()
+    Xva_sel = Xva_df[sel_cols].copy()
+
+    if poly_enabled:
+        if alt_centric_poly and alt_col in Xtr_sel.columns:
+            Xtr_sel, chosen_ints = expand_alt_centric_interactions(
+                Xtr_sel, y[tr], alt_col=alt_col,
+                top_k=alt_centric_k, return_interactions=True,
+            )
+            Xva_sel = expand_alt_centric_interactions(
+                Xva_sel, alt_col=alt_col,
+                preset_interactions=chosen_ints, return_interactions=False,
+            )
+        else:
+            Xtr_sel, core = expand_poly_interactions(
+                Xtr_sel, include_squares=poly_include_squares,
+                limit=poly_limit, return_core=True,
+            )
+            Xva_sel = expand_poly_interactions(
+                Xva_sel, include_squares=poly_include_squares,
+                limit=poly_limit, preset_core=core,
+            )
+
+    return {
+        "Xtr": Xtr_sel.values,
+        "ytr": y[tr],
+        "wtr": w_tr,
+        "Xva": Xva_sel.values,
+        "yva": y[va],
+        "va": va,
+    }
+
+
+def _precompute_alt_fold_data(
+    X_df: pd.DataFrame,
+    y: np.ndarray,
+    alt_col: str,
+    splits: List[Tuple[np.ndarray, np.ndarray]],
+    n_splits: int,
+    oof_repeats: int = 1,
+    seed: int = SEED,
+    sample_weight: Optional[np.ndarray] = None,
+    selector_cfg: Optional[dict] = None,
+    poly_cfg: Optional[dict] = None,
+    n_jobs: int = 1,
+) -> List[dict]:
+    """Pre-compute ALT-augmented train/val data per fold.
+
+    Factored from cross_val_rmse_with_alt so the expensive ALT OOF
+    imputation, feature selection, and poly expansion are computed once
+    and shared across all model specs in choose_best_model_with_alt.
+    """
+    selector_cfg = selector_cfg or {"enabled": False}
+    poly_cfg = poly_cfg or {"enabled": False}
+
+    alt_feature_names = [c for c in X_df.columns if c != alt_col]
+    X_no_alt_df = X_df[alt_feature_names].copy()
+    alt_numeric = pd.to_numeric(X_df[alt_col], errors="coerce")
+
+    poly_enabled = bool(poly_cfg.get("enabled", False))
+    poly_limit = int(poly_cfg.get("limit", 0) or 0)
+    poly_include_squares = bool(poly_cfg.get("include_squares", False))
+    alt_centric_poly = bool(poly_cfg.get("alt_centric", False))
+    alt_centric_k = int(poly_cfg.get("alt_centric_k", 6))
+
+    t0 = time.time()
+
+    if n_jobs == 1:
+        fold_data = [
+            _precompute_single_fold(
+                tr, va, X_df, y, alt_col, X_no_alt_df, alt_numeric,
+                oof_repeats, seed, sample_weight, selector_cfg,
+                poly_enabled, poly_include_squares, poly_limit,
+                alt_centric_poly, alt_centric_k,
+            )
+            for tr, va in splits
+        ]
+    else:
+        fold_data = Parallel(n_jobs=n_jobs, prefer="processes")(
+            delayed(_precompute_single_fold)(
+                tr, va, X_df, y, alt_col, X_no_alt_df, alt_numeric,
+                oof_repeats, seed, sample_weight, selector_cfg,
+                poly_enabled, poly_include_squares, poly_limit,
+                alt_centric_poly, alt_centric_k,
+            )
+            for tr, va in splits
+        )
+
+    elapsed = time.time() - t0
+    print(f"Pre-computed {len(fold_data)} ALT-augmented folds in {mmss(elapsed)}")
+    return fold_data
+
+
 def choose_best_model_with_alt(
     specs: List[ModelSpec],
     X_df: pd.DataFrame,
@@ -3429,32 +3597,86 @@ def choose_best_model_with_alt(
     sample_weight: Optional[np.ndarray] = None,
     dense_mask: Optional[np.ndarray] = None,
 ):
-    def _eval_spec(spec: ModelSpec):
-        m, s, oof_preds, oof_folds = cross_val_rmse_with_alt(
-            spec,
-            X_df,
-            y,
-            alt_col,
-            n_splits=n_splits,
-            n_jobs=cv_n_jobs,
-            selector_cfg=selector_cfg,
-            poly_cfg=poly_cfg,
-            splits=splits,
-            cv_repeats=cv_repeats,
-            seed=seed,
-            oof_repeats=oof_repeats,
-            sample_weight=sample_weight,
-            dense_mask=dense_mask,
-        )
-        return {"model": spec.name, "rmse_mean": m, "rmse_std": s,
-                "oof_preds": oof_preds, "oof_folds": oof_folds}
+    if splits is None:
+        splits = _build_repeated_splits(len(X_df), n_splits, cv_repeats, seed)
+    if not splits:
+        raise ValueError("n_splits must be >= 2 for cross-validation.")
 
-    if model_n_jobs == 1:
-        rows = [_eval_spec(spec) for spec in specs]
+    selector_cfg = selector_cfg or {"enabled": False}
+    poly_cfg = poly_cfg or {"enabled": False}
+
+    if alt_col not in X_df.columns:
+        # No ALT column: fall back to simple per-spec CV
+        def _eval_spec_simple(spec: ModelSpec):
+            m, s = cross_val_rmse_for_model(
+                spec, X_df.values, y,
+                n_splits=n_splits, n_jobs=cv_n_jobs,
+                splits=splits, cv_repeats=cv_repeats, seed=seed,
+                sample_weight=sample_weight, dense_mask=dense_mask,
+            )
+            return {"model": spec.name, "rmse_mean": m, "rmse_std": s,
+                    "oof_preds": np.full(len(y), np.nan),
+                    "oof_folds": np.full(len(y), -1, dtype=int)}
+
+        if model_n_jobs == 1:
+            rows = [_eval_spec_simple(spec) for spec in specs]
+        else:
+            rows = Parallel(n_jobs=model_n_jobs, prefer="processes")(
+                delayed(_eval_spec_simple)(spec) for spec in specs
+            )
     else:
-        rows = Parallel(n_jobs=model_n_jobs, prefer="processes")(
-            delayed(_eval_spec)(spec) for spec in specs
+        # Pre-compute ALT-augmented fold data ONCE (shared across all model specs).
+        # This avoids redoing the expensive ALT OOF imputation, feature selection,
+        # and poly expansion for every model spec — only the final model fit varies.
+        fold_data = _precompute_alt_fold_data(
+            X_df, y, alt_col, splits, n_splits,
+            oof_repeats=oof_repeats, seed=seed,
+            sample_weight=sample_weight,
+            selector_cfg=selector_cfg, poly_cfg=poly_cfg,
+            n_jobs=cv_n_jobs,
         )
+
+        def _eval_spec_on_folds(spec: ModelSpec):
+            fold_rmses = []
+            oof_preds = np.full(len(y), np.nan)
+            oof_folds = np.full(len(y), -1, dtype=int)
+            oof_counts = np.zeros(len(y))
+
+            for fold_k, fd in enumerate(fold_data):
+                model = spec.build(fd["Xtr"], fd["ytr"], fd["wtr"])
+                pred = model.predict(fd["Xva"])
+
+                if dense_mask is not None:
+                    dense_va = dense_mask[fd["va"]]
+                    rmse_val = rmse(fd["yva"][dense_va], pred[dense_va]) if dense_va.any() else float("nan")
+                else:
+                    rmse_val = rmse(fd["yva"], pred)
+                fold_rmses.append(rmse_val)
+
+                fold_within = fold_k % n_splits
+                for i, vi in enumerate(fd["va"]):
+                    if oof_counts[vi] == 0:
+                        oof_preds[vi] = pred[i]
+                    else:
+                        oof_preds[vi] = (oof_preds[vi] * oof_counts[vi] + pred[i]) / (oof_counts[vi] + 1)
+                    oof_counts[vi] += 1
+                    oof_folds[vi] = fold_within
+
+            fold_rmses = np.array(fold_rmses, dtype=float)
+            return {
+                "model": spec.name,
+                "rmse_mean": float(np.mean(fold_rmses)),
+                "rmse_std": float(np.std(fold_rmses, ddof=1)),
+                "oof_preds": oof_preds,
+                "oof_folds": oof_folds,
+            }
+
+        if model_n_jobs == 1:
+            rows = [_eval_spec_on_folds(spec) for spec in specs]
+        else:
+            rows = Parallel(n_jobs=model_n_jobs, prefer="processes")(
+                delayed(_eval_spec_on_folds)(spec) for spec in specs
+            )
 
     # Blend50: equal-weight average of all models' OOF predictions
     if len(rows) >= 2:
@@ -4155,6 +4377,14 @@ def main():
                     help="Max features for GP models (mRMR selection). Default 28.")
     ap.add_argument("--imputer_n_jobs", type=int, default=-1,
                     help="Parallel workers for the SpecializedColumnImputer (-1 uses all available cores).")
+    ap.add_argument("--imputer_type", type=str, default="specialized",
+                    choices=["specialized", "model_bank"],
+                    help="Imputer algorithm: 'specialized' (default, SVD warm-start) or 'model_bank' (per-cell predictor selection).")
+    ap.add_argument("--confidence_threshold", type=float, default=0.4,
+                    help="For model_bank imputer: normalized σ/sd threshold for confident imputations in pass 2.")
+    ap.add_argument("--coherence_lambda", type=float, default=1.0,
+                    help="For model_bank imputer: shrinkage strength for low-rank coherence projection. "
+                         "Higher = less pulling toward SVD. 0 = disable coherence.")
     ap.add_argument("--tier_quantiles", type=str, default="0.33,0.67",
                     help="Comma-separated quantiles that define easy/medium/hard imputation tiers.")
     ap.add_argument("--selector_n_jobs", type=int, default=-2,
@@ -4215,9 +4445,17 @@ def main():
     ap.add_argument("--no_traj_in_alt", dest="traj_in_alt", action="store_false",
                     help="Exclude trajectory features from ALT model.")
     ap.set_defaults(traj_in_alt=True)
+    ap.add_argument("--no_svd_in_alt", dest="svd_in_alt", action="store_false",
+                    help="Exclude SVD row-factor features from ALT model.")
+    ap.set_defaults(svd_in_alt=True)
+    ap.add_argument("--no_residual_head", dest="residual_head", action="store_false",
+                    help="Disable the soft regime residual head in ALT model.")
+    ap.set_defaults(residual_head=True)
     ap.add_argument("--no_traj_in_target", dest="traj_in_target", action="store_false",
                     help="Exclude trajectory features from target model.")
     ap.set_defaults(traj_in_target=True)
+    ap.add_argument("--exclude_models", type=str, default="",
+                    help="Comma-separated model names to exclude from the dataset before imputation/prediction.")
     args = ap.parse_args()
     args.cv_repeats = max(1, int(args.cv_repeats))
     def _resolve_repeats(value: Optional[int], default: int) -> int:
@@ -4273,6 +4511,16 @@ def main():
         sys.exit(2)
 
     df = pd.read_csv(args.csv_path)
+    if args.exclude_models:
+        exclude_set = {m.strip() for m in args.exclude_models.split(",") if m.strip()}
+        n_before = len(df)
+        df = df[~df[ID_COL].isin(exclude_set)]
+        df = df.reset_index(drop=True)
+        n_dropped = n_before - len(df)
+        if n_dropped:
+            print(f"Excluded {n_dropped} model(s): {exclude_set}")
+        else:
+            print(f"WARNING: --exclude_models specified but none matched: {exclude_set}")
     if ID_COL not in df.columns:
         raise ValueError(f"CSV must contain '{ID_COL}' column.")
 
@@ -4354,15 +4602,29 @@ def main():
     cache_dir = os.path.join(args.output_root, "_cache")
     ensure_dir(cache_dir)
     csv_hash = _sha256_file(args.csv_path)
+    if args.exclude_models:
+        # Mix exclusion into cache key so cached results with different exclusions don't collide
+        import hashlib as _hl
+        excl_hash = _hl.sha256(args.exclude_models.encode()).hexdigest()[:12]
+        csv_hash = csv_hash[:52] + excl_hash
     tier_key = "none" if tier_quantiles is None else "_".join(f"{q:.3f}" for q in tier_quantiles)
-    imp_key = (
-        f"imputed_full_{csv_hash}_passes{args.passes}_alpha{args.alpha:.6f}_"
-        f"sel{int(args.use_feature_selector)}_st{args.selector_tau:.3f}_"
-        f"skmax{args.selector_k_max}_imnj{PARALLELISM_CFG['imputer_n_jobs']}_"
-        f"tolp{args.tolerance_percentile:.1f}_tolr{args.tolerance_relaxation_factor:.2f}_"
-        f"tolm{args.tolerance_multiplier:.2f}_tier{tier_key}_"
-        f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt2.0.csv"
-    )
+    if args.imputer_type == "model_bank":
+        coh_lam = getattr(args, 'coherence_lambda', 1.0)
+        imp_key = (
+            f"imputed_modelbank_{csv_hash}_alpha{args.alpha:.6f}_"
+            f"skmax{args.selector_k_max}_conf{args.confidence_threshold:.2f}_"
+            f"coh{coh_lam:.2f}_"
+            f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt2.0.csv"
+        )
+    else:
+        imp_key = (
+            f"imputed_full_{csv_hash}_passes{args.passes}_alpha{args.alpha:.6f}_"
+            f"sel{int(args.use_feature_selector)}_st{args.selector_tau:.3f}_"
+            f"skmax{args.selector_k_max}_imnj{PARALLELISM_CFG['imputer_n_jobs']}_"
+            f"tolp{args.tolerance_percentile:.1f}_tolr{args.tolerance_relaxation_factor:.2f}_"
+            f"tolm{args.tolerance_multiplier:.2f}_tier{tier_key}_"
+            f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt2.0.csv"
+        )
     cache_csv = os.path.join(cache_dir, imp_key)
     cache_meta = os.path.join(cache_dir, imp_key + ".meta.json")
 
@@ -4426,6 +4688,9 @@ def main():
             calibration_n_rounds=args.calibration_n_rounds,
             calibration_holdout_frac=args.calibration_holdout_frac,
             recalibrate_every_n_passes=args.recalibrate_every_n_passes,
+            imputer_type=args.imputer_type,
+            confidence_threshold=args.confidence_threshold,
+            coherence_lambda=getattr(args, 'coherence_lambda', 1.0),
         )
         imputed_df.to_csv(cache_csv, index=False)
         imputer_predictors_map = {
@@ -4621,23 +4886,27 @@ def main():
         global _MODULE_SVD_ROW_FACTORS
         if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
             svd_factors = imputer.svd_row_factors_
-            _MODULE_SVD_ROW_FACTORS = svd_factors  # expose for regime model
-            # Add raw, squared, and pairwise interaction SVD factors
-            svd_col_names = list(svd_factors.columns)
-            for col in svd_col_names:
-                alt_feature_matrix[col] = svd_factors[col].values
-                alt_feature_matrix[f"{col}_sq"] = svd_factors[col].values ** 2
-            # Top-k pairwise interactions (top 4 factors → 6 pairs)
-            n_interact = min(4, len(svd_col_names))
-            import itertools as _itertools
-            for i, j in _itertools.combinations(range(n_interact), 2):
-                ci, cj = svd_col_names[i], svd_col_names[j]
-                alt_feature_matrix[f"{ci}x{cj}"] = svd_factors[ci].values * svd_factors[cj].values
+            _MODULE_SVD_ROW_FACTORS = svd_factors if args.residual_head else None  # expose for regime model
+            if args.svd_in_alt:
+                # Add raw, squared, and pairwise interaction SVD factors
+                svd_col_names = list(svd_factors.columns)
+                for col in svd_col_names:
+                    alt_feature_matrix[col] = svd_factors[col].values
+                    alt_feature_matrix[f"{col}_sq"] = svd_factors[col].values ** 2
+                # Top-k pairwise interactions (top 4 factors → 6 pairs)
+                n_interact = min(4, len(svd_col_names))
+                import itertools as _itertools
+                for i, j in _itertools.combinations(range(n_interact), 2):
+                    ci, cj = svd_col_names[i], svd_col_names[j]
+                    alt_feature_matrix[f"{ci}x{cj}"] = svd_factors[ci].values * svd_factors[cj].values
 
-        # X2: Imputation trajectory signatures
+        # X2: Imputation trajectory signatures (winsorized to cap outliers)
         if args.traj_in_alt and imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
             for col in imputer.trajectory_features_.columns:
-                alt_feature_matrix[col] = imputer.trajectory_features_[col].values
+                vals = imputer.trajectory_features_[col].values.copy()
+                cap = float(np.percentile(vals, 95))
+                vals = np.clip(vals, None, cap)
+                alt_feature_matrix[col] = vals
 
         print('impute alt for all')
         alt_result = impute_alt_for_all(alt_feature_matrix, df[ALT_TARGET], ALT_SELECTOR_CFG)
@@ -4648,6 +4917,20 @@ def main():
         alt_result["poly_include_squares"] = bool(args.poly_include_squares)
         alt_filled = alt_result["filled"]
         safe_features = safe_features.assign(**{ALT_TARGET: alt_filled.values})
+
+        # Propagate SVD factors into safe_features so the inner ALT refit
+        # (inside target CV) has the same feature set as the outer ALT.
+        if args.svd_in_alt and imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
+            svd_factors = imputer.svd_row_factors_
+            svd_col_names = list(svd_factors.columns)
+            for col in svd_col_names:
+                safe_features[col] = svd_factors[col].values
+                safe_features[f"{col}_sq"] = svd_factors[col].values ** 2
+            import itertools as _itertools
+            n_interact = min(4, len(svd_col_names))
+            for i, j in _itertools.combinations(range(n_interact), 2):
+                ci, cj = svd_col_names[i], svd_col_names[j]
+                safe_features[f"{ci}x{cj}"] = svd_factors[ci].values * svd_factors[cj].values
 
         if ALT_REGRESSOR_NAME == "bayes":
             alt_model = alt_result.get("fitted_model")
@@ -4982,17 +5265,36 @@ def main():
     lower = conformal["lower"]
     upper = conformal["upper"]
 
+    # Fit t-distribution df from final calibrated OOF residuals
+    # Use the final sigma_hat (not cross-fitted OOF sigma) for stable estimation
+    q_hat = conformal["q_hat"]
+    sigma_hat_arr = conformal["sigma_hat"]
+    cal_sigma_final = q_hat * sigma_hat_arr[train_idx]
+    oof_residuals = y_all[train_idx] - oof_preds_valid
+    oof_valid = ~np.isnan(oof_residuals)
+    z_final = oof_residuals[oof_valid] / np.where(cal_sigma_final[oof_valid] < 1e-12, 1e-12, cal_sigma_final[oof_valid])
+    try:
+        from scipy.stats import t as t_dist  # type: ignore
+        t_df, _t_loc, _t_scale = t_dist.fit(z_final)
+        t_df = float(np.clip(t_df, 3.0, 200.0))  # floor at 3 (variance exists for df>2)
+        # Recompute std as t-distribution scale so that prob_above_threshold is calibrated
+        t_crit = float(t_dist.ppf(0.975, t_df))
+        std = q_hat * sigma_hat_arr / t_crit
+    except Exception:
+        t_df = None  # Gaussian fallback
+
     conformal_end = time.time()
     print(f"conformal: {mmss(conformal_end - conformal_start)}")
+    t_df_str = f"t_df={t_df:.1f}" if t_df is not None else "t_df=None (Gaussian fallback)"
     print(f"  q_hat={conformal['q_hat']:.3f}  sigma_floor={conformal['sigma_floor']:.3f}  "
-          f"sigma_cv={conformal['sigma_cv']:.1%}  oof_coverage={conformal['oof_coverage']:.1%}")
+          f"sigma_cv={conformal['sigma_cv']:.1%}  oof_coverage={conformal['oof_coverage']:.1%}  {t_df_str}")
 
-    # Compute probabilities with new heteroscedastic std
+    # Compute probabilities with t-distribution for better tail calibration
     max_observed = float(np.nanmax(y_all[train_idx])) # Use y_train equivalent
-    num_one_prob = prob_above_threshold(mu, std, threshold=max_observed)
+    num_one_prob = prob_above_threshold(mu, std, threshold=max_observed, t_df=t_df)
 
     # Probability of exceeding threshold by margin (only for models without actual scores)
-    top_by_margin_prob = prob_above_threshold(mu, std, threshold=max_observed + args.margin)
+    top_by_margin_prob = prob_above_threshold(mu, std, threshold=max_observed + args.margin, t_df=t_df)
     # Set to NaN for models that have actual scores (training rows)
     top_by_margin_prob[train_idx] = np.nan
 
@@ -5016,6 +5318,7 @@ def main():
         "sigma_floor": conformal["sigma_floor"],
         "sigma_cv": conformal["sigma_cv"],
         "oof_coverage": conformal["oof_coverage"],
+        "t_df": t_df,
     }
     for k, v in conformal["scale_model_coef"].items():
         diag_row[f"scale_model_coef_{k}"] = v
