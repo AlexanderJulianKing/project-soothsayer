@@ -1,0 +1,52 @@
+{
+  "pairs": [
+    [
+      "openbench_Reasoning",
+      "style_normalized_list_count"
+    ],
+    [
+      "livebench_IF Average",
+      "style_normalized_length"
+    ],
+    [
+      "aa_pricing_price_1m_input_tokens",
+      "logic_PC1"
+    ],
+    [
+      "lechmazur_confab_Confab %",
+      "weirdml_splash_hard_acc"
+    ],
+    [
+      "contextarena_8k (%) 2 needles",
+      "style_log_normalized_length"
+    ],
+    [
+      "ugileaderboard_Writing",
+      "style_normalized_bold_count"
+    ],
+    [
+      "openbench_Reasoning Output Tokens Used to Run Artificial Analysis Intelligence Index (million)",
+      "openbench_Answer Output Tokens Used to Run Artificial Analysis Intelligence Index (million)"
+    ],
+    [
+      "lechmazur_gen_Avg Rank",
+      "aa_eval_scicode"
+    ],
+    [
+      "arc_ARC-AGI-1",
+      "logic_PC4"
+    ],
+    [
+      "aa_eval_aime_25",
+      "style_normalized_length"
+    ]
+  ],
+  "n_pairs": 10,
+  "selection_rmse": NaN,
+  "baseline_rmse": NaN,
+  "n_repeats": 5,
+  "n_candidate_cols": 74,
+  "search_time_s": 318.8,
+  "cv_rmse": 19.1226066545817,
+  "cv_rmse_over_sd": 0.3365325109576009
+}

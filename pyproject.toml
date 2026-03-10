@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-benchmarks = ["pingouin", "scikit-learn"]
+benchmarks = ["pingouin", "scikit-learn", "python-constraint2", "ortools>=9.10,<9.15"]
 predict = [
     "scikit-learn",
     "catboost",

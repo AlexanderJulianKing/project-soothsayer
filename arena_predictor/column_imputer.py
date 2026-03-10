@@ -2345,6 +2345,12 @@ class ModelBankImputer:
         redundancy_threshold: float = 0.85,
         min_support: int = 10,
         coherence_lambda: float = 1.0,
+        coherence_shape: str = "linear",
+        coherence_gate: str = "fixed",
+        iterative_coherence: bool = False,
+        use_svd_predictors: bool = False,
+        n_expansion_passes: int = 1,
+        max_confident_extras: int = 1,
         **kwargs,
     ):
         self.alpha = alpha
@@ -2359,6 +2365,12 @@ class ModelBankImputer:
         self.redundancy_threshold = redundancy_threshold
         self.min_support = min_support
         self.coherence_lambda = coherence_lambda
+        self.coherence_shape = coherence_shape
+        self.coherence_gate = coherence_gate
+        self.iterative_coherence = iterative_coherence
+        self.use_svd_predictors = use_svd_predictors
+        self.n_expansion_passes = n_expansion_passes
+        self.max_confident_extras = max_confident_extras
 
         # ---- populated by fit_transform ----
         self.model_bank_: Dict[Tuple[str, frozenset], Optional[FittedCellModel]] = {}
@@ -2380,6 +2392,12 @@ class ModelBankImputer:
         self._candidate_rankings: Dict[str, List[Tuple[str, float, int]]] = {}
         self._col_sd: Dict[str, float] = {}
         self._svd_rank: Optional[int] = None
+        self._svd_anchor: Optional[np.ndarray] = None
+        self._svd_anchor_std: Optional[np.ndarray] = None
+        self._svd_anchor_cols: Optional[List[str]] = None
+        self._svd_anchor_means: Optional[np.ndarray] = None
+        self._svd_anchor_stds: Optional[np.ndarray] = None
+        self._coherence_gate_model = None
 
     # --------------------------------------------------------------------- #
     #  fit_transform — main entry point                                      #
@@ -2404,6 +2422,15 @@ class ModelBankImputer:
         self._compute_correlations(X_df)
         self._compute_svd_factors(X_df, cols_to_impute)
 
+        # Inject SVD row factors as candidate predictors (fully observed, no NaNs)
+        self._svd_predictor_cols = []
+        if self.svd_row_factors_ is not None and self.use_svd_predictors:
+            for fc in self.svd_row_factors_.columns:
+                X_df[fc] = self.svd_row_factors_[fc].values
+                self._svd_predictor_cols.append(fc)
+            if self.verbose:
+                print(f"  Added {len(self._svd_predictor_cols)} SVD factors as predictors")
+
         # Store column SDs for normalization
         for col in cols_to_impute:
             obs = X_df[col].dropna()
@@ -2423,25 +2450,24 @@ class ModelBankImputer:
 
         self._pass1_observed_only(X_df, cols_to_impute)
 
-        # ---- Phase 3: pass 2 — uncertainty-gated expansion ----
-        self._pass2_expansion(X_df, cols_to_impute)
+        # ---- Phase 3: expansion passes — uncertainty-gated ----
+        if self.iterative_coherence:
+            # Iterative: pass1 → coherence → pass2 → coherence
+            self._fill_median_fallback(X_df, cols_to_impute)
+            self._coherence_projection(X_df, cols_to_impute)
+            for pass_num in range(self.n_expansion_passes):
+                self._pass2_expansion(X_df, cols_to_impute)
+            self._coherence_projection(X_df, cols_to_impute)
+        else:
+            # Standard: pass2 → fallback → coherence
+            for pass_num in range(self.n_expansion_passes):
+                self._pass2_expansion(X_df, cols_to_impute)
+            self._fill_median_fallback(X_df, cols_to_impute)
+            self._coherence_projection(X_df, cols_to_impute)
 
-        # ---- Phase 4: fallback — fill remaining with median ----
-        for col in cols_to_impute:
-            still_missing = X_df[col].isna()
-            if still_missing.any():
-                median = X_df[col].median()
-                if pd.isna(median):
-                    median = 0.0
-                n_fill = int(still_missing.sum())
-                X_df.loc[still_missing, col] = median
-                col_var = self._col_sd.get(col, 1.0) ** 2
-                self.sigma2_matrix_.loc[still_missing, col] = col_var
-                if self.verbose >= 2:
-                    print(f"  Fallback: {n_fill} cells in {col} filled with median")
-
-        # ---- Phase 4b: low-rank coherence projection ----
-        self._coherence_projection(X_df, cols_to_impute)
+        # Trajectory features (computed in log space, before inverse transforms,
+        # so delta-to-anchor and σ² normalization use consistent units)
+        self._compute_trajectory_features(X_df, cols_to_impute)
 
         # ---- Phase 5: post-processing ----
         # Inverse log transforms
@@ -2452,11 +2478,12 @@ class ModelBankImputer:
             if self.verbose:
                 print(f"Inverse-transformed {len(self.log_transforms_)} columns")
 
-        # Trajectory features from σ² matrix
-        self._compute_trajectory_features(X_df, cols_to_impute)
-
         # Representative models for API compatibility
         self._build_representative_models(X_df, cols_to_impute)
+
+        # Remove SVD predictor columns from output (predict.py adds them separately)
+        if self._svd_predictor_cols:
+            X_df = X_df.drop(columns=self._svd_predictor_cols, errors='ignore')
 
         if self.verbose:
             print(f"ModelBankImputer complete. {len(self.logs_)} cell writes, "
@@ -2529,6 +2556,21 @@ class ModelBankImputer:
                 tag_str = f" [{', '.join(sorted(tags))}]" if tags else ""
                 print(f"  {col}: {col_type.value}{tag_str}")
 
+    def _fill_median_fallback(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        """Fill any remaining NaN cells with column median."""
+        for col in cols_to_impute:
+            still_missing = X_df[col].isna()
+            if still_missing.any():
+                median = X_df[col].median()
+                if pd.isna(median):
+                    median = 0.0
+                n_fill = int(still_missing.sum())
+                X_df.loc[still_missing, col] = median
+                col_var = self._col_sd.get(col, 1.0) ** 2
+                self.sigma2_matrix_.loc[still_missing, col] = col_var
+                if self.verbose >= 2:
+                    print(f"  Fallback: {n_fill} cells in {col} filled with median")
+
     def _compute_correlations(self, X_df: pd.DataFrame) -> None:
         numeric_cols = X_df.select_dtypes(include=[np.number]).columns.tolist()
         self.correlation_matrix_ = X_df[numeric_cols].corr(method='pearson')
@@ -2539,8 +2581,104 @@ class ModelBankImputer:
     # --------------------------------------------------------------------- #
     #  Phase 4b: low-rank coherence projection                               #
     # --------------------------------------------------------------------- #
+    def _learn_coherence_gate(
+        self,
+        X_df: pd.DataFrame,
+        cols_to_impute: List[str],
+        X_lowrank: np.ndarray,
+        col_idx: Dict[str, int],
+        col_sds: np.ndarray,
+        sigma2_svd_col: Dict[str, float],
+    ):
+        """Train a Ridge model to predict optimal coherence weight per cell.
+
+        Uses observed cells in columns that have missing data as training data.
+        For each observed cell, we know the true value, the SVD reconstruction,
+        and we can estimate the model-bank LOO error from sigma2_loo.  The
+        optimal weight minimises (w*svd + (1-w)*mb - true)^2.
+
+        Features: tau, row_completeness, col_completeness, svd_quality, |gap|/sd.
+        """
+        from sklearn.linear_model import Ridge
+
+        feat_rows = []
+        target_rows = []
+
+        # Precompute row completeness
+        n_cols = len(X_df.columns)
+        row_obs_frac = X_df.notna().sum(axis=1).values / max(n_cols, 1)
+
+        for c in cols_to_impute:
+            if c not in col_idx:
+                continue
+            j = col_idx[c]
+            miss_ser = self.original_missing_.get(c)
+            if miss_ser is None:
+                continue
+            obs_mask = ~miss_ser.values
+            n_obs = obs_mask.sum()
+            if n_obs < 5:
+                continue
+
+            sd = col_sds[j]
+            sd2 = sd ** 2
+            s2_svd = sigma2_svd_col.get(c, sd2)
+            col_comp = n_obs / len(X_df)
+
+            # For observed cells: true value and SVD reconstruction are known.
+            # Model-bank sigma2_loo gives the expected squared error.
+            # Optimal w per column: Bayesian = s2_model / (s2_model + s2_svd)
+            # We refine this with per-cell features.
+            true_vals = X_df[c].values[obs_mask]
+            svd_vals = X_lowrank[obs_mask, j]
+            svd_err2 = (true_vals - svd_vals) ** 2
+
+            # Average model-bank sigma2 for this column (from fitted models)
+            col_sigma2s = [
+                m.sigma2_loo for key, m in self.model_bank_.items()
+                if m is not None and key[0] == c
+            ]
+            mb_sigma2 = float(np.median(col_sigma2s)) if col_sigma2s else sd2
+
+            # Per-cell optimal w: minimize (w*svd + (1-w)*true - true)^2
+            # = (w*(svd-true))^2 → w*=0 trivially for observed cells.
+            # Instead, use cross-validated target: w that balances mb vs svd error.
+            # w_opt = mb_sigma2 / (mb_sigma2 + svd_err2) per cell
+            w_opt = mb_sigma2 / (mb_sigma2 + svd_err2 + 1e-10)
+            w_opt = np.clip(w_opt, 0.0, 1.0)
+
+            # Features for each observed cell
+            tau_obs = mb_sigma2 / max(sd2, 1e-10)
+            for i_local, i_global in enumerate(np.where(obs_mask)[0]):
+                feat_rows.append([
+                    tau_obs,
+                    row_obs_frac[i_global],
+                    col_comp,
+                    s2_svd / max(sd2, 1e-10),
+                    abs(true_vals[i_local] - svd_vals[i_local]) / max(sd, 1e-10),
+                ])
+                target_rows.append(w_opt[i_local])
+
+        if len(feat_rows) < 20:
+            self._coherence_gate_model = None
+            return
+
+        X_gate = np.array(feat_rows)
+        y_gate = np.array(target_rows)
+        gate_model = Ridge(alpha=1.0)
+        gate_model.fit(X_gate, y_gate)
+        self._coherence_gate_model = gate_model
+
+        if self.verbose:
+            print(f"  Learned coherence gate: {len(feat_rows)} training cells, "
+                  f"coefs={np.round(gate_model.coef_, 3)}")
+
     def _coherence_projection(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
         """Blend imputed values toward a low-rank SVD reconstruction.
+
+        Re-computes SVD on the completed matrix (post-imputation) for the
+        coherence target.  The observed-only SVD anchor is stored separately
+        for trajectory features.
 
         High-uncertainty cells are pulled more toward the SVD estimate (which
         preserves cross-column structure), while confident cells keep their
@@ -2585,8 +2723,19 @@ class ModelBankImputer:
             else:
                 sigma2_svd_col[c] = col_sds[j] ** 2
 
+        # Train learned gate if requested
+        gate = self.coherence_gate
+        if gate == "learned":
+            self._learn_coherence_gate(
+                X_df, cols_to_impute, X_lowrank, col_idx, col_sds, sigma2_svd_col
+            )
+
+        # Precompute row completeness for adaptive gates
+        n_total_cols = len(X_df.columns)
+        row_obs_frac = X_df.notna().sum(axis=1).values / max(n_total_cols, 1)
+
         # Blend imputed cells toward low-rank estimate, weighted by uncertainty
-        lam = self.coherence_lambda
+        lam_base = self.coherence_lambda
         n_adjusted = 0
         for c in cols_to_impute:
             if c not in col_idx or c in cat_cols:
@@ -2608,11 +2757,42 @@ class ModelBankImputer:
             active_idx = miss_idx[finite]
             s2 = sigma2_vals[finite]
             tau = s2 / max(sd2, 1e-10)
-            w = tau / (tau + lam)
 
             row_positions = np.array([X_df.index.get_loc(idx) for idx in active_idx])
             old_vals = X_df.loc[active_idx, c].values
             svd_vals = X_lowrank[row_positions, j]
+
+            if gate == "learned" and self._coherence_gate_model is not None:
+                # Learned gate: predict w from features
+                n_obs_col = (~self.original_missing_.get(c, pd.Series(False, index=X_df.index))).sum()
+                col_comp = n_obs_col / len(X_df)
+                gate_feats = np.column_stack([
+                    tau,
+                    row_obs_frac[row_positions],
+                    np.full(len(tau), col_comp),
+                    np.full(len(tau), s2_svd / max(sd2, 1e-10)),
+                    np.abs(old_vals - svd_vals) / max(col_sds[j], 1e-10),
+                ])
+                w = np.clip(self._coherence_gate_model.predict(gate_feats), 0.0, 1.0)
+            elif gate == "row_adaptive":
+                # Scale lambda by row completeness² — sparse rows get more SVD pull
+                row_comp = row_obs_frac[row_positions]
+                lam_adj = lam_base * row_comp ** 2
+                w = tau / (tau + lam_adj)
+            else:
+                # Fixed gate: use shape-based formula
+                lam = lam_base
+                shape = self.coherence_shape
+                if shape == "squared":
+                    w = tau ** 2 / (tau ** 2 + lam)
+                elif shape == "power3":
+                    w = tau ** 3 / (tau ** 3 + lam)
+                elif shape == "exp":
+                    w = 1.0 - np.exp(-tau / lam)
+                elif shape == "step":
+                    w = np.where(tau > lam, 1.0, 0.0)
+                else:  # "linear" (default James-Stein)
+                    w = tau / (tau + lam)
 
             X_df.loc[active_idx, c] = (1.0 - w) * old_vals + w * svd_vals
             self.sigma2_matrix_.loc[active_idx, c] = (
@@ -2622,7 +2802,7 @@ class ModelBankImputer:
 
         if self.verbose:
             print(f"  Coherence projection: {n_adjusted} cells adjusted "
-                  f"(rank={k}, lambda={lam})")
+                  f"(rank={k}, lambda={lam_base}, gate={gate})")
 
     def _compute_svd_factors(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
         """Extract SVD row factors for downstream use — NO warm-start filling."""
@@ -2672,6 +2852,17 @@ class ModelBankImputer:
             columns=[f"_svd_f{i+1}" for i in range(svd_rank)],
         )
         self._svd_rank = svd_rank
+
+        # Store observed-only SVD anchor for coherence projection
+        # This is the low-rank reconstruction computed BEFORE any imputation,
+        # using only observed data (NaNs filled via iterative SVD internally).
+        X_anchor_std = U @ np.diag(s) @ Vt   # rank-k reconstruction in standardized space
+        self._svd_anchor_cols = numeric_cols
+        self._svd_anchor_means = col_means
+        self._svd_anchor_stds = col_stds
+        self._svd_anchor_std = X_anchor_std          # standardized
+        self._svd_anchor = X_anchor_std * col_stds + col_means  # original units
+
         if self.verbose:
             print(f"  SVD factors: rank={svd_rank}")
 
@@ -3122,6 +3313,7 @@ class ModelBankImputer:
             confident_per_row[row_idx] = confident
 
         n_improved = 0
+        max_extras = self.max_confident_extras
         for row_idx, col, old_sigma2 in imputed_cells:
             observed = set(c for c in X_df.columns
                            if c != col and obs_matrix_orig.loc[row_idx, c])
@@ -3129,20 +3321,20 @@ class ModelBankImputer:
             if not confident:
                 continue
 
-            # Pick best confident imputed column (highest relevance to target)
-            best_extra = None
-            best_score = -1.0
+            # Pick top-N confident imputed columns (highest relevance to target)
+            scored_extras = []
             for cc in confident:
                 for name, score, _ in self._candidate_rankings.get(col, []):
-                    if name == cc and score > best_score:
-                        best_score = score
-                        best_extra = cc
+                    if name == cc:
+                        scored_extras.append((cc, score))
                         break
-            if best_extra is None:
+            if not scored_extras:
                 continue
+            scored_extras.sort(key=lambda x: x[1], reverse=True)
+            extra_cols = {cc for cc, _ in scored_extras[:max_extras]}
 
             new_predictors = self._select_cell_predictors(
-                observed, col, extra_cols={best_extra}
+                observed, col, extra_cols=extra_cols
             )
             if not new_predictors:
                 continue
@@ -3156,18 +3348,20 @@ class ModelBankImputer:
             if new_fitted is None:
                 continue
 
-            # Compute σ²_total with input uncertainty propagation
+            # Compute σ²_total with input uncertainty propagation (diagonal approx)
             sigma2_model = new_fitted.sigma2_loo
             sigma2_input = 0.0
-            if new_fitted._coefficients is not None and best_extra in new_fitted.predictor_names:
-                try:
-                    coef_idx = new_fitted.predictor_names.index(best_extra)
-                    beta = new_fitted._coefficients[coef_idx]
-                    s2_in = sigma2_snap.loc[row_idx, best_extra]
-                    if np.isfinite(s2_in):
-                        sigma2_input = beta ** 2 * s2_in
-                except (ValueError, IndexError):
-                    pass
+            if new_fitted._coefficients is not None:
+                for ec in extra_cols:
+                    if ec in new_fitted.predictor_names:
+                        try:
+                            coef_idx = new_fitted.predictor_names.index(ec)
+                            beta = new_fitted._coefficients[coef_idx]
+                            s2_in = sigma2_snap.loc[row_idx, ec]
+                            if np.isfinite(s2_in):
+                                sigma2_input += beta ** 2 * s2_in
+                        except (ValueError, IndexError):
+                            pass
             sigma2_total = sigma2_model + sigma2_input
 
             if sigma2_total >= old_sigma2 * 0.95:
@@ -3202,10 +3396,17 @@ class ModelBankImputer:
     #  Phase 5: trajectory features and representative models                #
     # --------------------------------------------------------------------- #
     def _compute_trajectory_features(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
-        """Compute σ²-based trajectory features: mean/max normalized σ per row."""
-        traj_mean = pd.Series(0.0, index=X_df.index, dtype=float)
-        traj_max = pd.Series(0.0, index=X_df.index, dtype=float)
+        """Compute trajectory features: σ²-based + delta-to-SVD-anchor per row."""
+        traj_sigma_mean = pd.Series(0.0, index=X_df.index, dtype=float)
+        traj_sigma_max = pd.Series(0.0, index=X_df.index, dtype=float)
+        traj_anchor_mean = pd.Series(0.0, index=X_df.index, dtype=float)
+        traj_anchor_max = pd.Series(0.0, index=X_df.index, dtype=float)
         n_imputed = pd.Series(0.0, index=X_df.index, dtype=float)
+
+        # Pre-build anchor lookup if available
+        anchor_col_idx = {}
+        if self._svd_anchor is not None:
+            anchor_col_idx = {c: i for i, c in enumerate(self._svd_anchor_cols)}
 
         for col in cols_to_impute:
             missing_mask = self.original_missing_.get(col, pd.Series(False, index=X_df.index))
@@ -3214,23 +3415,39 @@ class ModelBankImputer:
             sd = self._col_sd.get(col, 1.0)
             if sd < 1e-10:
                 sd = 1.0
-            for row_idx in missing_mask[missing_mask].index:
-                s2 = self.sigma2_matrix_.loc[row_idx, col]
-                if np.isfinite(s2):
-                    normalized = np.sqrt(max(0, s2)) / sd
-                else:
-                    normalized = 1.0
-                n_imputed.loc[row_idx] += 1
-                traj_mean.loc[row_idx] += normalized
-                if normalized > traj_max.loc[row_idx]:
-                    traj_max.loc[row_idx] = normalized
+
+            miss_idx = missing_mask[missing_mask].index
+            n_imputed.loc[miss_idx] += 1
+
+            # σ²-based trajectory
+            s2_vals = self.sigma2_matrix_.loc[miss_idx, col].values
+            sigma_norm = np.where(
+                np.isfinite(s2_vals), np.sqrt(np.maximum(0, s2_vals)) / sd, 1.0
+            )
+            traj_sigma_mean.loc[miss_idx] += sigma_norm
+            traj_sigma_max.loc[miss_idx] = np.maximum(
+                traj_sigma_max.loc[miss_idx].values, sigma_norm
+            )
+
+            # Delta-to-anchor trajectory (if anchor available)
+            if col in anchor_col_idx:
+                j = anchor_col_idx[col]
+                row_positions = np.array([X_df.index.get_loc(idx) for idx in miss_idx])
+                imputed_vals = X_df.loc[miss_idx, col].values
+                anchor_vals = self._svd_anchor[row_positions, j]
+                delta_norm = np.abs(imputed_vals - anchor_vals) / sd
+                traj_anchor_mean.loc[miss_idx] += delta_norm
+                traj_anchor_max.loc[miss_idx] = np.maximum(
+                    traj_anchor_max.loc[miss_idx].values, delta_norm
+                )
 
         n_imputed_safe = n_imputed.clip(lower=1)
-        traj_mean = traj_mean / n_imputed_safe
+        traj_sigma_mean = traj_sigma_mean / n_imputed_safe
+        traj_anchor_mean = traj_anchor_mean / n_imputed_safe
 
         self.trajectory_features_ = pd.DataFrame({
-            '_traj_mean_delta': traj_mean,
-            '_traj_max_delta': traj_max,
+            '_traj_mean_delta': traj_sigma_mean,
+            '_traj_max_delta': traj_sigma_max,
             '_traj_n_imputed': n_imputed,
         }, index=X_df.index)
 

@@ -57,11 +57,10 @@ python3 preflight.py    # Validates API access for all untested models + judge m
 ./predict.sh             # Create venv, install deps, impute + predict Arena ELO
 python3 posthoc_suite.py # 12-chart post-hoc analysis
 
-# Use ModelBankImputer (per-cell predictor selection) instead of default:
+# ModelBankImputer is the default. To use the old SVD warm-start imputer:
 cd arena_predictor && python3 predict.py \
     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
-    --imputer_type model_bank \
-    --coherence_lambda 1.0
+    --imputer_type specialized
 ```
 
 ### Tests
@@ -91,7 +90,7 @@ cp .env.example .env             # Then edit with your API keys
 | `soothsayer_style/` | Writing style tendencies | `collect.py` (collect), `style_analysis.py` + `process_analysis.py`, `benchmark.py` (adapter) |
 | `scrapers/` | External benchmark scrapers | 12 grabbers (arena, livebench, aider, etc.) + `aa_models_grabber.py` |
 | `benchmark_combiner/` | Merge + clean all benchmarks | `combine.py`, `correlations.py`, `benchmarks/`, `mappings/` |
-| `arena_predictor/` | Impute + predict Arena ELO | `predict.py`, `column_imputer.py` (SpecializedColumnImputer + ModelBankImputer), `analysis_output/` |
+| `arena_predictor/` | Impute + predict Arena ELO | `predict.py`, `column_imputer.py` (ModelBankImputer default + SpecializedColumnImputer), `analysis_output/` |
 | `docs/` | Documentation | `ARCHITECTURE.md`, `DATA_DICTIONARY.md`, `FINDINGS.md` |
 | `tests/` | Test suite | `test_utils.py`, `test_config.py`, `test_trueskill_arena.py`, `test_model_bank_imputer.py` |
 

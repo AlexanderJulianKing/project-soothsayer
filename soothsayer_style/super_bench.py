@@ -41,7 +41,7 @@ BATTLE_PAIRS_CSV = RESULTS_DIR / "battle_pairs.csv"
 BENCH_PREFIX = "tone_"
 DEFAULT_JUDGE_NAME = "Grok 4.1 Fast"
 MAX_PARSE_ATTEMPTS = 3
-DEFAULT_BATTLES_TO_RUN = 200
+DEFAULT_BATTLES_TO_RUN = 125
 
 AXES = ["signal_density", "conversational_confidence"]
 

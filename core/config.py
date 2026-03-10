@@ -10,7 +10,7 @@ class BenchmarkConfig:
     max_workers: int = 10
     max_retries: int = 3
     retry_delay: float = 5.0
-    max_battles: int = 100
+    max_battles: int = 20
     draw_probability: float = 0.03
 
 

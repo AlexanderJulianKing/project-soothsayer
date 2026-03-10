@@ -17,7 +17,7 @@ bash collect_benchmarks.sh
 python3 ../scrapers/arena_ai_grabber.py
 # python3 ../scrapers/lmarena_grabber.py  # replaced by arena_ai_grabber.py
 # python3 ../scrapers/vectara_grabber.py
-#python3 ../scrapers/lechmazur_grabber.py
+# python3 ../scrapers/lechmazur_grabber.py
 python3 ../scrapers/livebench_grabber.py
 python3 ../scrapers/aa_models_grabber.py
 python3 ../scrapers/aa_evaluations_grabber.py

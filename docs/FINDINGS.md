@@ -1,5 +1,26 @@
 # Findings: Alt-Target Prediction & Model Coverage
 
+> **⚠️ DATA LEAKAGE DISCLOSURE (2026-03-09)**
+>
+> All RMSE numbers in this document prior to this date were inflated by a
+> `style_predicted_delta` leakage bug. `soothsayer_style/score.py` stored
+> in-sample ExtraTrees predictions (RMSE=0.00, r=1.000) instead of OOF
+> predictions. Since `style_predicted_delta ≈ lmarena_Score - lmsys_Score`,
+> the target model could shortcut to near-zero error on that feature.
+>
+> **Honest re-verified results (OOF RMSE):**
+> | Config | Leaked | Honest |
+> |--------|--------|--------|
+> | Specialized imputer | ~16.9 | 22.74 |
+> | ModelBank no coherence | ~16.4 | 22.89 |
+> | ModelBank + coherence (production) | ~15.2 | 22.17 |
+> | + Trajectory in target (best) | ~14.9 | 21.69 |
+>
+> Relative ordering is mostly preserved (coherence helps, trajectory helps,
+> ALT traj irrelevant). One reversal: ModelBank-no-coherence is now slightly
+> worse than Specialized — coherence is what makes ModelBank win.
+> All absolute RMSE numbers below should be read as ~6-7 points too optimistic.
+
 ## Summary
 
 Predicting LMArena (length-adjusted) scores from 74 benchmark features across 100 models. Best approach: PCA(10) → BayesianRidge, achieving RMSE/SD ≈ 0.345 (R² ≈ 0.88). This is near-ceiling for n=100 with benchmark-only features.
