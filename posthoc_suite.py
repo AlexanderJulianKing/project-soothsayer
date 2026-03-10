@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post-hoc analysis suite: 12 charts for benchmark/prediction diagnostics.
+"""Post-hoc analysis suite: 13 charts for benchmark/prediction diagnostics.
 
 Charts produced:
   1. Cost vs Performance + Pareto Frontier
@@ -14,6 +14,7 @@ Charts produced:
  10. Marginal Benchmark Value (incremental cluster contribution)
  11. Capability Archetype Map (PCA scatter by vendor)
  12. Token Productivity (tokens vs performance)
+ 13. Capability Over Time (release date vs performance)
 
 All outputs land in  analysis_output/posthoc_suite/run_YYYYMMDD_HHMMSS/
 """
@@ -440,6 +441,56 @@ def plot_arena_residuals(df_predictions, df_combined, run_dir):
     fig.savefig(run_dir / "arena_residuals.png", dpi=300)
     plt.close(fig)
     print(f"  Saved arena_residuals.png ({len(df)} models)")
+
+
+def plot_arena_residuals_oof(df_oof, df_combined, run_dir):
+    """Chart 2b: Arena residuals using out-of-fold predictions."""
+    print("\n--- Chart 2b: Arena Residuals (OOF) ---")
+
+    if df_oof is None or df_oof.empty or len(df_oof) < 5:
+        print("  Skipped – OOF predictions not available")
+        return
+
+    df = df_oof.dropna(subset=["actual_score", "oof_predicted_score"]).copy()
+    df["residual"] = df["actual_score"] - df["oof_predicted_score"]
+    df = df.sort_values("residual")
+
+    # Add source
+    df_source = build_source_map(df_combined)
+    df = df.merge(df_source, on="model_name", how="left")
+    df["openbench_Source"] = df["openbench_Source"].fillna("Unknown")
+
+    sources = df["openbench_Source"].unique().tolist()
+    s2c, _ = source_styles(sources)
+
+    df.to_csv(run_dir / "arena_residuals_oof.csv", index=False)
+
+    fig, ax = plt.subplots(figsize=(14, max(10, len(df) * 0.22)))
+    colors = [s2c[s] for s in df["openbench_Source"]]
+    ax.barh(range(len(df)), df["residual"].values, color=colors, edgecolor="white", linewidth=0.3)
+    ax.set_yticks(range(len(df)))
+    ax.set_yticklabels(df["model_name"].values, fontsize=7)
+    ax.axvline(0, color="black", linewidth=1, linestyle="--", alpha=0.7)
+
+    # Label top/bottom 5
+    for idx in list(range(5)) + list(range(len(df) - 5, len(df))):
+        if 0 <= idx < len(df):
+            val = df["residual"].iloc[idx]
+            ha = "left" if val >= 0 else "right"
+            offset = 0.5 if val >= 0 else -0.5
+            ax.text(val + offset, idx, f"{val:+.1f}", va="center", ha=ha, fontsize=7, fontweight="bold")
+
+    handles = [Line2D([0], [0], marker="s", linestyle="", color=s2c[s],
+                      label=s, markersize=8) for s in sorted(set(df["openbench_Source"]))]
+    ax.legend(handles=handles, title="Vendor", frameon=False, loc="lower right", fontsize=9)
+
+    ax.set_xlabel("Residual (Actual − OOF Predicted Arena Score)", fontsize=12)
+    ax.set_title("Arena Score vs Benchmark Prediction (Out-of-Fold)", fontsize=16)
+    ax.grid(True, axis="x", linestyle=":", linewidth=0.5, alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(run_dir / "arena_residuals_oof.png", dpi=300)
+    plt.close(fig)
+    print(f"  Saved arena_residuals_oof.png ({len(df)} models)")
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1474,6 +1525,146 @@ def plot_token_productivity(df_scores, df_clean, df_predictions, run_dir):
 
 
 # ──────────────────────────────────────────────────────────────────
+# Chart 13: Capability Over Time
+# ──────────────────────────────────────────────────────────────────
+
+RELEASE_DATES_FILE = "../benchmark_combiner/benchmarks/openbench_release_dates.csv"
+
+
+def plot_capability_over_time(df_scores, df_clean, df_predictions, df_combined, run_dir):
+    print("\n--- Chart 13: Capability Over Time ---")
+
+    # Load release dates
+    if not os.path.exists(RELEASE_DATES_FILE):
+        print(f"  WARNING: {RELEASE_DATES_FILE} not found, skipping.")
+        return
+
+    df_rd = pd.read_csv(RELEASE_DATES_FILE)
+    df_rd["Release_Date"] = pd.to_datetime(df_rd["Release_Date"], errors="coerce")
+    df_rd = df_rd.dropna(subset=["Release_Date"])
+    df_rd = df_rd.rename(columns={"Model": "model_name"})
+    df_rd["model_name"] = df_rd["model_name"].str.strip()
+
+    # Build plot data
+    df = df_rd[["model_name", "Release_Date"]].copy()
+
+    # Merge factor1 score
+    if df_scores is not None and "factor1_score" in df_scores.columns:
+        df = df.merge(df_scores[["model_name", "factor1_score"]], on="model_name", how="left")
+    else:
+        df["factor1_score"] = np.nan
+
+    # Merge actual arena score
+    if "actual_score" in df_predictions.columns:
+        actual_map = df_predictions[["model_name", "actual_score"]].dropna(subset=["actual_score"])
+        df = df.merge(actual_map, on="model_name", how="left")
+    else:
+        df["actual_score"] = np.nan
+
+    # Merge source
+    df_source = build_source_map(df_combined)
+    df = df.merge(df_source, on="model_name", how="left")
+    df["openbench_Source"] = df["openbench_Source"].fillna("Unknown")
+
+    # Merge reasoning flag
+    if "openbench_Reasoning" in df_clean.columns:
+        reason_map = df_clean[["model_name", "openbench_Reasoning"]].drop_duplicates("model_name")
+        df = df.merge(reason_map, on="model_name", how="left")
+        df["reasoning_label"] = df["openbench_Reasoning"].map(
+            {1.0: "Reasoning", 0.0: "Non-Reasoning"}
+        ).fillna("Unknown")
+    else:
+        df["reasoning_label"] = "Unknown"
+
+    df.to_csv(run_dir / "capability_over_time.csv", index=False)
+
+    has_f1 = df["factor1_score"].notna().sum() > 5
+    has_arena = df["actual_score"].notna().sum() > 5
+    n_panels = int(has_f1) + int(has_arena)
+    if n_panels == 0:
+        print("  WARNING: No valid y-axis data, skipping.")
+        return
+
+    fig, axes = plt.subplots(1, n_panels, figsize=(14 * n_panels, 9))
+    if n_panels == 1:
+        axes = [axes]
+
+    sources = sorted(df["openbench_Source"].unique().tolist())
+    s2c, s2m = source_styles(sources)
+
+    def _plot_time_panel(ax, y_col, y_label, data):
+        data = data.dropna(subset=[y_col]).copy()
+        if len(data) < 3:
+            return
+
+        texts = []
+        for src in sources:
+            sub = data[data["openbench_Source"] == src]
+            if sub.empty:
+                continue
+            ax.scatter(sub["Release_Date"], sub[y_col],
+                       marker=s2m[src], c=s2c[src], label=src,
+                       alpha=0.7, s=60, edgecolors="white", linewidths=0.5, zorder=3)
+
+        # LOWESS trendline (all data)
+        x_num = (data["Release_Date"] - data["Release_Date"].min()).dt.days.values.astype(float)
+        y_vals = data[y_col].values.astype(float)
+        if len(data) >= 8:
+            sorted_idx = np.argsort(x_num)
+            smooth = lowess(y_vals[sorted_idx], x_num[sorted_idx], frac=0.4, return_sorted=True)
+            smooth_dates = data["Release_Date"].min() + pd.to_timedelta(smooth[:, 0], unit="D")
+            ax.plot(smooth_dates, smooth[:, 1], "-", color="#333333",
+                    linewidth=2.5, alpha=0.7, zorder=2, label="LOWESS trend")
+
+        # Label top-5 and bottom-3 by y-value for context
+        top = data.nlargest(5, y_col)
+        bottom = data.nsmallest(3, y_col)
+        for _, r in pd.concat([top, bottom]).drop_duplicates("model_name").iterrows():
+            ann = ax.annotate(
+                r["model_name"], xy=(r["Release_Date"], r[y_col]),
+                xytext=(8, 6), textcoords="offset points",
+                fontsize=7, alpha=0.7,
+                bbox={**LABEL_BBOX, "pad": 0.15},
+                arrowprops=dict(arrowstyle="-", lw=0.4, color="gray", alpha=0.4),
+            )
+            texts.append(ann)
+
+        if texts:
+            adjust_text(texts, only_move={"text": "xy"}, expand_text=(1.2, 1.2),
+                        force_text=0.5, force_static=0.3)
+
+        ax.set_xlabel("Release Date", fontsize=12)
+        ax.set_ylabel(y_label, fontsize=12)
+        ax.tick_params(axis="x", rotation=30)
+        handles = [Line2D([0], [0], marker=s2m[s], linestyle="", color=s2c[s],
+                          label=s, markersize=8) for s in sources if s in data["openbench_Source"].values]
+        handles.append(Line2D([0], [0], color="#333333", linewidth=2.5, alpha=0.7, label="LOWESS trend"))
+        ax.legend(handles=handles, fontsize=8, ncol=2, loc="lower right", frameon=False)
+        ax.grid(True, linestyle=":", alpha=0.4)
+
+    panel_idx = 0
+    if has_f1:
+        ax = axes[panel_idx]
+        _plot_time_panel(ax, "factor1_score", "Overall Performance (Factor 1)", df)
+        ax.set_title("Benchmark Performance Over Time", fontsize=14)
+        panel_idx += 1
+
+    if has_arena:
+        ax = axes[panel_idx]
+        _plot_time_panel(ax, "actual_score", "Arena ELO Score", df)
+        ax.set_title("Arena ELO Over Time", fontsize=14)
+        panel_idx += 1
+
+    fig.suptitle("Model Capability Over Time (by Release Date)", fontsize=16, y=1.02)
+    fig.tight_layout()
+    fig.savefig(run_dir / "capability_over_time.png", dpi=300, bbox_inches="tight")
+    fig.savefig(run_dir / "capability_over_time.svg", bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved capability_over_time.png + .svg ({df['factor1_score'].notna().sum()} benchmark, "
+          f"{df['actual_score'].notna().sum()} arena)")
+
+
+# ──────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────
 
@@ -1494,6 +1685,9 @@ def main():
 
     # Chart 2
     plot_arena_residuals(df_predictions, df_combined, run_dir)
+
+    # Chart 2b
+    plot_arena_residuals_oof(df_oof, df_combined, run_dir)
 
     # Chart 3
     scores_df, loadings_df, factor_names = extract_factors(df_clean, df_imputed, n_factors=4)
@@ -1528,6 +1722,9 @@ def main():
 
     # Chart 12
     plot_token_productivity(df_scores, df_clean, df_predictions, run_dir)
+
+    # Chart 13
+    plot_capability_over_time(df_scores, df_clean, df_predictions, df_combined, run_dir)
 
     # Summary
     outputs = sorted(run_dir.glob("*"))

@@ -151,6 +151,33 @@ DENSE_THRESHOLD = 0.508  # original threshold for dense-only CV evaluation
 COMPLETENESS_WEIGHT_POWER = 0  # 0 = disabled (all weights 1.0); 2 = quadratic weighting
 
 
+def _perturb_imputed_matrix(
+    imputed_df: pd.DataFrame,
+    sigma2_matrix: pd.DataFrame,
+    feature_cols: list,
+    seed: int,
+) -> pd.DataFrame:
+    """Sample a perturbed imputation by adding N(0, σ) noise to imputed cells.
+
+    Only cells that were originally missing (σ² > 0 and finite) get perturbed.
+    Observed cells (σ² == 0) are left unchanged.
+    """
+    rng = np.random.RandomState(seed)
+    perturbed = imputed_df.copy()
+    for col in feature_cols:
+        if col not in sigma2_matrix.columns:
+            continue
+        s2 = sigma2_matrix[col].values
+        mask = np.isfinite(s2) & (s2 > 0)
+        if not mask.any():
+            continue
+        noise = rng.normal(0, np.sqrt(s2[mask]))
+        perturbed.loc[perturbed.index[mask], col] = (
+            perturbed.loc[perturbed.index[mask], col].values + noise
+        )
+    return perturbed
+
+
 PARALLELISM_CFG = {
     "max_workers": None,
     "cv_n_jobs": 1,
@@ -904,6 +931,7 @@ ALT_PCA_N_COMPONENTS = 10  # PCA(10)->BR; 10 slightly outperforms 12 in OOF CV (
 # Selected at runtime by _greedy_select_alt_interactions() (with caching).
 ALT_POST_PCA_INTERACTIONS: Optional[List[Tuple[str, str]]] = None  # Set by greedy search at runtime
 
+
 # kNN residual smoothing: corrects base predictions using cross-fitted OOF
 # residuals from nearest neighbors.  Captures local structure the global
 # linear model misses (e.g., model families that cluster in benchmark space).
@@ -1562,14 +1590,61 @@ def _fit_alt_model_on_rows(
         pc_names = [f"PC{i+1}" for i in range(n_pca)]
         combined_names = pc_names + pc_nl_names + svd_direct_names + int_names
 
-        # 4. Fit plain BayesianRidge on the combined matrix
-        br = BayesianRidge(compute_score=False)
+        # 4. Fit regressor on the combined PCA+interaction matrix
         y_fit = alt_numeric.loc[train_known_mask].to_numpy()
         fit_kwargs = {}
         if sample_weight is not None:
             w_fit = sample_weight[train_known_mask.values] if hasattr(train_known_mask, 'values') else sample_weight[train_known_mask]
             fit_kwargs["sample_weight"] = w_fit
-        br.fit(X_train_combined, y_fit, **fit_kwargs)
+
+        regressor_type = ALT_REGRESSOR_NAME
+
+        if regressor_type == "lgbm":
+            import lightgbm as _lgb
+            br = _lgb.LGBMRegressor(
+                n_estimators=300, learning_rate=0.05, max_depth=3,
+                num_leaves=8, min_child_samples=10, subsample=0.8,
+                colsample_bytree=0.8, reg_alpha=1.0, reg_lambda=1.0,
+                n_jobs=1, random_state=42, verbosity=-1,
+            )
+            br.fit(X_train_combined, y_fit, **fit_kwargs)
+        elif regressor_type == "ridge":
+            br = RidgeCV(alphas=np.logspace(-2, 4, 50), cv=5)
+            br.fit(X_train_combined, y_fit, **({k: v for k, v in fit_kwargs.items() if k == "sample_weight"}))
+        elif regressor_type == "stack":
+            # Stacked ensemble: BayesianRidge + LightGBM + Ridge → Ridge meta-learner
+            from sklearn.model_selection import cross_val_predict as _cvp
+            _br = BayesianRidge(compute_score=False)
+            _br.fit(X_train_combined, y_fit, **fit_kwargs)
+            import lightgbm as _lgb
+            _lgbm = _lgb.LGBMRegressor(
+                n_estimators=300, learning_rate=0.05, max_depth=3,
+                num_leaves=8, min_child_samples=10, subsample=0.8,
+                colsample_bytree=0.8, reg_alpha=1.0, reg_lambda=1.0,
+                n_jobs=1, random_state=42, verbosity=-1,
+            )
+            _lgbm.fit(X_train_combined, y_fit, **fit_kwargs)
+            _ridge = RidgeCV(alphas=np.logspace(-2, 4, 50), cv=5)
+            _ridge.fit(X_train_combined, y_fit, **({k: v for k, v in fit_kwargs.items() if k == "sample_weight"}))
+            # OOF predictions for meta-learner training
+            _kf = KFold(n_splits=5, shuffle=True, random_state=42)
+            oof_br = _cvp(_br.__class__(compute_score=False), X_train_combined, y_fit, cv=_kf)
+            oof_lgbm = _cvp(_lgbm.__class__(**_lgbm.get_params()), X_train_combined, y_fit, cv=_kf)
+            oof_ridge = _cvp(RidgeCV(alphas=np.logspace(-2, 4, 50), cv=5), X_train_combined, y_fit, cv=_kf)
+            meta_X = np.column_stack([oof_br, oof_lgbm, oof_ridge])
+            meta_model = Ridge(alpha=1.0)
+            meta_model.fit(meta_X, y_fit)
+            # Store sub-models for prediction
+            br = type('StackedModel', (), {
+                'sub_models': [_br, _lgbm, _ridge],
+                'meta': meta_model,
+                'predict': lambda self, X, **kw: self.meta.predict(
+                    np.column_stack([m.predict(X) for m in self.sub_models])
+                ),
+            })()
+        else:  # "bayes" (default)
+            br = BayesianRidge(compute_score=False)
+            br.fit(X_train_combined, y_fit, **fit_kwargs)
 
         # 5. Predict for all rows
         X_all_scaled = pca_scaler.transform(X_no_alt_all[selected].values)
@@ -1603,7 +1678,13 @@ def _fit_alt_model_on_rows(
         if int_all.shape[1]:
             blocks_all.append(int_all)
         X_all_combined = np.hstack(blocks_all)
-        pred_mu, pred_std = br.predict(X_all_combined, return_std=True)
+
+        # Predict — handle models that don't support return_std
+        if hasattr(br, 'predict') and regressor_type == "bayes":
+            pred_mu, pred_std = br.predict(X_all_combined, return_std=True)
+        else:
+            pred_mu = br.predict(X_all_combined)
+            pred_std = np.full_like(pred_mu, np.nan)
         pred_all = pd.Series(pred_mu, index=X_no_alt_all.index, dtype="float64")
         pred_std_all = pd.Series(pred_std, index=X_no_alt_all.index, dtype="float64")
 
@@ -2147,6 +2228,12 @@ def run_imputation(
     imputer_type: str = "specialized",
     confidence_threshold: float = 0.4,
     coherence_lambda: float = 1.0,
+    coherence_shape: str = "linear",
+    coherence_gate: str = "fixed",
+    iterative_coherence: bool = False,
+    use_svd_predictors: bool = False,
+    n_expansion_passes: int = 1,
+    max_confident_extras: int = 1,
 ):
     """Run the column imputer on benchmark data.
 
@@ -2214,6 +2301,12 @@ def run_imputation(
             skew_threshold=2.0,
             confidence_threshold=confidence_threshold,
             coherence_lambda=coherence_lambda,
+            coherence_shape=coherence_shape,
+            coherence_gate=coherence_gate,
+            iterative_coherence=iterative_coherence,
+            use_svd_predictors=use_svd_predictors,
+            n_expansion_passes=n_expansion_passes,
+            max_confident_extras=max_confident_extras,
         )
     else:
         imputer = SpecializedColumnImputer(
@@ -4377,14 +4470,25 @@ def main():
                     help="Max features for GP models (mRMR selection). Default 28.")
     ap.add_argument("--imputer_n_jobs", type=int, default=-1,
                     help="Parallel workers for the SpecializedColumnImputer (-1 uses all available cores).")
-    ap.add_argument("--imputer_type", type=str, default="specialized",
+    ap.add_argument("--imputer_type", type=str, default="model_bank",
                     choices=["specialized", "model_bank"],
-                    help="Imputer algorithm: 'specialized' (default, SVD warm-start) or 'model_bank' (per-cell predictor selection).")
+                    help="Imputer algorithm: 'model_bank' (default, per-cell predictor selection) or 'specialized' (SVD warm-start).")
     ap.add_argument("--confidence_threshold", type=float, default=0.4,
                     help="For model_bank imputer: normalized σ/sd threshold for confident imputations in pass 2.")
     ap.add_argument("--coherence_lambda", type=float, default=1.0,
                     help="For model_bank imputer: shrinkage strength for low-rank coherence projection. "
                          "Higher = less pulling toward SVD. 0 = disable coherence.")
+    ap.add_argument("--coherence_shape", type=str, default="exp",
+                    choices=["linear", "squared", "power3", "exp", "step"],
+                    help="Shrinkage weight shape: linear=τ/(τ+λ), squared=τ²/(τ²+λ), "
+                         "power3=τ³/(τ³+λ), exp=1-exp(-τ/λ), step=hard threshold.")
+    ap.add_argument("--coherence_gate", type=str, default="fixed",
+                    choices=["fixed", "row_adaptive", "learned"],
+                    help="Coherence gate type: fixed (shape-based), row_adaptive (λ scaled by "
+                         "row completeness²), learned (Ridge-trained per-cell gate).")
+    ap.add_argument("--n_imputations", type=int, default=1,
+                    help="Number of multiple imputations. K>1 samples from N(μ,σ²) per cell, "
+                         "runs downstream pipeline K times, averages OOF predictions.")
     ap.add_argument("--tier_quantiles", type=str, default="0.33,0.67",
                     help="Comma-separated quantiles that define easy/medium/hard imputation tiers.")
     ap.add_argument("--selector_n_jobs", type=int, default=-2,
@@ -4422,6 +4526,8 @@ def main():
                     help="Use ALT-centric interactions (ALT*feature) ranked by residual correlation instead of variance-based poly.")
     ap.add_argument("--alt_centric_k", type=int, default=6,
                     help="Number of ALT*feature interactions to keep when using alt-centric poly.")
+    ap.add_argument("--alt_regressor", choices=["bayes", "lgbm", "ridge", "stack"], default="bayes",
+                help="Regressor for ALT model: bayes (BayesianRidge), lgbm (LightGBM), ridge, stack (BR+LGBM+Ridge).")
     ap.add_argument("--alt_feature_selector", choices=["none", "lgbm", "xgb"], default="lgbm",
                 help="Tree-based selector for the ALT model (per-fold).")
     ap.add_argument("--alt_top_k_features", default="auto",
@@ -4438,6 +4544,13 @@ def main():
                     help="Maximum number of interaction pairs to select in greedy forward search.")
     ap.add_argument("--alt_interaction_min_improvement", type=float, default=0.05,
                     help="Minimum RMSE improvement to continue adding interaction pairs.")
+    ap.add_argument("--alt_n_runs", type=int, default=15,
+                    help="Number of independent greedy runs for consensus pair search (default 15).")
+    ap.add_argument("--alt_consensus_min", type=int, default=0,
+                    help="Minimum appearances across runs to keep a pair (0 = auto: ceil(n_runs/2)).")
+    ap.add_argument("--freeze_alt_pairs", type=str, default=None,
+                    help="Path to JSON file with frozen ALT interaction pairs. "
+                         "Skips consensus search entirely. Use for stable imputer tuning.")
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Margin for 'top_by_margin_prob' column (default 20 points).")
     ap.add_argument("--group_cv", action="store_true",
@@ -4454,6 +4567,16 @@ def main():
     ap.add_argument("--no_traj_in_target", dest="traj_in_target", action="store_false",
                     help="Exclude trajectory features from target model.")
     ap.set_defaults(traj_in_target=True)
+    ap.add_argument("--sigma2_weights", action="store_true",
+                    help="For model_bank imputer: use σ²-based sample weights instead of completeness².")
+    ap.add_argument("--iterative_coherence", action="store_true",
+                    help="For model_bank imputer: run pass1→coherence→pass2→coherence instead of pass1→pass2→coherence.")
+    ap.add_argument("--use_svd_predictors", action="store_true",
+                    help="For model_bank imputer: add SVD row factors as candidate predictors in per-cell models.")
+    ap.add_argument("--n_expansion_passes", type=int, default=1,
+                    help="For model_bank imputer: number of uncertainty-gated expansion passes (default 1).")
+    ap.add_argument("--max_confident_extras", type=int, default=1,
+                    help="For model_bank imputer: max confident imputed predictors per cell in expansion (default 1).")
     ap.add_argument("--exclude_models", type=str, default="",
                     help="Comma-separated model names to exclude from the dataset before imputation/prediction.")
     args = ap.parse_args()
@@ -4504,7 +4627,7 @@ def main():
     }
 
     global ALT_REGRESSOR_NAME
-    ALT_REGRESSOR_NAME = "bayes"
+    ALT_REGRESSOR_NAME = getattr(args, 'alt_regressor', 'bayes')
 
     if not os.path.exists(args.csv_path):
         print(f"ERROR: CSV not found at {args.csv_path}", file=sys.stderr)
@@ -4578,14 +4701,17 @@ def main():
     missing_count_by_col = df[feature_cols].isna().sum().to_dict()
 
     # Compute completeness-based sample weights for sparse model handling
+    # model_bank imputer benefits from weighting since per-cell imputation
+    # produces noisier features for rows with many imputed values
     row_missing_ratio = df[feature_cols].isna().mean(axis=1).values
     completeness = 1.0 - row_missing_ratio
-    sample_weights_all = completeness ** COMPLETENESS_WEIGHT_POWER  # quadratic weighting
+    weight_power = 2 if args.imputer_type == "model_bank" else COMPLETENESS_WEIGHT_POWER
+    sample_weights_all = completeness ** weight_power
     dense_mask_all = row_missing_ratio <= DENSE_THRESHOLD
     n_dense = int(dense_mask_all.sum())
     n_sparse = int((~dense_mask_all).sum())
     print(f"Completeness weighting: {n_dense} dense (≤{DENSE_THRESHOLD:.0%} missing), "
-          f"{n_sparse} sparse, power={COMPLETENESS_WEIGHT_POWER}")
+          f"{n_sparse} sparse, power={weight_power}")
 
     if TARGET not in numeric_cols:
         raise ValueError(f"CSV must contain numeric target column '{TARGET}'. Found numeric: {numeric_cols}")
@@ -4610,11 +4736,17 @@ def main():
     tier_key = "none" if tier_quantiles is None else "_".join(f"{q:.3f}" for q in tier_quantiles)
     if args.imputer_type == "model_bank":
         coh_lam = getattr(args, 'coherence_lambda', 1.0)
+        coh_shape = getattr(args, 'coherence_shape', 'linear')
+        coh_gate = getattr(args, 'coherence_gate', 'fixed')
+        iter_coh = int(getattr(args, 'iterative_coherence', False))
+        svd_pred = int(getattr(args, 'use_svd_predictors', False))
+        n_exp = getattr(args, 'n_expansion_passes', 1)
+        m_ext = getattr(args, 'max_confident_extras', 1)
         imp_key = (
             f"imputed_modelbank_{csv_hash}_alpha{args.alpha:.6f}_"
             f"skmax{args.selector_k_max}_conf{args.confidence_threshold:.2f}_"
-            f"coh{coh_lam:.2f}_"
-            f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt2.0.csv"
+            f"coh{coh_lam:.2f}{coh_shape[0]}_g{coh_gate[0]}_ic{iter_coh}_svdp{svd_pred}_exp{n_exp}x{m_ext}_"
+            f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt3.0.csv"
         )
     else:
         imp_key = (
@@ -4625,13 +4757,38 @@ def main():
             f"tolm{args.tolerance_multiplier:.2f}_tier{tier_key}_"
             f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt2.0.csv"
         )
-    cache_csv = os.path.join(cache_dir, imp_key)
+    cache_pkl = os.path.join(cache_dir, imp_key.replace(".csv", ".pkl"))
     cache_meta = os.path.join(cache_dir, imp_key + ".meta.json")
+    # Legacy CSV cache path (for backward compat — try pkl first, fall back to csv)
+    cache_csv = os.path.join(cache_dir, imp_key)
 
     # ---- NEW: reuse from cache if available ----
     imputed_path = os.path.join(out_dir, "imputed_full.csv")
-    if os.path.exists(cache_csv):
+    _cache_hit = False
+    if os.path.exists(cache_pkl):
+        import pickle as _pkl
+        with open(cache_pkl, "rb") as fh:
+            _cached = _pkl.load(fh)
+        imputed_df = _cached["imputed_df"]
+        class _CachedImputer:
+            pass
+        imputer = _CachedImputer()
+        imputer.svd_row_factors_ = _cached.get("svd_row_factors")
+        imputer.trajectory_features_ = _cached.get("trajectory_features")
+        imputer.sigma2_matrix_ = _cached.get("sigma2_matrix")
+        _cache_hit = True
+    elif os.path.exists(cache_csv):
         imputed_df = pd.read_csv(cache_csv)
+        class _CachedImputer:
+            pass
+        svd_cache = cache_csv + ".svd_factors.csv"
+        traj_cache = cache_csv + ".trajectory.csv"
+        imputer = _CachedImputer()
+        imputer.svd_row_factors_ = pd.read_csv(svd_cache, index_col=0) if os.path.exists(svd_cache) else None
+        imputer.trajectory_features_ = pd.read_csv(traj_cache, index_col=0) if os.path.exists(traj_cache) else None
+        _cache_hit = True
+
+    if _cache_hit:
         if os.path.exists(cache_meta):
             try:
                 with open(cache_meta, "r", encoding="utf-8") as fh:
@@ -4651,15 +4808,6 @@ def main():
                     }
             except Exception as exc:
                 print(f"WARNING: failed to load imputer metadata cache ({exc}).", file=sys.stderr)
-        # Restore SVD row factors and trajectory features from cache
-        class _CachedImputer:
-            pass
-        svd_cache = cache_csv + ".svd_factors.csv"
-        traj_cache = cache_csv + ".trajectory.csv"
-        if os.path.exists(svd_cache) or os.path.exists(traj_cache):
-            imputer = _CachedImputer()
-            imputer.svd_row_factors_ = pd.read_csv(svd_cache, index_col=0) if os.path.exists(svd_cache) else None
-            imputer.trajectory_features_ = pd.read_csv(traj_cache, index_col=0) if os.path.exists(traj_cache) else None
         already_done = True
         load_end = time.time()
         print(f"load data: {mmss(load_end - start)}")
@@ -4691,8 +4839,23 @@ def main():
             imputer_type=args.imputer_type,
             confidence_threshold=args.confidence_threshold,
             coherence_lambda=getattr(args, 'coherence_lambda', 1.0),
+            coherence_shape=getattr(args, 'coherence_shape', 'linear'),
+            coherence_gate=getattr(args, 'coherence_gate', 'fixed'),
+            iterative_coherence=getattr(args, 'iterative_coherence', False),
+            use_svd_predictors=getattr(args, 'use_svd_predictors', False),
+            n_expansion_passes=getattr(args, 'n_expansion_passes', 1),
+            max_confident_extras=getattr(args, 'max_confident_extras', 1),
         )
-        imputed_df.to_csv(cache_csv, index=False)
+        # Save imputation cache as pickle for exact float round-trip
+        import pickle as _pkl
+        _cache_payload_pkl = {
+            "imputed_df": imputed_df,
+            "svd_row_factors": getattr(imputer, 'svd_row_factors_', None),
+            "trajectory_features": getattr(imputer, 'trajectory_features_', None),
+            "sigma2_matrix": getattr(imputer, 'sigma2_matrix_', None),
+        }
+        with open(cache_pkl, "wb") as fh:
+            _pkl.dump(_cache_payload_pkl, fh, protocol=4)
         imputer_predictors_map = {
             col: sorted(set(deps))
             for col, deps in getattr(imputer, "predictors_map_", {}).items()
@@ -4707,15 +4870,42 @@ def main():
                 "predictors_map": imputer_predictors_map,
                 "important_predictors": {col: sorted(deps) for col, deps in imputer_important_predictors.items()},
             }, fh, indent=2)
-        # Cache SVD row factors and trajectory features
-        if hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
-            imputer.svd_row_factors_.to_csv(cache_csv + ".svd_factors.csv", index=True)
-        if hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
-            imputer.trajectory_features_.to_csv(cache_csv + ".trajectory.csv", index=True)
         already_done = False
 
     # Always write the copy for this run
     imputed_df.to_csv(imputed_path, index=False)
+    # Recompute sample weights using σ² matrix if available (model_bank imputer)
+    sigma2_mat = getattr(imputer, 'sigma2_matrix_', None)
+    if sigma2_mat is not None and args.imputer_type == "model_bank" and getattr(args, 'sigma2_weights', False):
+        # Per-row mean normalized σ: mean(sqrt(σ²_cell) / sd_col) across imputed cells
+        row_mean_sigma = pd.Series(0.0, index=df.index, dtype=float)
+        n_imputed_per_row = pd.Series(0.0, index=df.index, dtype=float)
+        for col in feature_cols:
+            if col not in sigma2_mat.columns:
+                continue
+            s2 = sigma2_mat[col].values
+            imputed_mask = s2 > 0  # σ²=0 means observed
+            if not imputed_mask.any():
+                continue
+            sd_col = float(sigma2_mat[col][~imputed_mask].std()) if (~imputed_mask).sum() > 1 else 1.0
+            if sd_col < 1e-10:
+                sd_col = 1.0
+            sigma_norm = np.where(imputed_mask & np.isfinite(s2),
+                                  np.sqrt(np.maximum(0, s2)) / sd_col, 0.0)
+            row_mean_sigma += sigma_norm
+            n_imputed_per_row += imputed_mask.astype(float)
+        n_safe = n_imputed_per_row.clip(lower=1)
+        row_mean_sigma = row_mean_sigma / n_safe
+        # Weight: exp(-mean_sigma / scale) — soft exponential decay
+        # Scale so the median imputed row gets weight ~0.7
+        median_sigma = float(np.median(row_mean_sigma[n_imputed_per_row > 0]))
+        scale = max(median_sigma / 0.357, 0.1)  # -ln(0.7)/median ≈ 0.357
+        sample_weights_all = np.exp(-row_mean_sigma.values / scale)
+        # Rows with no imputed cells get weight 1.0
+        sample_weights_all = np.where(n_imputed_per_row.values == 0, 1.0, sample_weights_all)
+        print(f"  σ²-weighted samples: mean_w={sample_weights_all.mean():.3f}, "
+              f"min_w={sample_weights_all.min():.3f}, max_w={sample_weights_all.max():.3f}")
+
     id_series = imputed_df[[ID_COL]] if ID_COL in imputed_df.columns else None
     impute_end = time.time()
     print(f"impute:    {mmss(impute_end - load_end)}")
@@ -4815,6 +5005,8 @@ def main():
     alt_result = None
     alt_feature_matrix: Optional[pd.DataFrame] = None
     if ALT_TARGET in df.columns:
+        print(f"ALT regressor: {ALT_REGRESSOR_NAME}")
+
         # --- Runtime greedy search for ALT interaction terms (with caching) ---
         global ALT_POST_PCA_INTERACTIONS
         alt_known_mask = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna()
@@ -4828,17 +5020,30 @@ def main():
             + y_for_search.values.tobytes()
             + str(SEED).encode()
             + str(alt_n_repeats).encode()
+            + str(getattr(args, 'alt_n_runs', 15)).encode()
+            + str(getattr(args, 'alt_consensus_min', 0)).encode()
         )
         search_hash = hashlib.sha256(search_hash_data).hexdigest()[:16]
         interaction_cache_path = os.path.join(cache_dir, f"alt_interactions_{search_hash}.json")
 
-        if os.path.exists(interaction_cache_path):
+        # Frozen pairs override: skip search entirely for stable imputer tuning
+        freeze_path = getattr(args, 'freeze_alt_pairs', None)
+        if freeze_path and os.path.exists(freeze_path):
+            with open(freeze_path, "r", encoding="utf-8") as fh:
+                frozen = json.load(fh)
+            ALT_POST_PCA_INTERACTIONS = [tuple(p) for p in frozen["pairs"]]
+            print(f"ALT interactions: FROZEN — loaded {len(ALT_POST_PCA_INTERACTIONS)} pairs from {freeze_path}")
+        elif os.path.exists(interaction_cache_path):
             with open(interaction_cache_path, "r", encoding="utf-8") as fh:
                 cached_int = json.load(fh)
             ALT_POST_PCA_INTERACTIONS = [tuple(p) for p in cached_int["pairs"]]
             print(f"ALT interactions: loaded {len(ALT_POST_PCA_INTERACTIONS)} cached pairs from cache")
         else:
             search_t0 = time.time()
+            alt_n_runs = getattr(args, 'alt_n_runs', 15)
+            alt_consensus_min = getattr(args, 'alt_consensus_min', 0)
+            if alt_consensus_min <= 0:
+                alt_consensus_min = (alt_n_runs + 1) // 2  # majority
             selected_pairs, search_log_df = _greedy_select_alt_interactions(
                 X_for_search,
                 y_for_search,
@@ -4849,6 +5054,8 @@ def main():
                 prescreen_top_k=args.alt_interaction_prescreen,
                 max_pairs=args.alt_interaction_max_pairs,
                 min_improvement=args.alt_interaction_min_improvement,
+                n_runs=alt_n_runs,
+                consensus_min=alt_consensus_min,
                 verbose=True,
                 n_jobs=PARALLELISM_CFG.get("selector_n_jobs", -1),
             )
@@ -5118,6 +5325,68 @@ def main():
     )
     cv_winner = eval_df.iloc[0]["model"]
     print(f"Model comparison: {model_summary} -> {cv_winner}")
+
+    # --- Multiple imputation: average OOF predictions across K perturbed matrices ---
+    n_imputations = getattr(args, 'n_imputations', 1)
+    sigma2_mat = getattr(imputer, 'sigma2_matrix_', None) if imputer is not None else None
+    if n_imputations > 1 and sigma2_mat is not None:
+        all_oof_preds = [oof_preds.copy()]
+        y_train = y_all[~y_missing_mask]
+        base_rmse = float(np.sqrt(np.nanmean((y_train - oof_preds) ** 2)))
+        print(f"Multiple imputation: K={n_imputations}, base RMSE={base_rmse:.2f}")
+
+        for k_imp in range(1, n_imputations):
+            # Perturb the imputed matrix
+            perturbed_df = _perturb_imputed_matrix(
+                imputed_df, sigma2_mat, feature_cols, seed=SEED + k_imp * 1000
+            )
+            # Rebuild safe_features from perturbed data
+            sf_k = perturbed_df[feature_cols].replace([np.inf, -np.inf], np.nan)
+            sf_k = sf_k.fillna(medians)
+            sf_k = sf_k.fillna(0.0)
+
+            # Add SVD row factors and trajectory features (same as base — not perturbed)
+            if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
+                for col in imputer.svd_row_factors_.columns:
+                    if col not in sf_k.columns:
+                        sf_k[col] = imputer.svd_row_factors_[col].values
+            if args.traj_in_target and imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
+                for col in imputer.trajectory_features_.columns:
+                    sf_k[col] = imputer.trajectory_features_[col].values
+
+            # Use same feature columns as base run
+            sf_k = sf_k.reindex(columns=target_base_features.columns, fill_value=0.0)
+            X_cv_k = sf_k.loc[~y_missing_mask].copy()
+
+            _, _, oof_k, _ = choose_best_model_with_alt(
+                [best_spec],  # only re-run winning model
+                X_cv_k,
+                y_train,
+                ALT_TARGET,
+                n_splits=args.selector_cv,
+                model_n_jobs=1,
+                cv_n_jobs=args.cv_n_jobs,
+                selector_cfg=TARGET_SELECTOR_CFG,
+                poly_cfg=poly_cfg,
+                splits=target_cv_splits,
+                cv_repeats=args.cv_repeats_outer,
+                seed=args.cv_seed,
+                oof_repeats=args.cv_repeats_inner,
+                sample_weight=weights_cv,
+                dense_mask=dense_cv,
+            )
+            all_oof_preds.append(oof_k)
+            k_rmse = float(np.sqrt(np.nanmean((y_train - oof_k) ** 2)))
+            print(f"  MI run {k_imp+1}/{n_imputations}: RMSE={k_rmse:.2f}")
+
+        # Average OOF predictions across all K runs
+        stacked = np.column_stack(all_oof_preds)
+        oof_preds = np.nanmean(stacked, axis=1)
+        mi_rmse = float(np.sqrt(np.nanmean((y_train - oof_preds) ** 2)))
+        mi_spread = float(np.std([
+            np.sqrt(np.nanmean((y_train - p) ** 2)) for p in all_oof_preds
+        ]))
+        print(f"  MI averaged RMSE: {mi_rmse:.2f} (spread: ±{mi_spread:.2f})")
 
     # Apply global target feature selection for final training/prediction
     ranking_df = None

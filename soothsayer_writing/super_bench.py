@@ -38,7 +38,7 @@ BATTLE_PAIRS_CSV = os.path.join(RESULTS_DIR, "battle_pairs.csv")
 SUPER_BENCH_PREFIX = "writing_"
 DEFAULT_JUDGE_NAME = "Grok 4 Fast"
 MAX_PARSE_ATTEMPTS = 3
-DEFAULT_BATTLES_TO_RUN = 20
+DEFAULT_BATTLES_TO_RUN = 125
 
 # Arena configuration
 ARENA_CONFIG = ArenaConfig(

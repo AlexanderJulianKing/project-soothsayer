@@ -1301,6 +1301,7 @@ def main(file_path):
             'openbench_Activated Parameters (Billion)',
             'openbench_Context Window (k)',
             'openbench_Organization',
+            'openbench_Release_Date',
             'openbench_Model_codename',
             'openbench_openbench_id',
             'openbench_AA-Omniscience Accuracy',

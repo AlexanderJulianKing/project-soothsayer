@@ -253,7 +253,24 @@ def get_llm_response(
                             if not content:
                                 last_exc = APIError(f"Malformed response ({mode}): missing choices[0].message.content")
                                 continue
-                            # print(content.strip())
+
+                            # Detect reasoning-token leakage: model was asked
+                            # to reason but returned 0 reasoning tokens, which
+                            # means the thinking ended up in the content field.
+                            reasoning_cfg = payload.get("reasoning", {})
+                            reasoning_expected = (
+                                reasoning_cfg
+                                and reasoning_cfg.get("enabled") is not False
+                                and reasoning_cfg.get("max_tokens") != 0
+                                and reasoning_cfg.get("effort") not in ("none", "minimal")
+                            )
+                            if reasoning_expected:
+                                raw_usage = data.get("usage", {})
+                                comp_details = (raw_usage.get("completion_tokens_details") or {})
+                                r_tokens = comp_details.get("reasoning_tokens", 0) or 0
+                                if r_tokens == 0:
+                                    last_exc = APIError(f"Reasoning leak: 0 reasoning tokens ({mode})")
+                                    continue
 
                             if not include_usage:
                                 return content.strip()

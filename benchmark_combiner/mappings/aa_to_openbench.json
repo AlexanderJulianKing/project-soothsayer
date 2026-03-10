@@ -487,5 +487,10 @@
   "Claude Sonnet 4.6 (Non-reasoning, Low Effort)": "",
   "Tiny Aya Global": "",
   "Mercury 2": "",
-  "Doubao Seed 2.0 lite (Reasoning)": ""
+  "Doubao Seed 2.0 lite (Reasoning)": "",
+  "Qwen3.5 35B A3B (Reasoning)": "",
+  "Qwen3.5 122B A10B (Reasoning)": "",
+  "Qwen3.5 27B (Reasoning)": "",
+  "GPT-5.3 Codex (xhigh)": "GPT-5.3 Codex",
+  "LFM2 24B A2B": ""
 }

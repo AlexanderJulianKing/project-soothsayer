@@ -24,7 +24,7 @@ from sklearn.linear_model import (
     Lasso, ElasticNet, ARDRegression, TheilSenRegressor, RANSACRegressor,
     LinearRegression, SGDRegressor,
 )
-from sklearn.model_selection import KFold, cross_val_score
+from sklearn.model_selection import KFold, LeaveOneOut, cross_val_score, cross_val_predict
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.decomposition import PCA
 from sklearn.covariance import LedoitWolf
@@ -218,6 +218,26 @@ def _build_column_table(agg):
         row = {'openbench_Model': model_name}
         for qid, score_sum in a['question_score_sum'].items():
             row[str(qid)] = score_sum
+
+        # Token-derived features
+        n_tok = max(a['count_with_token_info'], 1)
+        avg_reasoning = a['sum_reasoning_tokens'] / n_tok
+        avg_output = a['sum_output_tokens'] / n_tok
+
+        row['is_reasoner'] = 1.0 if avg_reasoning > 0 else 0.0
+        row['log_reasoning'] = float(np.log1p(avg_reasoning))
+
+        # std of output tokens: sqrt(E[X^2] - E[X]^2)
+        mean_sq = a['sum_sq_output_tokens'] / n_tok
+        variance = max(mean_sq - avg_output * avg_output, 0.0)
+        row['std_output_tokens'] = float(np.sqrt(variance))
+
+        # Targeted interactions
+        q10_score = a['question_score_sum'].get('10', 0.0)
+        row['q10_x_logr'] = q10_score * float(np.log1p(avg_reasoning))
+        total_score = sum(a['question_score_sum'].values())
+        row['total_score_sq'] = total_score * total_score
+
         rows.append(row)
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
@@ -288,8 +308,11 @@ def train_benchmark_model(column_table_df, target_col: str, label: str, excluded
     targets_df = targets_df.drop_duplicates(subset=['model_name'])
     targets_df = targets_df.set_index('model_name')
 
-    # Only use per-question columns 1-12 as predictors.
+    # Per-question columns 1-12 plus token-derived features as predictors.
     feature_cols = [str(i) for i in range(1, 13) if str(i) in feature_df_raw.columns]
+    for extra in ['is_reasoner', 'log_reasoning', 'std_output_tokens', 'q10_x_logr', 'total_score_sq']:
+        if extra in feature_df_raw.columns:
+            feature_cols.append(extra)
 
     if not feature_cols:
         print(
@@ -334,6 +357,7 @@ def train_benchmark_model(column_table_df, target_col: str, label: str, excluded
     candidate_pipelines = {
         'BayesianRidge': make_pipeline(StandardScaler(), BayesianRidge()),
         'Ridge': make_pipeline(StandardScaler(), Ridge(alpha=1.0)),
+        'Ridge_a10': make_pipeline(StandardScaler(), Ridge(alpha=10.0)),
         'Lasso': make_pipeline(StandardScaler(), Lasso(alpha=0.1, random_state=42, max_iter=2000)),
         'ElasticNet': make_pipeline(StandardScaler(), ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42, max_iter=2000)),
         'LinearRegression': make_pipeline(StandardScaler(), LinearRegression()),
@@ -407,7 +431,10 @@ def train_benchmark_model(column_table_df, target_col: str, label: str, excluded
 
     candidate_pipelines['DummyRegressor'] = baseline_pipeline
 
-    cv = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    if n_samples >= 30:
+        cv = LeaveOneOut()
+    else:
+        cv = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     def weighted_rmse(y_true, y_pred):
         # Slightly upweight higher-score samples so tail fit matters more.
         weights = 1.0 + (np.asarray(y_true, dtype=float) / 50.0)
@@ -480,6 +507,16 @@ def train_benchmark_model(column_table_df, target_col: str, label: str, excluded
         })
         return info
 
+    # Compute honest out-of-sample predictions via LOO before final refit
+    loo_predictions = {}
+    try:
+        loo_cv = LeaveOneOut()
+        loo_preds = cross_val_predict(best_pipeline, feature_df, target_series, cv=loo_cv)
+        for model_name, pred in zip(feature_df.index, loo_preds):
+            loo_predictions[model_name] = float(pred)
+    except Exception as exc:
+        print(f"Warning: LOO cross_val_predict failed: {exc}")
+
     # Fit the best candidate on the full dataset
     best_pipeline.fit(feature_df, target_series)
 
@@ -515,7 +552,8 @@ def train_benchmark_model(column_table_df, target_col: str, label: str, excluded
         'train_r_value': train_r_value,
         'coefficients': coef_report,
         'feature_importances': importance_report,
-        'label': label
+        'label': label,
+        'loo_predictions': loo_predictions
     })
 
     print(
@@ -567,6 +605,25 @@ def build_feature_vector(agg_entry, overall_accuracy):
         n = attempts.get(question_id, 1) or 1
         # Normalize to the 0-4 scale used in training data (N_RUNS=4)
         features[str(question_id)] = float(summed_score) * 4.0 / n
+
+    # Token-derived features (match _build_column_table)
+    n_tok = max(agg_entry.get('count_with_token_info', 1), 1)
+    avg_reasoning = agg_entry.get('sum_reasoning_tokens', 0) / n_tok
+    avg_output = agg_entry.get('sum_output_tokens', 0) / n_tok
+
+    features['is_reasoner'] = 1.0 if avg_reasoning > 0 else 0.0
+    features['log_reasoning'] = float(np.log1p(avg_reasoning))
+
+    mean_sq = agg_entry.get('sum_sq_output_tokens', 0) / n_tok
+    variance = max(mean_sq - avg_output * avg_output, 0.0)
+    features['std_output_tokens'] = float(np.sqrt(variance))
+
+    # Targeted interactions (match _build_column_table)
+    score_sums_raw = agg_entry.get('question_score_sum', {})
+    q10_score = score_sums_raw.get('10', 0.0)
+    features['q10_x_logr'] = q10_score * float(np.log1p(avg_reasoning))
+    total_score = sum(score_sums_raw.values())
+    features['total_score_sq'] = total_score * total_score
 
     return features
 
@@ -832,6 +889,7 @@ def calculate_scores(input_filename):
         'sum_output_tokens': 0,
         'sum_reasoning_tokens': 0,
         'sum_answer_tokens': 0,
+        'sum_sq_output_tokens': 0,
         'count_with_token_info': 0,
         # weighted accuracy tracking
         'weighted_score_sum': 0.0,
@@ -894,6 +952,7 @@ def calculate_scores(input_filename):
 
             if col_output:
                 a['sum_output_tokens'] += output_tokens
+                a['sum_sq_output_tokens'] += output_tokens * output_tokens
                 a['count_with_token_info'] += 1
             if col_reason:
                 a['sum_reasoning_tokens'] += reasoning_tokens
@@ -978,12 +1037,47 @@ def calculate_scores(input_filename):
 
     simple_predictions = _compute_predictions('simplebench')
 
+    # Get LOO predictions and actual scores for holdout evaluation
+    model_info = MODEL_CACHE.get('simplebench', {})
+    loo_preds = model_info.get('loo_predictions', {})
+    actual_scores = load_actual_simplebench_scores(TARGETS_FILE)
+
     for idx, row in enumerate(rows):
         simple_pred = simple_predictions[idx] if idx < len(simple_predictions) else None
-        if simple_pred is not None:
-            row['weighted_accuracy'] = round(float(simple_pred), 4)
+        model_name = row['model_name']
+
+        # Use LOO prediction for training-set models (honest OOS estimate)
+        loo_pred = loo_preds.get(model_name)
+        if loo_pred is not None:
+            clip_bounds = model_info.get('clip_bounds')
+            clipped = float(loo_pred)
+            if clip_bounds:
+                clipped = max(clip_bounds[0], min(clip_bounds[1], clipped))
+            raw_pred = clipped
+        elif simple_pred is not None:
+            raw_pred = float(simple_pred)
+        else:
+            raw_pred = None
+
+        # Conditional blend: for high-accuracy reasoners, blend model prediction
+        # with raw accuracy (the accuracy→SimpleBench relationship is tighter
+        # for strong reasoners, so trust the raw signal more).
+        acc_pct = row['accuracy'] * 100.0
+        feat = feature_rows[idx] if idx < len(feature_rows) else {}
+        is_reasoner = feat.get('is_reasoner', 0.0)
+        if raw_pred is not None and is_reasoner and acc_pct > 60.0:
+            raw_pred = 0.4 * raw_pred + 0.6 * acc_pct
+
+        if raw_pred is not None:
+            row['weighted_accuracy'] = round(raw_pred, 4)
         else:
             row['weighted_accuracy'] = row['_baseline_weighted_accuracy']
+
+        # Wire up holdout metrics keys
+        actual = actual_scores.get(model_name)
+        if actual is not None:
+            row['simplebench_actual_score'] = actual
+            row['run_weighted_accuracy'] = row['_baseline_weighted_accuracy']
 
     # Compute principal components from per-question features
     pc_results = compute_principal_components(feature_rows)

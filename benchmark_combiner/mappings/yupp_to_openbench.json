@@ -376,5 +376,9 @@
   "Seed2.0 Mini": "",
   "Gemini3.1 Pro": "Gemini 3.1 Pro Preview (2026-02-19)",
   "GPT-5Mini Minimal": "GPT-5 Mini (minimal)",
-  "Step3.5 Flash": "Step 3.5 Flash"
+  "Step3.5 Flash": "Step 3.5 Flash",
+  "Qwen3.535B A3B": "",
+  "Qwen3.5122B A17B": "",
+  "GPT-5.3Codex (High)": "GPT-5.3 Codex",
+  "NemotronNano 12B v2": ""
 }

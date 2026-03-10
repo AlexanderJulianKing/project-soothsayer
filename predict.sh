@@ -83,11 +83,16 @@ echo "Executing Python script"
 
 python3 predict.py \
     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
+    --imputer_type model_bank \
+    --coherence_lambda 1.0 \
+    --coherence_shape exp \
     --poly_interactions \
-    --poly_include_squares \
-    --alt_centric_poly --alt_centric_k 5 \
-    --cv_repeats_outer 5 \
-    --cv_repeats_inner 3 \
+    --poly_limit 7 \
+    --no_residual_head \
+    --no_traj_in_alt \
+    --no_traj_in_target \
+    --cv_repeats_outer 10 \
+    --cv_repeats_inner 5 \
     --feature_cv_repeats 1 \
     --alt_cv_repeats 1
 

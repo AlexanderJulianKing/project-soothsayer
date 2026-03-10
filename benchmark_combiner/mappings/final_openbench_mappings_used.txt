@@ -48,6 +48,7 @@ AA: GPT-5 nano (medium) → GPT-5 Nano
 AA: GPT-5 nano (minimal) → GPT-5 Nano (minimal)
 AA: GPT-5.1 Codex (high) → GPT-5.1 Codex
 AA: GPT-5.1 Codex mini (high) → GPT-5.1 Codex Mini
+AA: GPT-5.3 Codex (xhigh) → GPT-5.3 Codex
 AA: Gemini 1.5 Flash (Sep '24) → Gemini 1.5 Flash
 AA: Gemini 1.5 Flash-8B → Gemini 1.5 Flash 8B
 AA: Gemini 2.0 Flash (Feb '25) → Gemini 2.0 Flash
@@ -146,6 +147,7 @@ AACritPt: GLM-5 (Reasoning) → GLM-5
 AACritPt: GPT-5 Codex (high) → GPT-5 Codex
 AACritPt: GPT-5 mini (medium) → GPT-5 Mini
 AACritPt: GPT-5.1 Codex (high) → GPT-5.1 Codex
+AACritPt: GPT-5.3 Codex (xhigh) → GPT-5.3 Codex
 AACritPt: Gemini 2.5 Flash (Non-reasoning) → Gemini 2.5 Flash Preview Nonthinking
 AACritPt: Gemini 2.5 Flash (Reasoning) → Gemini 2.5 Flash Preview (2025-04-17)
 AACritPt: Gemini 2.5 Flash Preview (Sep '25) (Reasoning) → Gemini 2.5 Flash Preview 09-2025
@@ -216,6 +218,7 @@ AAGDPval: GPT-5 nano (medium) → GPT-5 Nano
 AAGDPval: GPT-5 nano (minimal) → GPT-5 Nano (minimal)
 AAGDPval: GPT-5.1 Codex (high) → GPT-5.1 Codex
 AAGDPval: GPT-5.1 Codex mini (high) → GPT-5.1 Codex Mini
+AAGDPval: GPT-5.3 Codex (xhigh) → GPT-5.3 Codex
 AAGDPval: Gemini 2.0 Flash (Feb '25) → Gemini 2.0 Flash
 AAGDPval: Gemini 2.5 Flash (Non-reasoning) → Gemini 2.5 Flash Preview Nonthinking
 AAGDPval: Gemini 2.5 Flash (Reasoning) → Gemini 2.5 Flash Preview (2025-04-17)
@@ -314,7 +317,6 @@ AAOmniscience: GLM-4.7 (Reasoning) → GLM-4.7
 AAOmniscience: GLM-4.7-Flash (Reasoning) → GLM-4.7 Flash
 AAOmniscience: GLM-5 (Reasoning) → GLM-5
 AAOmniscience: GPT-4.1 mini → GPT-4.1 Mini
-AAOmniscience: GPT-4.1 nano → GPT-4.1 Nano
 AAOmniscience: GPT-4o (Aug '24) → GPT-4o (2024-08-06)
 AAOmniscience: GPT-4o (Nov '24) → GPT-4o (2024-11-20)
 AAOmniscience: GPT-5 Codex (high) → GPT-5 Codex
@@ -323,15 +325,14 @@ AAOmniscience: GPT-5 mini (medium) → GPT-5 Mini
 AAOmniscience: GPT-5 mini (minimal) → GPT-5 Mini (minimal)
 AAOmniscience: GPT-5 nano (high) → GPT-5 Nano (high)
 AAOmniscience: GPT-5 nano (medium) → GPT-5 Nano
-AAOmniscience: GPT-5 nano (minimal) → GPT-5 Nano (minimal)
 AAOmniscience: GPT-5.1 Codex (high) → GPT-5.1 Codex
 AAOmniscience: GPT-5.1 Codex mini (high) → GPT-5.1 Codex Mini
+AAOmniscience: GPT-5.3 Codex (xhigh) → GPT-5.3 Codex
 AAOmniscience: Gemini 2.0 Flash (Feb '25) → Gemini 2.0 Flash
 AAOmniscience: Gemini 2.5 Flash (Non-reasoning) → Gemini 2.5 Flash Preview Nonthinking
 AAOmniscience: Gemini 2.5 Flash (Reasoning) → Gemini 2.5 Flash Preview (2025-04-17)
 AAOmniscience: Gemini 2.5 Flash Preview (Sep '25) (Non-reasoning) → Gemini 2.5 Flash Preview 09-2025 Nonthinking
 AAOmniscience: Gemini 2.5 Flash Preview (Sep '25) (Reasoning) → Gemini 2.5 Flash Preview 09-2025
-AAOmniscience: Gemini 2.5 Flash-Lite (Non-reasoning) → Gemini 2.5 Flash Lite Preview (2025-06-17) Nonthinking
 AAOmniscience: Gemini 2.5 Flash-Lite (Reasoning) → Gemini 2.5 Flash Lite Preview (2025-06-17)
 AAOmniscience: Gemini 2.5 Flash-Lite Preview (Sep '25) (Non-reasoning) → Gemini 2.5 Flash Lite Preview 09-2025 Nonthinking
 AAOmniscience: Gemini 2.5 Flash-Lite Preview (Sep '25) (Reasoning) → Gemini 2.5 Flash Lite Preview 09-2025
@@ -339,7 +340,6 @@ AAOmniscience: Gemini 2.5 Pro → Gemini 2.5 Pro Preview (2025-06-05)
 AAOmniscience: Gemini 3 Flash Preview (Non-reasoning) → Gemini 3.0 Flash Preview (2025-12-17) (Minimal)
 AAOmniscience: Gemini 3 Pro Preview (low) → Gemini 3.0 Pro Preview (2025-11-18) (Low)
 AAOmniscience: Gemini 3.1 Pro Preview → Gemini 3.1 Pro Preview (2026-02-19)
-AAOmniscience: Gemma 3 12B Instruct → Gemma 3 12B
 AAOmniscience: Gemma 3 27B Instruct → Gemma 3 27B
 AAOmniscience: Gemma 3 4B Instruct → Gemma 3 4B
 AAOmniscience: Gemma 3n E2B Instruct → Gemma 3n 2B
@@ -354,9 +354,6 @@ AAOmniscience: Grok Code Fast 1 → Grok 4 Code Fast 1
 AAOmniscience: INTELLECT-3 → Intellect-3
 AAOmniscience: Kimi K2.5 (Non-reasoning) → Kimi K2.5 (Non-Reasoning)
 AAOmniscience: Kimi K2.5 (Reasoning) → Kimi K2.5
-AAOmniscience: Llama 3 Instruct 70B → Llama 3 70B Instruct
-AAOmniscience: Llama 3 Instruct 8B → Llama 3 8B Instruct
-AAOmniscience: Llama 3.1 Instruct 405B → Llama 3.1 405B Instruct Turbo
 AAOmniscience: Llama 3.1 Instruct 70B → Llama 3.1 70B Instruct Turbo
 AAOmniscience: Llama 3.1 Instruct 8B → Llama 3.1 8B Instruct Turbo
 AAOmniscience: Llama 3.1 Nemotron Instruct 70B → Llama 3.1 Nemotron 70B Instruct
@@ -374,10 +371,8 @@ AAOmniscience: Mistral Large 3 → Mistral Large 3 (2025-12-1)
 AAOmniscience: Mistral Medium 3.1 → Mistral Medium 3.1 (2025-08-12)
 AAOmniscience: NVIDIA Nemotron 3 Nano 30B A3B (Reasoning) → Nemotron 3 Nano 30B A3B (Reasoning)
 AAOmniscience: Nova 2.0 Lite (medium) → Nova 2 Lite
-AAOmniscience: Olmo 3 32B Think → Olmo 3 32B (Reasoning)
 AAOmniscience: Olmo 3.1 32B Instruct → OLMo 3.1 32B Instruct
 AAOmniscience: Olmo 3.1 32B Think → Olmo 3.1 32B (Reasoning)
-AAOmniscience: Qwen2.5 Instruct 72B → Qwen2.5 72B Instruct Turbo
 AAOmniscience: Qwen3 14B (Non-reasoning) → Qwen3 14B Nonthinking
 AAOmniscience: Qwen3 14B (Reasoning) → Qwen 3 14B Thinking
 AAOmniscience: Qwen3 235B A22B (Non-reasoning) → Qwen 3 235B A22B Nonthinking
@@ -1025,6 +1020,7 @@ SimpleBench: Claude 4 Opus → Claude 4 Opus Thinking
 SimpleBench: Claude 4 Sonnet (thinking) → Claude 4 Sonnet Thinking
 SimpleBench: Claude 4.1 Opus → Claude Opus 4.1 Thinking
 SimpleBench: Claude 4.5 Sonnet → Claude Sonnet 4.5 Thinking
+SimpleBench: Claude Opus 4.5 → Claude Opus 4.5 Thinking
 SimpleBench: Command R+ → Command R Plus
 SimpleBench: DeepSeek 3.2 Speciale → DeepSeek V3.2 Speciale
 SimpleBench: DeepSeek R1 05/28 → DeepSeek R1 (2025-05-28)
@@ -1077,7 +1073,6 @@ UGILeaderboard: Qwen/Qwen3-4B (thinking=True) → Qwen3 4B Thinking
 UGILeaderboard: Qwen/Qwen3-4B-Thinking-2507 → Qwen3 4B Thinking (2025-07-21)
 UGILeaderboard: Qwen/Qwen3-Next-80B-A3B-Instruct → Qwen3 Next 80B A3B Instruct
 UGILeaderboard: Qwen/Qwen3-Next-80B-A3B-Thinking → Qwen3 Next 80B A3B Thinking
-UGILeaderboard: Qwen/Qwen3-VL-235B-A22B-Instruct → Qwen 3 235B A22B Thinking
 UGILeaderboard: Qwen/Qwen3.5-397B-A17B (reasoning=disabled) → Qwen3.5 397B A17B Nonthinking
 UGILeaderboard: Qwen/Qwen3.5-397B-A17B (reasoning=enabled) → Qwen3.5 397B A17B Thinking
 UGILeaderboard: Qwen/qwen3-max → Qwen3 Max
@@ -1141,7 +1136,6 @@ UGILeaderboard: moonshotai/Kimi-K2-Instruct → Kimi K2
 UGILeaderboard: moonshotai/Kimi-K2-Instruct-0905 → Kimi K2 0905
 UGILeaderboard: moonshotai/Kimi-K2-Thinking → Kimi K2 Thinking
 UGILeaderboard: moonshotai/Kimi-K2.5 (reasoning=enabled) → Kimi K2.5
-UGILeaderboard: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 (chatml w/ <think> prefill) → Nemotron 3 Nano 30B A3B (Reasoning)
 UGILeaderboard: openai/chatgpt-4o-latest-20250326 → ChatGPT-4o
 UGILeaderboard: openai/gpt-4.1-2025-04-14 → GPT-4.1
 UGILeaderboard: openai/gpt-5-2025-08-07 (reasoning_effort=high) → GPT-5 (high)
@@ -1169,10 +1163,10 @@ UGILeaderboard: xai/grok-4-1-fast-reasoning → Grok 4.1 Fast
 UGILeaderboard: xai/grok-4-fast-non-reasoning → Grok 4 Fast (Non-Reasoning)
 UGILeaderboard: xai/grok-4-fast-reasoning → Grok 4 Fast
 UGILeaderboard: zai-org/GLM-4.5 (reasoning=enabled) → GLM-4.5
-UGILeaderboard: zai-org/GLM-4.5-Air (glm-4.5) → GLM 4.5 Air
+UGILeaderboard: zai-org/GLM-4.5-Air → GLM 4.5 Air
 UGILeaderboard: zai-org/GLM-4.6 (reasoning=enabled) → GLM-4.6
 UGILeaderboard: zai-org/GLM-4.7 (reasoning=enabled) → GLM-4.7
-UGILeaderboard: zai-org/GLM-4.7-Flash (glm-4.7 w/ <think> prefill) → GLM-4.7 Flash
+UGILeaderboard: zai-org/GLM-4.7-Flash (<think> prefill) → GLM-4.7 Flash
 UGILeaderboard: zai-org/GLM-5 (reasoning=enabled) → GLM-5
 WeirdML: claude-3-opus → Claude 3 Opus
 WeirdML: claude-3.5-haiku → Claude 3.5 Haiku
@@ -1219,6 +1213,7 @@ WeirdML: gpt-5.1 (high) → GPT-5.1 (high)
 WeirdML: gpt-5.2 (medium) → GPT-5.2 (medium)
 WeirdML: gpt-5.2 (no thinking) → GPT-5.2 (Non-reasoning)
 WeirdML: gpt-5.2 (xhigh) → GPT-5.2 (xhigh)
+WeirdML: gpt-5.3-codex (xhigh) → GPT-5.3 Codex
 WeirdML: gpt-oss-120b (high) → GPT OSS 120B
 WeirdML: gpt-oss-20b (high) → GPT OSS 20B
 WeirdML: grok-2-1212 → Grok 2
@@ -1256,8 +1251,6 @@ Yupp: ClaudeHaiku 3.5 → Claude 3.5 Haiku
 Yupp: ClaudeHaiku 4.5 (Extended Thinking) → Claude Haiku 4.5 Thinking
 Yupp: ClaudeHaiku 4.5 → Claude Haiku 4.5
 Yupp: ClaudeOpus 3 → Claude 3 Opus
-Yupp: ClaudeOpus 4.1 (Thinking) → Claude Opus 4.1 Thinking
-Yupp: ClaudeOpus 4.1 → Claude Opus 4.1
 Yupp: ClaudeOpus 4.5 (Thinking) → Claude Opus 4.5 Thinking
 Yupp: ClaudeOpus 4.5 → Claude Opus 4.5
 Yupp: ClaudeOpus 4.6 (Thinking) → Claude Opus 4.6 Thinking
@@ -1306,6 +1299,7 @@ Yupp: GPT-5.1Codex Max → GPT-5.1 Codex Max
 Yupp: GPT-5.1Codex Mini (High) → GPT-5.1 Codex Mini
 Yupp: GPT-5.2(Extra High) → GPT-5.2 (xhigh)
 Yupp: GPT-5.2(High) → GPT-5.2 (high)
+Yupp: GPT-5.3Codex (High) → GPT-5.3 Codex
 Yupp: GPT-5Chat → GPT-5 Chat
 Yupp: GPT-5Codex (High) → GPT-5 Codex
 Yupp: GPT-5Mini Minimal → GPT-5 Mini (minimal)
@@ -1340,7 +1334,6 @@ Yupp: KimiK2 0711 → Kimi K2
 Yupp: KimiK2 0905 → Kimi K2 0905
 Yupp: KimiK2 Thinking → Kimi K2 Thinking
 Yupp: KimiK2.5 → Kimi K2.5
-Yupp: Llama3.1 70B Instruct Turbo → Llama 3.1 70B Instruct Turbo
 Yupp: Llama3.1 8B Turbo → Llama 3.1 8B Instruct Turbo
 Yupp: Llama3.3 70B Instruct Turbo → Llama 3.3 70B Instruct Turbo
 Yupp: Llama4 Maverick → Llama 4 Maverick 17B 128E Instruct
@@ -1355,7 +1348,6 @@ Yupp: MistralLarge → Mistral Large
 Yupp: MistralMedium 3 → Mistral Medium 3
 Yupp: MistralSmall 3.2 24B → Mistral Small 3.2
 Yupp: Nemotron3 Nano (Thinking) → Nemotron 3 Nano 30B A3B (Reasoning)
-Yupp: OLMo3 32B Think → Olmo 3 32B (Reasoning)
 Yupp: OpenAIo3 → o3 High
 Yupp: OpenAIo3-mini → o3-Mini Medium
 Yupp: OpenAIo3-mini-high → o3-Mini High

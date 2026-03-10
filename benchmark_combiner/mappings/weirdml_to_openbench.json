@@ -91,5 +91,6 @@
   "claude-opus-4.6 (adaptive)": "Claude Opus 4.6 Thinking",
   "glm-5 (thinking)": "GLM-5",
   "claude-sonnet-4.6 (medium)": "",
-  "gemini-3.1-pro-preview (high)": ""
+  "gemini-3.1-pro-preview (high)": "",
+  "gpt-5.3-codex (xhigh)": "GPT-5.3 Codex"
 }

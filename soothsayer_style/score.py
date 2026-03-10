@@ -34,7 +34,7 @@ from sklearn.ensemble import (
     VotingRegressor,
 )
 from sklearn.linear_model import BayesianRidge, ElasticNet, Lasso, Ridge
-from sklearn.model_selection import KFold, cross_val_score
+from sklearn.model_selection import KFold, cross_val_predict, cross_val_score
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
@@ -470,13 +470,26 @@ def train_and_predict_delta(
     best_model = models[best_model_name]
     best_model.fit(X_train, y_train)
 
+    # OOF predictions for training models to prevent leakage into downstream pipeline
+    kf_oof = KFold(n_splits=cv_splits, shuffle=True, random_state=42)
+    oof_model = build_model_zoo()[best_model_name]
+    oof_preds = cross_val_predict(oof_model, X_train, y_train, cv=kf_oof)
+    oof_r = np.corrcoef(y_train, oof_preds)[0, 1] if len(y_train) > 2 else float('nan')
+    oof_rmse = float(np.sqrt(np.mean((y_train.values - oof_preds) ** 2)))
+    print(f"Delta OOF: r={oof_r:.3f}, RMSE={oof_rmse:.2f} (delta std={y_train.std():.2f})")
+
     has_sbf = features_with_scores[sbf_cols].notna().all(axis=1) if sbf_cols else pd.Series(True, index=features_with_scores.index)
     features_with_scores['predicted_delta'] = pd.NA
     features_with_scores['best_model'] = best_model_name
 
-    if has_sbf.any():
-        X_sbf = features_with_scores.loc[has_sbf, feature_cols].fillna(0.0)
-        features_with_scores.loc[has_sbf, 'predicted_delta'] = best_model.predict(X_sbf)
+    # Assign OOF predictions to training rows, full-model predictions to non-training rows
+    train_sbf_idx = train_with_sbf.index
+    features_with_scores.loc[train_sbf_idx, 'predicted_delta'] = oof_preds
+
+    non_train_sbf = has_sbf & ~features_with_scores.index.isin(train_sbf_idx)
+    if non_train_sbf.any():
+        X_non_train = features_with_scores.loc[non_train_sbf, feature_cols].fillna(0.0)
+        features_with_scores.loc[non_train_sbf, 'predicted_delta'] = best_model.predict(X_non_train)
 
     if sbf_cols and (~has_sbf).any():
         n_fallback = (~has_sbf).sum()
@@ -485,8 +498,17 @@ def train_and_predict_delta(
         fallback_name, _ = evaluate_models(X_fallback_train, y_fallback_train, min(5, len(X_fallback_train)))
         fallback_model = build_model_zoo()[fallback_name]
         fallback_model.fit(X_fallback_train, y_fallback_train)
-        X_no_sbf = features_with_scores.loc[~has_sbf, base_feature_cols].fillna(0.0)
-        features_with_scores.loc[~has_sbf, 'predicted_delta'] = fallback_model.predict(X_no_sbf)
+        # OOF for fallback training rows too
+        fallback_train_idx = train_df[train_df[sbf_cols].isna().any(axis=1)].index
+        if len(fallback_train_idx) >= 2:
+            kf_fb = KFold(n_splits=min(cv_splits, len(fallback_train_idx)), shuffle=True, random_state=42)
+            fb_oof_model = build_model_zoo()[fallback_name]
+            fb_oof = cross_val_predict(fb_oof_model, X_fallback_train.loc[fallback_train_idx], y_fallback_train.loc[fallback_train_idx], cv=kf_fb)
+            features_with_scores.loc[fallback_train_idx, 'predicted_delta'] = fb_oof
+        non_train_no_sbf = (~has_sbf) & ~features_with_scores.index.isin(train_df.index)
+        if non_train_no_sbf.any():
+            X_no_sbf = features_with_scores.loc[non_train_no_sbf, base_feature_cols].fillna(0.0)
+            features_with_scores.loc[non_train_no_sbf, 'predicted_delta'] = fallback_model.predict(X_no_sbf)
         print(f"Fallback ({fallback_name}) used for {n_fallback} models without logic.")
 
     if best_model_name in LINEAR_MODELS:
