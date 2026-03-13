@@ -780,6 +780,111 @@ def _select_target_cols_for_train(X_tr: pd.DataFrame, y_tr: np.ndarray, cfg: dic
     return sel_cols if len(sel_cols) else list(X_tr.columns)
 
 
+def _greedy_residual_select(
+    X_tr: pd.DataFrame,
+    y_tr: np.ndarray,
+    base_cols: List[str],
+    candidate_cols: List[str],
+    max_k: int = 5,
+    min_improvement: float = 0.01,
+    poly: bool = False,
+    poly_top_k: int = 30,
+) -> Tuple[List[str], pd.DataFrame]:
+    """Greedily select features that correlate with the residual.
+
+    Starting from a base set (e.g. ALT + PCA), fits Ridge, computes
+    the residual, and adds the candidate with highest |correlation|
+    to the residual. Repeats up to max_k times.
+
+    When poly=True, candidates also include pairwise interactions (A*B)
+    from the top poly_top_k columns by |correlation| with the target.
+    Each interaction is an independent candidate — selecting A*B does NOT
+    require also selecting A or B.
+
+    Args:
+        X_tr: Training features (all columns available).
+        y_tr: Training targets.
+        base_cols: Initial column names (ALT + PCA components).
+        candidate_cols: Pool of raw columns to select from.
+        max_k: Maximum number of features to add.
+        min_improvement: Stop if best |corr| < this threshold.
+        poly: If True, also consider pairwise interaction candidates.
+        poly_top_k: Number of top columns (by |r| with target) to form
+            interaction pairs from.
+
+    Returns:
+        Tuple of (selected column names, augmented DataFrame with any
+        interaction columns appended).
+    """
+    from sklearn.linear_model import Ridge
+
+    y_valid = pd.to_numeric(pd.Series(y_tr), errors="coerce").to_numpy()
+    mask = ~np.isnan(y_valid)
+    if mask.sum() < 5:
+        return list(base_cols), X_tr
+
+    # Build augmented DataFrame with interaction columns if poly
+    X_aug = X_tr.copy()
+    interaction_candidates = []
+    if poly:
+        # Pre-screen: top poly_top_k columns by |correlation| with target
+        raw_cols = [c for c in candidate_cols
+                    if not c.startswith("_target_pc") and not c.startswith("_svd_f")]
+        cors = []
+        for c in raw_cols:
+            v = X_tr[c].values[mask].astype(float)
+            if np.std(v) < 1e-12:
+                continue
+            r = np.corrcoef(v, y_valid[mask])[0, 1]
+            if np.isfinite(r):
+                cors.append((c, abs(r)))
+        cors.sort(key=lambda x: -x[1])
+        top_cols = [c for c, _ in cors[:poly_top_k]]
+
+        # Generate pairwise interactions
+        for i, ca in enumerate(top_cols):
+            for cb in top_cols[i + 1:]:
+                int_name = f"{ca}*{cb}"
+                X_aug[int_name] = X_tr[ca].values * X_tr[cb].values
+                interaction_candidates.append(int_name)
+
+    all_candidates = list(candidate_cols) + interaction_candidates
+
+    selected = list(base_cols)
+    used = set(selected)
+
+    for step in range(max_k):
+        remaining = [c for c in all_candidates if c not in used]
+        if not remaining:
+            break
+
+        # Fit Ridge on current feature set
+        X_fit = X_aug[selected].values[mask]
+        model = Ridge(alpha=10.0)
+        model.fit(X_fit, y_valid[mask])
+        residual = y_valid[mask] - model.predict(X_fit)
+
+        # Find candidate with highest |correlation| to residual
+        best_col = None
+        best_corr = 0.0
+        for col in remaining:
+            vals = X_aug[col].values[mask].astype(float)
+            if np.std(vals) < 1e-12:
+                continue
+            r = np.corrcoef(vals, residual)[0, 1]
+            if np.isfinite(r) and abs(r) > best_corr:
+                best_corr = abs(r)
+                best_col = col
+
+        if best_col is None or best_corr < min_improvement:
+            break
+
+        selected.append(best_col)
+        used.add(best_col)
+
+    return selected, X_aug
+
+
 def _alt_cv_report(
     X_no_alt_all: pd.DataFrame,
     alt_series: pd.Series,
@@ -923,6 +1028,35 @@ def _alt_cv_report(
 
 
 ALT_PCA_N_COMPONENTS = 10  # PCA(10)->BR; 10 slightly outperforms 12 in OOF CV (17.79 vs 18.14)
+
+# Cross-domain interaction ALT model: instead of PCA, use greedy-selected
+# standalone columns + cross-domain interactions (coding×writing, etc.).
+# Captures nonlinear "good at both X and Y" signal that PCA misses.
+CROSS_DOMAIN_ALT_ENABLED = False  # Set by --cross_domain_alt CLI arg
+CROSS_DOMAIN_FEATURES: Optional[dict] = None  # Set by search at runtime
+CROSS_DOMAIN_TOP_K_COLS = 25  # Pre-screen to top K columns by |r| with ALT
+CROSS_DOMAIN_ALPHA = 10.0  # Ridge alpha for the cross-domain model
+_CROSS_DOMAIN_FULL_FEATURES: Optional[pd.DataFrame] = None  # Full feature set for CD lookup
+
+# Greedy residual correlates: after ALT + PCA predict most of the target
+# variance, greedily select raw columns that correlate with the residual.
+# Fold-internal to prevent leakage (selection uses training targets).
+GREEDY_RESIDUAL_K = 0  # Max additional raw columns to add; 0 = disabled
+GREEDY_RESIDUAL_POLY = False  # Also consider A*B interaction candidates
+
+# Prediction calibration: undo shrinkage compression from regularised models.
+# After fitting, compute k = std(y_train) / std(pred_train_insample) on the
+# training fold, then inflate validation predictions:
+#   calibrated = mean(y_train) + k * (pred - mean(pred_train))
+# This is a James-Stein / Tweedie-style variance inflation that corrects
+# the systematic tail compression caused by ARD/BayesianRidge at small n.
+PRED_CALIBRATION_ENABLED = False
+
+# Top-tier boost: duplicate top-tier training rows to counteract shrinkage.
+# ARDRegression doesn't support sample_weight, so we duplicate rows instead.
+# Boost=2 means each top-tier row appears twice in training.
+TOP_TIER_BOOST = 1       # integer multiplier (1 = no boost)
+TOP_TIER_THRESHOLD = 0.0  # ELO threshold for "top-tier" (set by --top_tier_threshold)
 
 # Post-PCA interactions: cross-terms appended AFTER PCA dimensionality reduction.
 # PCA(10) captures linear signal from all base features; these raw (scaled)
@@ -1243,6 +1377,233 @@ def _greedy_select_alt_interactions(
     return consensus, log_df
 
 
+# ---------------------------------------------------------------------------
+# Cross-domain interaction search for ALT prediction
+# ---------------------------------------------------------------------------
+
+def _greedy_cross_domain_search(
+    X_df: pd.DataFrame,
+    y_alt: np.ndarray,
+    top_k_cols: int = 25,
+    alpha: float = 10.0,
+    n_folds: int = 5,
+    n_repeats: int = 3,
+    max_steps: int = 10,
+    min_improvement: float = 0.1,
+    seed: int = 42,
+    verbose: bool = True,
+    min_obs: int = 0,
+    obs_counts: Optional[pd.Series] = None,
+) -> dict:
+    """Greedy forward search for cross-domain interaction features.
+
+    Searches over both standalone columns and pairwise interactions (A*B).
+    When an interaction A*B is selected, A and B are 'consumed' and cannot
+    be added as standalone features later.
+
+    Starts from the best interaction model (A + B + A*B), then greedily
+    adds the best remaining candidate at each step.
+
+    Returns dict with:
+        - start: (col_a, col_b) — the starting interaction pair
+        - additions: list of str (standalone) or (col_a, col_b) (interaction)
+        - all_cols: list of all column names used (for quick membership check)
+    """
+    X = X_df.reset_index(drop=True)
+    y = np.asarray(y_alt, dtype=float)
+    n_samples = len(y)
+
+    # Filter by minimum pre-imputation observations
+    eligible_cols = list(X.columns)
+    if min_obs > 0 and obs_counts is not None:
+        eligible_cols = [c for c in eligible_cols if obs_counts.get(c, 0) >= min_obs]
+        if verbose:
+            print(f"Cross-domain search: {len(eligible_cols)}/{len(X.columns)} cols "
+                  f"with >= {min_obs} observations")
+
+    # Pre-screen: top columns by |correlation| with ALT
+    corrs = []
+    for c in eligible_cols:
+        xc = X[c].values.astype(float)
+        mask = np.isfinite(xc) & np.isfinite(y)
+        if mask.sum() < 5 or np.std(xc[mask]) < 1e-12:
+            corrs.append((c, 0.0))
+            continue
+        r = np.corrcoef(xc[mask], y[mask])[0, 1]
+        corrs.append((c, abs(r) if np.isfinite(r) else 0.0))
+    corrs.sort(key=lambda x: x[1], reverse=True)
+    candidate_cols = [c for c, _ in corrs[:top_k_cols]]
+    if verbose:
+        print(f"Cross-domain search: {len(candidate_cols)} candidate cols "
+              f"(top by |r| from {len(X.columns)}), n={n_samples}")
+
+    col_idx = {c: i for i, c in enumerate(candidate_cols)}
+    X_vals = X[candidate_cols].values
+
+    # Build CV folds
+    folds = []
+    for rep in range(n_repeats):
+        kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed + rep)
+        folds.extend(list(kf.split(X_vals)))
+
+    def _cv_rmse(feature_matrix):
+        oof_sum = np.zeros(n_samples)
+        oof_cnt = np.zeros(n_samples)
+        for tr, va in folds:
+            sc = StandardScaler()
+            Ftr = sc.fit_transform(feature_matrix[tr])
+            Fva = sc.transform(feature_matrix[va])
+            m = Ridge(alpha=alpha)
+            m.fit(Ftr, y[tr])
+            p = m.predict(Fva)
+            oof_sum[va] += p
+            oof_cnt[va] += 1
+        oof = oof_sum / np.maximum(oof_cnt, 1)
+        return float(np.sqrt(mean_squared_error(y, oof)))
+
+    # Step 1: Find best starting interaction model (A + B + A*B)
+    pairs = list(itertools.combinations(range(len(candidate_cols)), 2))
+    best_start_rmse = float("inf")
+    best_start = None
+    for i, j in pairs:
+        feats = np.column_stack([X_vals[:, i], X_vals[:, j],
+                                 X_vals[:, i] * X_vals[:, j]])
+        rmse = _cv_rmse(feats)
+        if rmse < best_start_rmse:
+            best_start_rmse = rmse
+            best_start = (i, j)
+
+    ia, ib = best_start
+    start_pair = (candidate_cols[ia], candidate_cols[ib])
+    current_features = [X_vals[:, ia], X_vals[:, ib],
+                        X_vals[:, ia] * X_vals[:, ib]]
+    current_matrix = np.column_stack(current_features)
+    current_rmse = best_start_rmse
+    consumed = {candidate_cols[ia], candidate_cols[ib]}
+    used_interactions = {(ia, ib)}
+    additions: list = []
+
+    if verbose:
+        print(f"  start: {start_pair[0][:40]} * {start_pair[1][:40]}  "
+              f"RMSE={current_rmse:.2f}")
+
+    # Step 2: Greedy forward selection
+    for step in range(1, max_steps + 1):
+        best_rmse = current_rmse
+        best_name = None
+        best_feature = None
+        best_consumed = set()
+        best_is_interaction = False
+        best_pair_idx = None
+
+        # Option A: standalone column
+        for i, c in enumerate(candidate_cols):
+            if c in consumed:
+                continue
+            trial = np.column_stack([current_matrix, X_vals[:, i]])
+            rmse = _cv_rmse(trial)
+            if rmse < best_rmse:
+                best_rmse = rmse
+                best_name = c
+                best_feature = X_vals[:, i]
+                best_consumed = {c}
+                best_is_interaction = False
+
+        # Option B: interaction (product only, consume both bases)
+        for i, j in pairs:
+            if (i, j) in used_interactions:
+                continue
+            ci, cj = candidate_cols[i], candidate_cols[j]
+            if ci in consumed or cj in consumed:
+                continue
+            product = X_vals[:, i] * X_vals[:, j]
+            trial = np.column_stack([current_matrix, product])
+            rmse = _cv_rmse(trial)
+            if rmse < best_rmse:
+                best_rmse = rmse
+                best_name = f"{ci}*{cj}"
+                best_feature = product
+                best_consumed = {ci, cj}
+                best_is_interaction = True
+                best_pair_idx = (i, j)
+
+        improvement = current_rmse - best_rmse
+        if best_feature is None or improvement < min_improvement:
+            if verbose:
+                print(f"  step {step}: improvement {improvement:.3f} "
+                      f"< {min_improvement}, stopping")
+            break
+
+        current_matrix = np.column_stack([current_matrix, best_feature])
+        consumed.update(best_consumed)
+        if best_is_interaction:
+            used_interactions.add(best_pair_idx)
+            additions.append((candidate_cols[best_pair_idx[0]],
+                              candidate_cols[best_pair_idx[1]]))
+        else:
+            additions.append(best_name)
+        current_rmse = best_rmse
+
+        if verbose:
+            print(f"  step {step}: +{best_name[:60]:60s}  "
+                  f"RMSE={current_rmse:.2f}  (Δ={improvement:.2f})")
+
+    if verbose:
+        print(f"Cross-domain search: {len(additions) + 1} features, "
+              f"final RMSE={current_rmse:.2f}")
+
+    return {
+        "start": start_pair,
+        "additions": additions,
+        "all_cols": list(consumed),
+        "rmse": current_rmse,
+    }
+
+
+def _build_cross_domain_features(
+    X_df: pd.DataFrame,
+    selected: dict,
+) -> Tuple[np.ndarray, List[str]]:
+    """Build feature matrix from cross-domain search results.
+
+    Args:
+        X_df: Feature DataFrame (all rows). If a column from the search
+            is missing (e.g. dropped by target feature selection), falls
+            back to _CROSS_DOMAIN_FULL_FEATURES.
+        selected: Dict from _greedy_cross_domain_search with 'start' and
+            'additions' keys.
+
+    Returns:
+        (feature_matrix, feature_names)
+    """
+    # Use full feature set if available (search may reference cols dropped by
+    # target feature selection)
+    src = _CROSS_DOMAIN_FULL_FEATURES if _CROSS_DOMAIN_FULL_FEATURES is not None else X_df
+    # Align index with X_df
+    src = src.reindex(X_df.index)
+
+    features = []
+    names = []
+
+    # Starting interaction: A + B + A*B
+    a, b = selected["start"]
+    va, vb = src[a].values, src[b].values
+    features.extend([va, vb, va * vb])
+    names.extend([a, b, f"{a}*{b}"])
+
+    # Additions
+    for item in selected["additions"]:
+        if isinstance(item, str):
+            features.append(src[item].values)
+            names.append(item)
+        else:
+            ca, cb = item
+            features.append(src[ca].values * src[cb].values)
+            names.append(f"{ca}*{cb}")
+
+    return np.column_stack(features), names
+
+
 def _build_alt_inner_residual_bank(
     X_no_alt: pd.DataFrame,
     y_alt: pd.Series,
@@ -1505,6 +1866,41 @@ def _fit_alt_model_on_rows(
     train_mask = pd.Series(False, index=X_no_alt_all.index)
     if len(train_idx):
         train_mask.iloc[train_idx] = True
+
+    # --- Cross-domain interaction path (bypasses PCA entirely) ---
+    if CROSS_DOMAIN_ALT_ENABLED and CROSS_DOMAIN_FEATURES is not None:
+        known_mask = alt_numeric.notna()
+        train_known_mask = train_mask & known_mask
+        n_known = int(train_known_mask.sum())
+        fallback = float(np.nanmean(alt_numeric.loc[train_known_mask])) if n_known else float("nan")
+
+        if n_known < 5:
+            pred_all = pd.Series(fallback, index=X_no_alt_all.index, dtype="float64")
+        else:
+            feat_matrix, feat_names = _build_cross_domain_features(
+                X_no_alt_all, CROSS_DOMAIN_FEATURES)
+            scaler = StandardScaler()
+            F_train = scaler.fit_transform(feat_matrix[train_known_mask.values])
+            F_all = scaler.transform(feat_matrix)
+            y_fit = alt_numeric.loc[train_known_mask].to_numpy()
+            model = Ridge(alpha=CROSS_DOMAIN_ALPHA)
+            model.fit(F_train, y_fit)
+            pred_all = pd.Series(model.predict(F_all),
+                                 index=X_no_alt_all.index, dtype="float64")
+
+        return {
+            "pred_all": pred_all,
+            "selected_features": CROSS_DOMAIN_FEATURES.get("all_cols", []),
+            "fallback_value": fallback,
+            "n_known": n_known,
+            "fitted_model": model if n_known >= 5 else None,
+            "calibration_summary": None,
+            "pca_scaler": None,
+            "pca": None,
+            "int_scaler": None,
+            "interaction_names": [],
+            "combined_feature_names": feat_names if n_known >= 5 else [],
+        }
     known_mask = alt_numeric.notna()
     train_known_mask = train_mask & known_mask
 
@@ -2231,6 +2627,7 @@ def run_imputation(
     coherence_shape: str = "linear",
     coherence_gate: str = "fixed",
     iterative_coherence: bool = False,
+    eb_parent: bool = False,
     use_svd_predictors: bool = False,
     n_expansion_passes: int = 1,
     max_confident_extras: int = 1,
@@ -2304,6 +2701,7 @@ def run_imputation(
             coherence_shape=coherence_shape,
             coherence_gate=coherence_gate,
             iterative_coherence=iterative_coherence,
+            eb_parent=eb_parent,
             use_svd_predictors=use_svd_predictors,
             n_expansion_passes=n_expansion_passes,
             max_confident_extras=max_confident_extras,
@@ -2798,11 +3196,17 @@ def compute_normalized_conformal_intervals(
     oof_valid_mask = ~np.isnan(oof_preds)
     residuals_all_train = np.abs(y_train - oof_preds)
 
+    # Score-distance feature: further from the top predicted score → wider intervals.
+    # With top-tier boost, high-predicted models have smaller residuals; this lets
+    # the positive-only Ridge learn "closer to top → tighter intervals".
+    max_mu = np.max(mu)
+    score_dist_from_top = max_mu - mu
+
     # Build uncertainty features for all models
-    # 5 features: raw_missing_frac, imp_weighted_missing_clean, suite_missing_frac, mahal_dist, knn_dist
+    # 6 features: raw_missing_frac, imp_weighted_missing_clean, suite_missing_frac, mahal_dist, knn_dist, score_dist
     U_all = np.column_stack([
         raw_missing_frac, imp_weighted_missing_clean, suite_missing_frac,
-        mahal_dist, knn_dist,
+        mahal_dist, knn_dist, score_dist_from_top,
     ])
 
     # Cross-fit: predict log-residuals for each training row OOF
@@ -2853,6 +3257,7 @@ def compute_normalized_conformal_intervals(
             suite_missing_frac[fold_tr_global],
             fold_mahal_tr,
             np.mean(fold_knn_tr, axis=1),
+            score_dist_from_top[fold_tr_global],
         ])
         U_fold_va = np.column_stack([
             raw_missing_frac[fold_va_global],
@@ -2860,6 +3265,7 @@ def compute_normalized_conformal_intervals(
             suite_missing_frac[fold_va_global],
             fold_mahal_va,
             np.mean(fold_knn_va, axis=1),
+            score_dist_from_top[fold_va_global],
         ])
 
         # Fit Ridge(positive=True) on log1p(|residual|) — monotone constraint
@@ -2870,14 +3276,13 @@ def compute_normalized_conformal_intervals(
     # Convert from log space
     oof_sigma_valid = np.expm1(oof_sigma[oof_valid_mask])
 
-    # --- d. Floor and calibrate ---
-    sigma_floor = max(np.percentile(oof_sigma_valid, sigma_floor_percentile), 1e-6)
+    # --- d. Calibrate (no floor — let the scale model speak freely) ---
+    sigma_floor = 1e-6  # numerical safety only
     oof_sigma_valid = np.maximum(oof_sigma_valid, sigma_floor)
 
     conformity_scores = residuals_all_train[oof_valid_mask] / oof_sigma_valid
-    n_valid = len(conformity_scores)
-    q_level = min(np.ceil((n_valid + 1) * target_coverage) / n_valid, 1.0)
-    q_hat = float(np.percentile(conformity_scores, q_level * 100))
+    # Use empirical quantile directly (no finite-sample inflation)
+    q_hat = float(np.percentile(conformity_scores, target_coverage * 100))
 
     # OOF coverage check
     oof_lower = mu[train_idx][oof_valid_mask] - q_hat * oof_sigma_valid
@@ -2902,7 +3307,7 @@ def compute_normalized_conformal_intervals(
     # Scale model coefficients
     coef_names = [
         "raw_missing_frac", "imp_weighted_missing_clean", "suite_missing_frac",
-        "mahal_dist", "knn_dist",
+        "mahal_dist", "knn_dist", "score_dist_from_top",
     ]
     scale_model_coef = dict(zip(coef_names, final_ridge.coef_.tolist()))
     scale_model_coef["intercept"] = float(final_ridge.intercept_)
@@ -2924,6 +3329,7 @@ def compute_normalized_conformal_intervals(
             "suite_missing_frac": suite_missing_frac,
             "mahal_dist": mahal_dist,
             "knn_dist": knn_dist,
+            "score_dist_from_top": score_dist_from_top,
             "sigma_hat": sigma_hat,
         }),
     }
@@ -3000,6 +3406,16 @@ def fit_and_predict_all(
 
         model = spec.build(X_train, y_train, sample_weight)
         mu = model.predict(X_all)
+
+        # James-Stein variance inflation for final predictions
+        if PRED_CALIBRATION_ENABLED:
+            pred_tr = model.predict(X_train)
+            std_y = np.std(y_train)
+            std_p = np.std(pred_tr)
+            if std_p > 1e-8:
+                k = np.clip(std_y / std_p, 0.5, 2.0)
+                mu = np.mean(y_train) + k * (mu - np.mean(pred_tr))
+
         std = np.full_like(mu, fill_value=np.nan, dtype=float)
         lower = np.full_like(mu, fill_value=np.nan, dtype=float)
         upper = np.full_like(mu, fill_value=np.nan, dtype=float)
@@ -3220,8 +3636,18 @@ def fit_and_predict_all_with_alt(
             except Exception:
                 calibration_factor = 1.0
 
-        model = spec.build(X_train, y_train, w_train)
+        X_train_b, y_train_b, w_train_b = _apply_top_tier_boost(X_train, y_train, w_train)
+        model = spec.build(X_train_b, y_train_b, w_train_b)
         mu = model.predict(X_all_aug)
+
+        # James-Stein variance inflation for final predictions
+        if PRED_CALIBRATION_ENABLED:
+            pred_tr = model.predict(X_train)
+            std_y = np.std(y_train)
+            std_p = np.std(pred_tr)
+            if std_p > 1e-8:
+                k = np.clip(std_y / std_p, 0.5, 2.0)
+                mu = np.mean(y_train) + k * (mu - np.mean(pred_tr))
 
         std = np.full_like(mu, np.nan)
         lower = np.full_like(mu, np.nan)
@@ -3539,6 +3965,32 @@ def cross_val_rmse_with_alt(
     return float(np.mean(rmses)), float(np.std(rmses, ddof=1)), oof_preds, oof_folds
 
 
+def _apply_top_tier_boost(X, y, w=None):
+    """Duplicate top-tier training rows to counteract regularisation shrinkage.
+
+    Returns augmented (X, y, w) with top-tier rows duplicated (BOOST-1) times.
+    """
+    if TOP_TIER_BOOST <= 1 or TOP_TIER_THRESHOLD <= 0:
+        return X, y, w
+    top_mask = y >= TOP_TIER_THRESHOLD
+    n_top = int(top_mask.sum())
+    if n_top == 0:
+        return X, y, w
+    n_dupes = TOP_TIER_BOOST - 1
+    if isinstance(X, pd.DataFrame):
+        X_top = pd.concat([X.loc[top_mask]] * n_dupes, ignore_index=True)
+        X_aug = pd.concat([X, X_top], ignore_index=True)
+    else:
+        X_top = np.tile(X[top_mask], (n_dupes, 1))
+        X_aug = np.vstack([X, X_top])
+    y_aug = np.concatenate([y, np.tile(y[top_mask], n_dupes)])
+    if w is not None:
+        w_aug = np.concatenate([w, np.tile(w[top_mask], n_dupes)])
+    else:
+        w_aug = None
+    return X_aug, y_aug, w_aug
+
+
 def _precompute_single_fold(
     tr: np.ndarray,
     va: np.ndarray,
@@ -3579,9 +4031,33 @@ def _precompute_single_fold(
     Xva_df = X_df.iloc[va].copy()
     Xva_df[alt_col] = alt_pred_all.loc[Xva_df.index].values
 
-    sel_cols = _select_target_cols_for_train(Xtr_df, y[tr], selector_cfg)
-    Xtr_sel = Xtr_df[sel_cols].copy()
-    Xva_sel = Xva_df[sel_cols].copy()
+    if GREEDY_RESIDUAL_K > 0:
+        # Greedy residual selection: start with ALT + PCA, add raw/interaction
+        # columns that correlate with the residual
+        base_cols = [c for c in Xtr_df.columns
+                     if c == alt_col or c.startswith("_target_pc")]
+        if not base_cols:
+            base_cols = [alt_col] if alt_col in Xtr_df.columns else []
+        candidate_cols = [c for c in Xtr_df.columns
+                          if c not in base_cols]
+        sel_cols, Xtr_aug = _greedy_residual_select(
+            Xtr_df, y[tr], base_cols, candidate_cols,
+            max_k=GREEDY_RESIDUAL_K,
+            poly=GREEDY_RESIDUAL_POLY,
+        )
+        # Build matching augmented val DataFrame (interaction columns)
+        Xva_aug = Xva_df.copy()
+        for col in sel_cols:
+            if col not in Xva_aug.columns and "*" in col:
+                ca, cb = col.split("*", 1)
+                if ca in Xva_df.columns and cb in Xva_df.columns:
+                    Xva_aug[col] = Xva_df[ca].values * Xva_df[cb].values
+        Xtr_sel = Xtr_aug[sel_cols].copy()
+        Xva_sel = Xva_aug[sel_cols].copy()
+    else:
+        sel_cols = _select_target_cols_for_train(Xtr_df, y[tr], selector_cfg)
+        Xtr_sel = Xtr_df[sel_cols].copy()
+        Xva_sel = Xva_df[sel_cols].copy()
 
     if poly_enabled:
         if alt_centric_poly and alt_col in Xtr_sel.columns:
@@ -3603,10 +4079,15 @@ def _precompute_single_fold(
                 limit=poly_limit, preset_core=core,
             )
 
+    Xtr_out, ytr_out, wtr_out = Xtr_sel.values, y[tr], w_tr
+
+    # Apply top-tier boost (duplicate high-ELO rows in training)
+    Xtr_out, ytr_out, wtr_out = _apply_top_tier_boost(Xtr_out, ytr_out, wtr_out)
+
     return {
-        "Xtr": Xtr_sel.values,
-        "ytr": y[tr],
-        "wtr": w_tr,
+        "Xtr": Xtr_out,
+        "ytr": ytr_out,
+        "wtr": wtr_out,
         "Xva": Xva_sel.values,
         "yva": y[va],
         "va": va,
@@ -3738,6 +4219,15 @@ def choose_best_model_with_alt(
             for fold_k, fd in enumerate(fold_data):
                 model = spec.build(fd["Xtr"], fd["ytr"], fd["wtr"])
                 pred = model.predict(fd["Xva"])
+
+                # James-Stein variance inflation: undo shrinkage compression
+                if PRED_CALIBRATION_ENABLED:
+                    pred_tr = model.predict(fd["Xtr"])
+                    std_y = np.std(fd["ytr"])
+                    std_p = np.std(pred_tr)
+                    if std_p > 1e-8:
+                        k = np.clip(std_y / std_p, 0.5, 2.0)
+                        pred = np.mean(fd["ytr"]) + k * (pred - np.mean(pred_tr))
 
                 if dense_mask is not None:
                     dense_va = dense_mask[fd["va"]]
@@ -4514,6 +5004,22 @@ def main():
     ap.add_argument("--feature_selector", choices=["none", "lgbm", "xgb"], default="lgbm")
     ap.add_argument("--top_k_features", default="auto", help="'auto' for 1-SE, integer for K, or 'none'")
     ap.add_argument("--selector_cv", type=int, default=5)
+    ap.add_argument("--outer_cv", type=int, default=None,
+                    help="Number of folds for outer target CV (defaults to selector_cv). "
+                         "Set to n_train for LOO. Inner feature selection still uses --selector_cv.")
+    ap.add_argument("--top_k_loo", type=int, default=0,
+                    help="LOO only on the top K models by target score. "
+                         "All models still used for training. 0 = disabled.")
+    ap.add_argument("--pca_in_target", type=int, default=0,
+                    help="Add N PCA components of benchmark columns as target model features. "
+                         "0 = disabled. Use with --cross_domain_alt for best combo.")
+    ap.add_argument("--greedy_residual_k", type=int, default=0,
+                    help="Max raw columns to add via greedy residual correlation. "
+                         "After ALT+PCA predict most variance, greedily select raw columns "
+                         "correlated with residual. 0 = disabled. Fold-internal (no leakage).")
+    ap.add_argument("--greedy_residual_poly", action="store_true",
+                    help="Also consider A*B interaction terms as greedy residual candidates. "
+                         "Selecting A*B does NOT require selecting A or B separately.")
     ap.add_argument("--selector_k_grid", default="4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,25,all")
         # interaction options
     ap.add_argument("--poly_interactions", action="store_true",
@@ -4548,9 +5054,26 @@ def main():
                     help="Number of independent greedy runs for consensus pair search (default 15).")
     ap.add_argument("--alt_consensus_min", type=int, default=0,
                     help="Minimum appearances across runs to keep a pair (0 = auto: ceil(n_runs/2)).")
+    ap.add_argument("--cross_domain_alt", action="store_true",
+                    help="Use cross-domain interaction search for ALT model instead of PCA. "
+                         "Finds coding×writing, knowledge×EQ type interactions via greedy search.")
+    ap.add_argument("--cd_top_k", type=int, default=25,
+                    help="Pre-screen to top K columns for cross-domain search (default 25).")
+    ap.add_argument("--cd_alpha", type=float, default=10.0,
+                    help="Ridge alpha for cross-domain ALT model (default 10).")
+    ap.add_argument("--cd_max_steps", type=int, default=10,
+                    help="Max greedy steps in cross-domain search (default 10).")
+    ap.add_argument("--cd_min_improvement", type=float, default=0.1,
+                    help="Min RMSE improvement per step in cross-domain search (default 0.1).")
+    ap.add_argument("--cd_min_obs", type=int, default=0,
+                    help="Min pre-imputation observations for a column to be eligible "
+                         "in cross-domain search (default 0 = no filter).")
     ap.add_argument("--freeze_alt_pairs", type=str, default=None,
                     help="Path to JSON file with frozen ALT interaction pairs. "
                          "Skips consensus search entirely. Use for stable imputer tuning.")
+    ap.add_argument("--eb_parent", action="store_true",
+                    help="Enable empirical-Bayes parent shrinkage in imputation "
+                         "(shrinks uncertain cells toward column mean).")
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Margin for 'top_by_margin_prob' column (default 20 points).")
     ap.add_argument("--group_cv", action="store_true",
@@ -4577,6 +5100,14 @@ def main():
                     help="For model_bank imputer: number of uncertainty-gated expansion passes (default 1).")
     ap.add_argument("--max_confident_extras", type=int, default=1,
                     help="For model_bank imputer: max confident imputed predictors per cell in expansion (default 1).")
+    ap.add_argument("--pred_calibration", action="store_true",
+                    help="Enable prediction calibration (James-Stein variance inflation). "
+                         "Corrects tail shrinkage from regularised models.")
+    ap.add_argument("--top_tier_boost", type=int, default=1,
+                    help="Duplicate top-tier training rows this many times (1=no boost). "
+                         "Counteracts regularisation shrinkage for extreme models.")
+    ap.add_argument("--top_tier_threshold", type=float, default=1450.0,
+                    help="ELO threshold for top-tier boost (default 1450).")
     ap.add_argument("--exclude_models", type=str, default="",
                     help="Comma-separated model names to exclude from the dataset before imputation/prediction.")
     args = ap.parse_args()
@@ -4588,6 +5119,8 @@ def main():
     args.feature_cv_repeats = _resolve_repeats(args.feature_cv_repeats, args.cv_repeats)
     args.alt_cv_repeats = _resolve_repeats(args.alt_cv_repeats, args.cv_repeats)
     args.cv_seed = int(args.cv_seed)
+    if args.outer_cv is None:
+        args.outer_cv = args.selector_cv
     _configure_parallelism(args)
     print(f"Trajectory features: ALT={'ON' if args.traj_in_alt else 'OFF'}, Target={'ON' if args.traj_in_target else 'OFF'}")
 
@@ -4628,6 +5161,26 @@ def main():
 
     global ALT_REGRESSOR_NAME
     ALT_REGRESSOR_NAME = getattr(args, 'alt_regressor', 'bayes')
+
+    global CROSS_DOMAIN_ALT_ENABLED, CROSS_DOMAIN_TOP_K_COLS, CROSS_DOMAIN_ALPHA
+    CROSS_DOMAIN_ALT_ENABLED = getattr(args, 'cross_domain_alt', False)
+    CROSS_DOMAIN_TOP_K_COLS = getattr(args, 'cd_top_k', 25)
+    CROSS_DOMAIN_ALPHA = getattr(args, 'cd_alpha', 10.0)
+
+    global GREEDY_RESIDUAL_K
+    GREEDY_RESIDUAL_K = getattr(args, 'greedy_residual_k', 0)
+
+    global GREEDY_RESIDUAL_POLY
+    GREEDY_RESIDUAL_POLY = getattr(args, 'greedy_residual_poly', False)
+
+    global PRED_CALIBRATION_ENABLED
+    PRED_CALIBRATION_ENABLED = getattr(args, 'pred_calibration', False)
+
+    global TOP_TIER_BOOST, TOP_TIER_THRESHOLD
+    TOP_TIER_BOOST = max(1, getattr(args, 'top_tier_boost', 1))
+    TOP_TIER_THRESHOLD = getattr(args, 'top_tier_threshold', 1450.0)
+    if TOP_TIER_BOOST > 1:
+        print(f"Top-tier boost: {TOP_TIER_BOOST}x for models with ELO >= {TOP_TIER_THRESHOLD}")
 
     if not os.path.exists(args.csv_path):
         print(f"ERROR: CSV not found at {args.csv_path}", file=sys.stderr)
@@ -4742,11 +5295,12 @@ def main():
         svd_pred = int(getattr(args, 'use_svd_predictors', False))
         n_exp = getattr(args, 'n_expansion_passes', 1)
         m_ext = getattr(args, 'max_confident_extras', 1)
+        eb = int(getattr(args, 'eb_parent', False))
         imp_key = (
             f"imputed_modelbank_{csv_hash}_alpha{args.alpha:.6f}_"
             f"skmax{args.selector_k_max}_conf{args.confidence_threshold:.2f}_"
             f"coh{coh_lam:.2f}{coh_shape[0]}_g{coh_gate[0]}_ic{iter_coh}_svdp{svd_pred}_exp{n_exp}x{m_ext}_"
-            f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt3.0.csv"
+            f"eb{eb}_catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt3.0.csv"
         )
     else:
         imp_key = (
@@ -4842,6 +5396,7 @@ def main():
             coherence_shape=getattr(args, 'coherence_shape', 'linear'),
             coherence_gate=getattr(args, 'coherence_gate', 'fixed'),
             iterative_coherence=getattr(args, 'iterative_coherence', False),
+            eb_parent=getattr(args, 'eb_parent', False),
             use_svd_predictors=getattr(args, 'use_svd_predictors', False),
             n_expansion_passes=getattr(args, 'n_expansion_passes', 1),
             max_confident_extras=getattr(args, 'max_confident_extras', 1),
@@ -4934,6 +5489,7 @@ def main():
         "alt_cv_repeats": int(args.alt_cv_repeats),
         "cv_seed": int(args.cv_seed),
         "selector_cv": int(args.selector_cv),
+        "outer_cv": int(args.outer_cv),
         "alt_selector_cv": int(args.alt_selector_cv),
         "poly_interactions": bool(args.poly_interactions),
         "poly_include_squares": bool(args.poly_include_squares),
@@ -4946,6 +5502,13 @@ def main():
         "feature_selector": args.feature_selector,
         "alt_feature_selector": args.alt_feature_selector,
         "alt_regressor": "bayes",
+        "eb_parent": bool(getattr(args, 'eb_parent', False)),
+        "cross_domain_alt": bool(CROSS_DOMAIN_ALT_ENABLED),
+        "cd_top_k": int(CROSS_DOMAIN_TOP_K_COLS),
+        "cd_alpha": float(CROSS_DOMAIN_ALPHA),
+        "pca_in_target": int(getattr(args, 'pca_in_target', 0)),
+        "greedy_residual_k": int(GREEDY_RESIDUAL_K),
+        "greedy_residual_poly": bool(GREEDY_RESIDUAL_POLY),
         "used_cache": bool(already_done),
         "cache_key": imp_key,
         "cache_path": cache_csv,
@@ -5006,6 +5569,74 @@ def main():
     alt_feature_matrix: Optional[pd.DataFrame] = None
     if ALT_TARGET in df.columns:
         print(f"ALT regressor: {ALT_REGRESSOR_NAME}")
+
+        # --- Cross-domain interaction search (if enabled) ---
+        global CROSS_DOMAIN_FEATURES
+        if CROSS_DOMAIN_ALT_ENABLED:
+            alt_known_mask_cd = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna()
+            X_for_cd = safe_features.loc[alt_known_mask_cd]
+            y_for_cd = pd.to_numeric(df[ALT_TARGET], errors="coerce").loc[alt_known_mask_cd].values
+
+            # Pre-imputation observation counts (from original df, before imputation)
+            cd_min_obs = getattr(args, 'cd_min_obs', 0)
+            cd_obs_counts = df[feature_cols].notna().sum()
+
+            cd_cache_data = (
+                X_for_cd.values.tobytes()
+                + y_for_cd.tobytes()
+                + str(SEED).encode()
+                + str(CROSS_DOMAIN_TOP_K_COLS).encode()
+                + str(CROSS_DOMAIN_ALPHA).encode()
+                + str(getattr(args, 'cd_max_steps', 10)).encode()
+                + str(cd_min_obs).encode()
+            )
+            cd_hash = hashlib.sha256(cd_cache_data).hexdigest()[:16]
+            cd_cache_path = os.path.join(cache_dir, f"cross_domain_{cd_hash}.json")
+
+            if os.path.exists(cd_cache_path):
+                with open(cd_cache_path, "r", encoding="utf-8") as fh:
+                    cached_cd = json.load(fh)
+                CROSS_DOMAIN_FEATURES = {
+                    "start": tuple(cached_cd["start"]),
+                    "additions": [tuple(a) if isinstance(a, list) else a
+                                  for a in cached_cd["additions"]],
+                    "all_cols": cached_cd["all_cols"],
+                    "rmse": cached_cd.get("rmse", float("nan")),
+                }
+                print(f"Cross-domain ALT: loaded cached features "
+                      f"({len(CROSS_DOMAIN_FEATURES['additions']) + 1} groups)")
+            else:
+                cd_t0 = time.time()
+                CROSS_DOMAIN_FEATURES = _greedy_cross_domain_search(
+                    X_for_cd, y_for_cd,
+                    top_k_cols=CROSS_DOMAIN_TOP_K_COLS,
+                    alpha=CROSS_DOMAIN_ALPHA,
+                    n_folds=5,
+                    n_repeats=3,
+                    max_steps=getattr(args, 'cd_max_steps', 10),
+                    min_improvement=getattr(args, 'cd_min_improvement', 0.1),
+                    seed=SEED,
+                    verbose=True,
+                    min_obs=cd_min_obs,
+                    obs_counts=cd_obs_counts,
+                )
+                cd_elapsed = time.time() - cd_t0
+                print(f"Cross-domain search took {cd_elapsed:.1f}s")
+
+                # Cache results
+                cd_payload = {
+                    "start": list(CROSS_DOMAIN_FEATURES["start"]),
+                    "additions": [list(a) if isinstance(a, tuple) else a
+                                  for a in CROSS_DOMAIN_FEATURES["additions"]],
+                    "all_cols": CROSS_DOMAIN_FEATURES["all_cols"],
+                    "rmse": CROSS_DOMAIN_FEATURES["rmse"],
+                }
+                with open(cd_cache_path, "w", encoding="utf-8") as fh:
+                    json.dump(cd_payload, fh, indent=2)
+
+                # Save to output dir
+                with open(os.path.join(out_dir, "cross_domain_features.json"), "w", encoding="utf-8") as fh:
+                    json.dump(cd_payload, fh, indent=2)
 
         # --- Runtime greedy search for ALT interaction terms (with caching) ---
         global ALT_POST_PCA_INTERACTIONS
@@ -5175,6 +5806,27 @@ def main():
 
     target_base_features = safe_features.copy()
 
+    # Add PCA components of benchmark columns as target model features
+    pca_in_target = getattr(args, 'pca_in_target', 0)
+    if pca_in_target > 0:
+        from sklearn.decomposition import PCA
+        # Use benchmark columns only (exclude ALT target, trajectory, SVD factors)
+        pca_source_cols = [c for c in feature_cols
+                          if c != ALT_TARGET
+                          and not c.startswith("_svd_f")
+                          and not c.startswith("traj_")]
+        pca_source = _safe_features_pre_traj[pca_source_cols]
+        n_comp = min(pca_in_target, pca_source.shape[1], pca_source.shape[0] - 1)
+        pca_scaler = StandardScaler()
+        pca_model = PCA(n_components=n_comp)
+        pca_vals = pca_model.fit_transform(pca_scaler.fit_transform(pca_source.values))
+        for k in range(n_comp):
+            target_base_features[f"_target_pc{k+1}"] = pca_vals[:, k]
+        pca_var = pca_model.explained_variance_ratio_
+        print(f"PCA in target: {n_comp} components, "
+              f"explained variance: {sum(pca_var):.1%} "
+              f"(PC1={pca_var[0]:.1%})")
+
     to_save = safe_features if id_series is None else pd.concat([id_series, safe_features], axis=1)
     to_save.to_csv(os.path.join(out_dir, "feature_matrix_used.csv"), index=False)
 
@@ -5278,7 +5930,21 @@ def main():
     weights_cv = sample_weights_all[~y_missing_mask]
     dense_cv = dense_mask_all[~y_missing_mask]
     target_cv_splits = None
-    if args.group_cv:
+    top_k_loo = getattr(args, 'top_k_loo', 0)
+    if top_k_loo > 0:
+        # LOO only on top K models by target score
+        y_cv = y_all[~y_missing_mask]
+        top_k_idx = np.argsort(-y_cv)[:top_k_loo]
+        all_idx = np.arange(len(y_cv))
+        target_cv_splits = [
+            (np.delete(all_idx, i), np.array([i]))
+            for i in top_k_idx
+        ]
+        args.outer_cv = len(target_cv_splits)
+        args.cv_repeats_outer = 1
+        print(f"Top-{top_k_loo} LOO: {len(target_cv_splits)} folds, "
+              f"score range {y_cv[top_k_idx[-1]]:.1f} - {y_cv[top_k_idx[0]]:.1f}")
+    elif args.group_cv:
         train_model_names = imputed_df[ID_COL].values[~y_missing_mask]
         group_labels_cv = _extract_model_groups(pd.Series(train_model_names))
         group_counts = dict(pd.Series(group_labels_cv).value_counts())
@@ -5292,12 +5958,12 @@ def main():
         print(f"GroupKFold: {len(set(group_labels_cv))} groups, "
               f"sizes: {group_counts}")
         target_cv_splits = _build_group_splits(
-            len(X_cv), args.selector_cv, group_labels_cv,
+            len(X_cv), args.outer_cv, group_labels_cv,
             args.cv_repeats_outer, args.cv_seed)
     elif args.cv_splits_path:
         target_cv_splits = get_or_create_splits(
             len(X_cv),
-            args.selector_cv,
+            args.outer_cv,
             args.cv_splits_path,
             repeats=args.cv_repeats_outer,
             seed=args.cv_seed,
@@ -5307,7 +5973,7 @@ def main():
         X_cv,
         y_all[~y_missing_mask],
         ALT_TARGET,
-        n_splits=args.selector_cv,
+        n_splits=args.outer_cv,
         model_n_jobs=args.model_n_jobs,
         cv_n_jobs=args.cv_n_jobs,
         selector_cfg=TARGET_SELECTOR_CFG,
@@ -5363,7 +6029,7 @@ def main():
                 X_cv_k,
                 y_train,
                 ALT_TARGET,
-                n_splits=args.selector_cv,
+                n_splits=args.outer_cv,
                 model_n_jobs=1,
                 cv_n_jobs=args.cv_n_jobs,
                 selector_cfg=TARGET_SELECTOR_CFG,
@@ -5387,6 +6053,11 @@ def main():
             np.sqrt(np.nanmean((y_train - p) ** 2)) for p in all_oof_preds
         ]))
         print(f"  MI averaged RMSE: {mi_rmse:.2f} (spread: ±{mi_spread:.2f})")
+
+    # Store full features for cross-domain ALT (before target feature selection drops cols)
+    global _CROSS_DOMAIN_FULL_FEATURES
+    if CROSS_DOMAIN_ALT_ENABLED:
+        _CROSS_DOMAIN_FULL_FEATURES = target_base_features.copy()
 
     # Apply global target feature selection for final training/prediction
     ranking_df = None
@@ -5538,8 +6209,8 @@ def main():
     # Use the final sigma_hat (not cross-fitted OOF sigma) for stable estimation
     q_hat = conformal["q_hat"]
     sigma_hat_arr = conformal["sigma_hat"]
-    cal_sigma_final = q_hat * sigma_hat_arr[train_idx]
-    oof_residuals = y_all[train_idx] - oof_preds_valid
+    cal_sigma_final = q_hat * sigma_hat_arr[train_idx_valid]
+    oof_residuals = y_all[train_idx_valid] - oof_preds_valid
     oof_valid = ~np.isnan(oof_residuals)
     z_final = oof_residuals[oof_valid] / np.where(cal_sigma_final[oof_valid] < 1e-12, 1e-12, cal_sigma_final[oof_valid])
     try:

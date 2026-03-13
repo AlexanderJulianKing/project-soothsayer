@@ -576,7 +576,11 @@ def combine_benchmarks_with_auto_mapping():
         # Benchmarks with direct Unified_Name (no LLM mapping)
         "df8": {"name": "Style", "pattern": "benchmarks/style_[0-9]*.csv", "model_col": "model",
                 "columns": ["model", "normalized_length", "log_normalized_length", "normalized_header_count",
-                             "normalized_bold_count", "normalized_list_count", "predicted_delta"]},
+                             "normalized_bold_count", "normalized_list_count", "predicted_delta",
+                             "cv_length", "cv_header_count", "cv_bold_count", "cv_list_count",
+                             "min_length", "min_header_count", "min_bold_count", "min_list_count",
+                             "frac_used_header_count", "frac_used_bold_count", "frac_used_list_count",
+                             "q7_length", "q7_header_count", "q7_bold_count", "q7_list_count"]},
         "df9": {"name": "Logic", "pattern": "benchmarks/logic_*.csv", "model_col": "model_name",
                 "columns": ["model_name", "accuracy", "weighted_accuracy", "avg_answer_tokens",
                              "avg_reasoning_tokens", "PC1", "PC2", "PC3", "PC4"]},

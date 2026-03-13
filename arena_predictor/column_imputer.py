@@ -2348,6 +2348,7 @@ class ModelBankImputer:
         coherence_shape: str = "linear",
         coherence_gate: str = "fixed",
         iterative_coherence: bool = False,
+        eb_parent: bool = False,
         use_svd_predictors: bool = False,
         n_expansion_passes: int = 1,
         max_confident_extras: int = 1,
@@ -2368,6 +2369,7 @@ class ModelBankImputer:
         self.coherence_shape = coherence_shape
         self.coherence_gate = coherence_gate
         self.iterative_coherence = iterative_coherence
+        self.eb_parent = eb_parent
         self.use_svd_predictors = use_svd_predictors
         self.n_expansion_passes = n_expansion_passes
         self.max_confident_extras = max_confident_extras
@@ -2449,6 +2451,10 @@ class ModelBankImputer:
             self.sigma2_matrix_.loc[observed_mask, col] = 0.0
 
         self._pass1_observed_only(X_df, cols_to_impute)
+
+        # ---- Phase 2b: EB parent shrinkage (post-pass1, pre-coherence) ----
+        if self.eb_parent:
+            self._eb_parent_shrinkage(X_df, cols_to_impute)
 
         # ---- Phase 3: expansion passes — uncertainty-gated ----
         if self.iterative_coherence:
@@ -2577,6 +2583,48 @@ class ModelBankImputer:
         self.spearman_matrix_ = X_df[numeric_cols].corr(method='spearman')
         if self.verbose:
             print("  Correlation matrices computed")
+
+    # --------------------------------------------------------------------- #
+    #  Phase 4a: empirical-Bayes parent shrinkage                            #
+    # --------------------------------------------------------------------- #
+    def _eb_parent_shrinkage(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
+        """Shrink uncertain imputed cells toward the column mean (parent model).
+
+        For each missing cell: new = w * prediction + (1-w) * col_mean,
+        where w = parent_var / (parent_var + cell_sigma2).
+
+        Cells with low sigma2 (confident) keep their prediction;
+        cells with high sigma2 get pulled toward the column mean.
+        """
+        for col in cols_to_impute:
+            miss_mask = self.original_missing_.get(col)
+            if miss_mask is None:
+                continue
+            miss_idx = miss_mask[miss_mask].index
+            if len(miss_idx) == 0:
+                continue
+
+            # Parent model: column mean from observed values
+            obs_mask = ~miss_mask
+            obs_vals = X_df.loc[obs_mask, col]
+            if len(obs_vals) < 2:
+                continue
+            parent_mean = float(obs_vals.mean())
+            parent_var = float(obs_vals.var())
+            if parent_var < 1e-12:
+                continue
+
+            # Shrinkage: w = parent_var / (parent_var + sigma2)
+            sigma2_vals = self.sigma2_matrix_.loc[miss_idx, col].values
+            w = parent_var / (parent_var + sigma2_vals)
+            w = np.clip(w, 0.0, 1.0)
+
+            pred_vals = X_df.loc[miss_idx, col].values
+            shrunk = w * pred_vals + (1.0 - w) * parent_mean
+            X_df.loc[miss_idx, col] = shrunk
+
+        if self.verbose:
+            print("  EB parent shrinkage applied")
 
     # --------------------------------------------------------------------- #
     #  Phase 4b: low-rank coherence projection                               #
