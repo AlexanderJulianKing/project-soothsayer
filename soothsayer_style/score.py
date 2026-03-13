@@ -19,28 +19,21 @@ import re
 import sys
 from typing import Any, Dict, List, Tuple
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
+warnings.filterwarnings('ignore', category=pd.errors.PerformanceWarning)
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from core.utils import get_latest_file
-from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import (
-    AdaBoostRegressor,
     ExtraTreesRegressor,
     GradientBoostingRegressor,
-    HistGradientBoostingRegressor,
-    RandomForestRegressor,
     VotingRegressor,
 )
-from sklearn.linear_model import BayesianRidge, ElasticNet, Lasso, Ridge
-from sklearn.model_selection import KFold, cross_val_predict, cross_val_score
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.neural_network import MLPRegressor
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVR
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.model_selection import KFold, cross_val_predict
 
 # ==============================================================================
 # --- CONFIGURATION ---
@@ -69,7 +62,15 @@ SCORING_WEIGHTS = {
     'list_count': 0.019,
 }
 STYLE_METRICS = list(SCORING_WEIGHTS.keys())
-LINEAR_MODELS = {'ridge', 'lasso', 'elastic_net', 'bayesian_ridge'}
+
+# Extra text metrics computed per response alongside the original 4
+EXTRA_TEXT_METRICS = [
+    'sentences', 'words', 'paragraphs', 'code_blocks', 'inline_code',
+    'blockquotes', 'table_rows', 'emoji_count', 'exclamation_marks',
+    'question_marks', 'newlines',
+]
+
+FEATURE_SELECT_K = 80
 
 
 # ==============================================================================
@@ -154,7 +155,7 @@ def load_tone_trueskill_scores() -> pd.DataFrame:
 
 
 # ==============================================================================
-# --- MARKDOWN FEATURE ENGINEERING (from old collect.py) ---
+# --- TEXT FEATURE ENGINEERING ---
 # ==============================================================================
 def calculate_markdown_stats(text: str) -> Dict[str, int]:
     text = text or ""
@@ -170,6 +171,30 @@ def calculate_markdown_stats(text: str) -> Dict[str, int]:
     return stats
 
 
+def calculate_extra_text_stats(text: str) -> Dict[str, float]:
+    """Additional text features: sentence/word counts, code blocks, emoji, etc."""
+    text = str(text) if text else ""
+    words = text.split()
+    lines = text.split("\n")
+    non_empty_lines = [l for l in lines if l.strip()]
+    return {
+        'sentences': len(re.split(r'[.!?]+', text)),
+        'words': len(words),
+        'paragraphs': len(re.split(r'\n\s*\n', text.strip())),
+        'code_blocks': len(re.findall(r'```', text)) // 2,
+        'inline_code': len(re.findall(r'`[^`]+`', text)),
+        'blockquotes': len(re.findall(r'^\s*>', text, re.MULTILINE)),
+        'table_rows': len(re.findall(r'^\|.*\|\s*$', text, re.MULTILINE)),
+        'emoji_count': len(re.findall(
+            r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF'
+            r'\U0001F680-\U0001F6FF\U0001F900-\U0001F9FF'
+            r'\U00002702-\U000027B0]', text)),
+        'exclamation_marks': text.count('!'),
+        'question_marks': text.count('?'),
+        'newlines': text.count('\n'),
+    }
+
+
 def min_max_scale(series: pd.Series) -> pd.Series:
     if series.empty:
         return pd.Series(0.0, index=series.index)
@@ -181,10 +206,10 @@ def min_max_scale(series: pd.Series) -> pd.Series:
 
 
 def compute_style_features(responses_csv: str) -> Tuple[pd.DataFrame, List[str], List[str], List[str]]:
-    """Compute markdown style features from long-format responses.csv.
+    """Compute text features from long-format responses.csv.
 
-    Computes per-response stats, then averages across runs per (model, question).
-    Normalization and log-transforms applied after averaging.
+    Computes per-response stats (original markdown + extra text), then averages
+    across runs per (model, question). Returns wide-format features + summaries.
     """
     if not os.path.exists(responses_csv):
         print(f"Error: Responses file '{responses_csv}' not found.")
@@ -201,21 +226,26 @@ def compute_style_features(responses_csv: str) -> Tuple[pd.DataFrame, List[str],
         print("Error: No 'ok' responses found in responses.csv.")
         return pd.DataFrame(), [], [], []
 
-    # Compute per-response markdown stats
-    for metric in STYLE_METRICS:
+    # Compute per-response stats: original 4 + extra 11
+    all_metrics = STYLE_METRICS + EXTRA_TEXT_METRICS
+    for metric in all_metrics:
         df[metric] = 0
     for idx, row in df.iterrows():
-        stats = calculate_markdown_stats(str(row.get('response', '') or ''))
+        text = str(row.get('response', '') or '')
+        md_stats = calculate_markdown_stats(text)
+        extra_stats = calculate_extra_text_stats(text)
         for metric in STYLE_METRICS:
-            df.at[idx, metric] = stats[metric]
+            df.at[idx, metric] = md_stats[metric]
+        for metric in EXTRA_TEXT_METRICS:
+            df.at[idx, metric] = extra_stats[metric]
 
     # Average raw stats across runs per (model_name, question_id)
-    per_model_question = df.groupby(['model_name', 'question_id'])[STYLE_METRICS].mean().reset_index()
+    per_model_question = df.groupby(['model_name', 'question_id'])[all_metrics].mean().reset_index()
 
     # Get model-level code mapping (first occurrence)
     model_codes = df.drop_duplicates(subset=['model_name'])[['model_name', 'model_id']].copy()
 
-    # Pivot to wide format: one row per model, columns like Q1_length, Q1_header_count, etc.
+    # Pivot to wide format: one row per model, columns like Q1_length, Q1_sentences, etc.
     q_ids = sorted(per_model_question['question_id'].unique())
     feature_rows = []
     for model_name in per_model_question['model_name'].unique():
@@ -225,7 +255,7 @@ def compute_style_features(responses_csv: str) -> Tuple[pd.DataFrame, List[str],
 
         for q_id in q_ids:
             q_row = model_data[model_data['question_id'] == q_id]
-            for metric in STYLE_METRICS:
+            for metric in all_metrics:
                 col_name = f'Q{q_id}_{metric}'
                 row_dict[col_name] = q_row[metric].values[0] if len(q_row) > 0 else 0
 
@@ -234,17 +264,42 @@ def compute_style_features(responses_csv: str) -> Tuple[pd.DataFrame, List[str],
     features_df = pd.DataFrame(feature_rows)
 
     # Compute combined (full-text) stats: average across all questions per model
-    combined = per_model_question.groupby('model_name')[STYLE_METRICS].mean().reset_index()
-    # Scale combined by number of questions to approximate full-text stats
+    combined = per_model_question.groupby('model_name')[all_metrics].mean().reset_index()
     n_questions = len(q_ids)
-    for metric in STYLE_METRICS:
+    for metric in all_metrics:
         combined[f'combined_{metric}'] = combined[metric] * n_questions
-    combined = combined.drop(columns=STYLE_METRICS)
+    combined = combined.drop(columns=all_metrics)
     features_df = features_df.merge(combined, left_on='model', right_on='model_name', how='left')
     if 'model_name' in features_df.columns:
         features_df.drop(columns=['model_name'], inplace=True)
 
-    # Build column name lists
+    # Model-level summary stats (mean, std) from per-question raw values
+    for metric in all_metrics:
+        q_cols = [f'Q{q}_{metric}' for q in q_ids if f'Q{q}_{metric}' in features_df.columns]
+        if q_cols:
+            features_df[f'avg_{metric}'] = features_df[q_cols].mean(axis=1)
+            features_df[f'std_{metric}'] = features_df[q_cols].std(axis=1)
+
+    # Shape/variance features: CV, min, frac_used for primary style metrics
+    for metric in STYLE_METRICS:
+        q_cols = [f'Q{q}_{metric}' for q in q_ids if f'Q{q}_{metric}' in features_df.columns]
+        if not q_cols:
+            continue
+        q_vals = features_df[q_cols].values.astype(float)
+        avg = features_df.get(f'avg_{metric}', pd.Series(0, index=features_df.index)).values
+        std = features_df.get(f'std_{metric}', pd.Series(0, index=features_df.index)).values
+        features_df[f'cv_{metric}'] = np.where(avg > 1e-6, std / avg, 0.0)
+        features_df[f'min_{metric}'] = np.nanmin(q_vals, axis=1)
+        features_df[f'frac_used_{metric}'] = np.nanmean(q_vals > 0, axis=1)
+
+    # Q7 (creative programming) per-question features — strongest single-question
+    # predictors of Arena ELO (r=0.57 for headers, r=0.47 for length)
+    for metric in STYLE_METRICS:
+        q7_col = f'Q7_{metric}'
+        if q7_col in features_df.columns:
+            features_df[f'q7_{metric}'] = features_df[q7_col]
+
+    # Normalized columns (original metrics only, for backward compat with combine.py)
     q_col_labels = [f'Q{q_id}' for q_id in q_ids]
     per_question_raw_cols: List[str] = []
     per_question_norm_cols: List[str] = []
@@ -281,7 +336,20 @@ def compute_style_features(responses_csv: str) -> Tuple[pd.DataFrame, List[str],
                 features_df[f'log_{c}'] = np.log1p(features_df[c])
                 log_norm_cols.append(f'log_{c}')
 
-    # Composite style score
+    # Engineered ratios
+    avg_len = features_df.get('avg_length', features_df.get('combined_length', pd.Series(0, index=features_df.index)))
+    for metric in ['bold_count', 'header_count', 'list_count', 'code_blocks', 'inline_code', 'emoji_count']:
+        avg_col = f'avg_{metric}'
+        if avg_col in features_df.columns:
+            features_df[f'{metric}_per_1k_chars'] = features_df[avg_col] / (avg_len + 1) * 1000
+    if 'avg_sentences' in features_df.columns and 'avg_paragraphs' in features_df.columns:
+        features_df['sentences_per_paragraph'] = features_df['avg_sentences'] / (features_df['avg_paragraphs'] + 1)
+    if 'avg_words' in features_df.columns and 'avg_sentences' in features_df.columns:
+        features_df['words_per_sentence'] = features_df['avg_words'] / (features_df['avg_sentences'] + 1)
+    if 'avg_length' in features_df.columns and 'avg_words' in features_df.columns:
+        features_df['chars_per_word'] = features_df['avg_length'] / (features_df['avg_words'] + 1)
+
+    # Composite style score (backward compat)
     total_weight = sum(SCORING_WEIGHTS.values())
     features_df['style_score'] = 0.0
     for metric, weight in SCORING_WEIGHTS.items():
@@ -293,7 +361,7 @@ def compute_style_features(responses_csv: str) -> Tuple[pd.DataFrame, List[str],
 
 
 # ==============================================================================
-# --- MACHINE LEARNING (from old collect.py) ---
+# --- MACHINE LEARNING ---
 # ==============================================================================
 def load_benchmark_scores(score_file: str) -> pd.DataFrame:
     try:
@@ -328,73 +396,22 @@ def load_benchmark_scores(score_file: str) -> pd.DataFrame:
     return df
 
 
-def build_model_zoo() -> Dict[str, Any]:
-    ridge = Pipeline([('scaler', StandardScaler()), ('model', Ridge(alpha=1.0))])
-    lasso = Pipeline([('scaler', StandardScaler()), ('model', Lasso(alpha=0.0005, max_iter=10000, random_state=42))])
-    elastic_net = Pipeline([('scaler', StandardScaler()), ('model', ElasticNet(alpha=0.001, l1_ratio=0.5, max_iter=10000, random_state=42))])
-    bayesian_ridge = Pipeline([('scaler', StandardScaler()), ('model', BayesianRidge())])
-    svr_rbf = Pipeline([('scaler', StandardScaler()), ('model', SVR(kernel='rbf', C=10.0, epsilon=0.1))])
-    knn = Pipeline([('scaler', StandardScaler()), ('model', KNeighborsRegressor(n_neighbors=5))])
-    mlp = Pipeline([('scaler', StandardScaler()), ('model', MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=5000, random_state=42))])
-    decision_tree = DecisionTreeRegressor(random_state=42)
-    random_forest = RandomForestRegressor(n_estimators=500, random_state=42)
-    extra_trees = ExtraTreesRegressor(n_estimators=500, random_state=42)
-    gradient_boosting = GradientBoostingRegressor(random_state=42)
-    hist_gradient_boosting = HistGradientBoostingRegressor(random_state=42)
-    ada_boost = AdaBoostRegressor(random_state=42, n_estimators=400)
-    base_models: Dict[str, Any] = {
-        'ridge': ridge,
-        'lasso': lasso,
-        'elastic_net': elastic_net,
-        'bayesian_ridge': bayesian_ridge,
-        'svr_rbf': svr_rbf,
-        'knn': knn,
-        'mlp': mlp,
-        'decision_tree': decision_tree,
-        'random_forest': random_forest,
-        'extra_trees': extra_trees,
-        'gradient_boosting': gradient_boosting,
-        'hist_gradient_boosting': hist_gradient_boosting,
-        'ada_boost': ada_boost,
-        'dummy_mean': DummyRegressor(strategy='mean'),
-    }
-
-    top_for_ensemble = [
-        ('bayesian_ridge', base_models['bayesian_ridge']),
-        ('hist_gradient_boosting', base_models['hist_gradient_boosting']),
-        ('extra_trees', base_models['extra_trees']),
-    ]
-    base_models['voting_ensemble'] = VotingRegressor(estimators=top_for_ensemble)
-
-    return base_models
+def _build_delta_model():
+    """Vote(ExtraTrees + GradientBoosting) — best from 182-experiment sweep."""
+    return VotingRegressor([
+        ('et', ExtraTreesRegressor(n_estimators=500, random_state=42)),
+        ('gb', GradientBoostingRegressor(
+            n_estimators=200, max_depth=3, learning_rate=0.05, random_state=42)),
+    ])
 
 
-def evaluate_models(X: pd.DataFrame, y: pd.Series, cv_splits: int) -> Tuple[str, Dict[str, Any]]:
-    models = build_model_zoo()
-
-    if cv_splits < 2:
-        return 'ridge', {'ridge': {'mean_rmse': float('nan'), 'std_rmse': float('nan'), 'splits': cv_splits}}
-
-    kf = KFold(n_splits=cv_splits, shuffle=True, random_state=42)
-
-    performance: Dict[str, Dict[str, float]] = {}
-    best_model_name = None
-    best_score = float('inf')
-
-    for name, model in models.items():
-        scores = cross_val_score(model, X, y, cv=kf, scoring='neg_root_mean_squared_error')
-        rmse_scores = -scores
-        performance[name] = {
-            'mean_rmse': float(rmse_scores.mean()),
-            'std_rmse': float(rmse_scores.std()),
-            'splits': cv_splits,
-        }
-        if performance[name]['mean_rmse'] < best_score:
-            best_score = performance[name]['mean_rmse']
-            best_model_name = name
-
-    assert best_model_name is not None
-    return best_model_name, performance
+def _select_top_features(X: pd.DataFrame, y: pd.Series, k: int) -> List[str]:
+    """Importance-based feature selection using ExtraTrees."""
+    selector = ExtraTreesRegressor(n_estimators=500, random_state=42)
+    selector.fit(X, y)
+    importances = pd.Series(selector.feature_importances_, index=X.columns)
+    top_cols = importances.nlargest(k).index.tolist()
+    return top_cols
 
 
 def train_and_predict_delta(
@@ -425,54 +442,46 @@ def train_and_predict_delta(
         features_with_scores['best_model'] = pd.NA
         return features_with_scores, {}, []
 
-    combined_cols = [f'combined_{metric}' for metric in STYLE_METRICS]
-    normalized_cols = [f'normalized_{metric}' for metric in STYLE_METRICS]
-    base_feature_cols = per_question_norm_cols + combined_cols + normalized_cols + ['style_score']
-    if log_norm_cols:
-        base_feature_cols += log_norm_cols
-    base_feature_cols = [col for col in base_feature_cols if col in features_with_scores.columns]
-
-    if not base_feature_cols:
-        print("No feature columns available for model training.")
-        features_with_scores['predicted_delta'] = pd.NA
-        features_with_scores['best_model'] = pd.NA
-        return features_with_scores, {}, []
+    # Build feature column list (all numeric features available)
+    exclude_cols = {'model', 'code', 'openbench_Model', 'lmarena_Score', 'lmsys_Score', 'delta_score',
+                    'predicted_delta', 'best_model'}
+    all_feature_cols = [c for c in features_with_scores.columns
+                        if c not in exclude_cols and features_with_scores[c].dtype in ('float64', 'int64', 'float32')]
 
     sbf_cols = [c for c in ['logic_weighted_accuracy', 'logic_PC1']
                 if c in features_with_scores.columns]
-    feature_cols = base_feature_cols + sbf_cols
+    base_feature_cols = [c for c in all_feature_cols if c not in sbf_cols]
 
+    feature_cols = all_feature_cols
     importance_rows: List[Dict[str, Any]] = []
 
     if sbf_cols:
         train_with_sbf = train_df.dropna(subset=sbf_cols)
-        train_without_sbf = train_df[train_df[sbf_cols].isna().any(axis=1)]
         n_with = len(train_with_sbf)
-        n_without = len(train_without_sbf)
+        n_without = len(train_df) - n_with
         print(f"Delta training: {n_with} models with logic, {n_without} without.")
     else:
         train_with_sbf = train_df
-        train_without_sbf = pd.DataFrame()
 
-    X_train = train_with_sbf[feature_cols].fillna(0.0)
+    X_train_full = train_with_sbf[feature_cols].fillna(0.0)
     y_train = train_with_sbf['delta_score']
 
+    # Feature selection: pick top-k by ExtraTrees importance
+    k = min(FEATURE_SELECT_K, len(feature_cols))
+    selected_cols = _select_top_features(X_train_full, y_train, k)
+    print(f"Selected {len(selected_cols)} features from {len(feature_cols)} total.")
+
+    X_train = train_with_sbf[selected_cols].fillna(0.0)
     cv_splits = min(5, len(X_train))
-    best_model_name, performance = evaluate_models(X_train, y_train, cv_splits)
 
-    if best_model_name not in performance:
-        print("Unable to evaluate models; skipping prediction.")
-        features_with_scores['predicted_delta'] = pd.NA
-        features_with_scores['best_model'] = pd.NA
-        return features_with_scores, performance, []
-
-    models = build_model_zoo()
-    best_model = models[best_model_name]
+    # Train production model on all training data
+    best_model_name = 'vote_et_gb'
+    best_model = _build_delta_model()
     best_model.fit(X_train, y_train)
 
     # OOF predictions for training models to prevent leakage into downstream pipeline
     kf_oof = KFold(n_splits=cv_splits, shuffle=True, random_state=42)
-    oof_model = build_model_zoo()[best_model_name]
+    oof_model = _build_delta_model()
     oof_preds = cross_val_predict(oof_model, X_train, y_train, cv=kf_oof)
     oof_r = np.corrcoef(y_train, oof_preds)[0, 1] if len(y_train) > 2 else float('nan')
     oof_rmse = float(np.sqrt(np.mean((y_train.values - oof_preds) ** 2)))
@@ -488,58 +497,60 @@ def train_and_predict_delta(
 
     non_train_sbf = has_sbf & ~features_with_scores.index.isin(train_sbf_idx)
     if non_train_sbf.any():
-        X_non_train = features_with_scores.loc[non_train_sbf, feature_cols].fillna(0.0)
+        X_non_train = features_with_scores.loc[non_train_sbf, selected_cols].fillna(0.0)
         features_with_scores.loc[non_train_sbf, 'predicted_delta'] = best_model.predict(X_non_train)
 
+    # Fallback for models without logic features
     if sbf_cols and (~has_sbf).any():
         n_fallback = (~has_sbf).sum()
-        X_fallback_train = train_df[base_feature_cols].fillna(0.0)
-        y_fallback_train = train_df['delta_score']
-        fallback_name, _ = evaluate_models(X_fallback_train, y_fallback_train, min(5, len(X_fallback_train)))
-        fallback_model = build_model_zoo()[fallback_name]
-        fallback_model.fit(X_fallback_train, y_fallback_train)
+        fallback_base_cols = [c for c in selected_cols if c not in sbf_cols]
+        if not fallback_base_cols:
+            fallback_base_cols = base_feature_cols[:k]
+
+        X_fb_train = train_df[fallback_base_cols].fillna(0.0)
+        y_fb_train = train_df['delta_score']
+        fallback_model = _build_delta_model()
+        fallback_model.fit(X_fb_train, y_fb_train)
+
         # OOF for fallback training rows too
         fallback_train_idx = train_df[train_df[sbf_cols].isna().any(axis=1)].index
         if len(fallback_train_idx) >= 2:
             kf_fb = KFold(n_splits=min(cv_splits, len(fallback_train_idx)), shuffle=True, random_state=42)
-            fb_oof_model = build_model_zoo()[fallback_name]
-            fb_oof = cross_val_predict(fb_oof_model, X_fallback_train.loc[fallback_train_idx], y_fallback_train.loc[fallback_train_idx], cv=kf_fb)
+            fb_oof_model = _build_delta_model()
+            fb_oof = cross_val_predict(
+                fb_oof_model,
+                X_fb_train.loc[fallback_train_idx],
+                y_fb_train.loc[fallback_train_idx],
+                cv=kf_fb,
+            )
             features_with_scores.loc[fallback_train_idx, 'predicted_delta'] = fb_oof
+
         non_train_no_sbf = (~has_sbf) & ~features_with_scores.index.isin(train_df.index)
         if non_train_no_sbf.any():
-            X_no_sbf = features_with_scores.loc[non_train_no_sbf, base_feature_cols].fillna(0.0)
+            X_no_sbf = features_with_scores.loc[non_train_no_sbf, fallback_base_cols].fillna(0.0)
             features_with_scores.loc[non_train_no_sbf, 'predicted_delta'] = fallback_model.predict(X_no_sbf)
-        print(f"Fallback ({fallback_name}) used for {n_fallback} models without logic.")
+        print(f"Fallback used for {n_fallback} models without logic.")
 
-    if best_model_name in LINEAR_MODELS:
-        model = best_model.named_steps['model']
-        coef_series = pd.Series(model.coef_, index=feature_cols)
-        importance_rows = [
-            {
-                'feature': feature,
-                'importance': float(value),
-                'best_model': best_model_name,
-                'type': 'coefficient',
-            }
-            for feature, value in coef_series.items()
-        ]
-        importance_rows.append({
-            'feature': '__intercept__',
-            'importance': float(model.intercept_),
+    # Feature importances (from the ET component of the voting model)
+    et_model = best_model.named_estimators_['et']
+    importances = et_model.feature_importances_
+    importance_rows = [
+        {
+            'feature': feature,
+            'importance': float(value),
             'best_model': best_model_name,
-            'type': 'coefficient_intercept',
-        })
-    elif hasattr(best_model, 'feature_importances_'):
-        importances = getattr(best_model, 'feature_importances_')
-        importance_rows = [
-            {
-                'feature': feature,
-                'importance': float(value),
-                'best_model': best_model_name,
-                'type': 'feature_importance',
-            }
-            for feature, value in zip(feature_cols, importances)
-        ]
+            'type': 'feature_importance',
+        }
+        for feature, value in zip(selected_cols, importances)
+    ]
+
+    performance = {
+        best_model_name: {
+            'mean_rmse': oof_rmse,
+            'std_rmse': float('nan'),
+            'splits': cv_splits,
+        }
+    }
 
     return features_with_scores, performance, importance_rows
 
@@ -569,6 +580,12 @@ def save_outputs(
     summary_cols += [f'combined_{metric}' for metric in STYLE_METRICS]
     summary_cols += [f'normalized_{metric}' for metric in STYLE_METRICS]
     summary_cols += ['log_normalized_length']
+    # Shape/variance features
+    for metric in STYLE_METRICS:
+        summary_cols += [f'cv_{metric}', f'min_{metric}', f'frac_used_{metric}']
+    # Q7 (creative programming) per-question features
+    for metric in STYLE_METRICS:
+        summary_cols.append(f'q7_{metric}')
     for col in ['lmarena_Score', 'lmsys_Score', 'delta_score', 'predicted_delta']:
         if col in prediction_df.columns:
             summary_cols.append(col)
@@ -613,7 +630,7 @@ def main():
     else:
         print("Warning: No tone scores to save.")
 
-    # 2. Compute markdown style features from responses
+    # 2. Compute text style features from responses
     features_df, per_question_raw_cols, per_question_norm_cols, log_norm_cols = compute_style_features(RESPONSES_CSV)
     if features_df.empty:
         print("Unable to compute style features. Exiting.")
