@@ -10,7 +10,7 @@ class TestBenchmarkConfig:
         assert cfg.max_workers == 10
         assert cfg.max_retries == 3
         assert cfg.retry_delay == 5.0
-        assert cfg.max_battles == 100
+        assert cfg.max_battles == 20
         assert cfg.draw_probability == 0.03
 
     def test_custom_values(self):
