@@ -31,7 +31,6 @@ Example Usage:
     >>> issues = find_mapping_issues(df_combined)
     >>> df_combined.to_csv('combined_all_benches.csv', index=False)
 
-Author: [Your Name]
 """
 
 import pandas as pd

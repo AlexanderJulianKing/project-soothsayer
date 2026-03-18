@@ -74,7 +74,7 @@ tests/                   Test suite (105 tests)
 # Clone and install
 git clone https://github.com/AlexanderJulianKing/project-soothsayer.git
 cd project-soothsayer
-pip install -e .
+pip install -e ".[benchmarks,predict,dev]"
 
 # Configure API keys
 cp .env.example .env
@@ -109,7 +109,7 @@ cd soothsayer_eq && python3 main.py && python3 super_bench.py
 # Soothsayer Writing
 cd soothsayer_writing && python3 main.py && python3 super_bench.py
 
-# Soothsayer Logic
+# Soothsayer Logic (requires private questions.json — see note above)
 cd soothsayer_logic && python3 collect_and_grade.py && python3 score.py
 
 # Soothsayer Style
