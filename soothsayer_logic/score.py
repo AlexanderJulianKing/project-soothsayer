@@ -50,8 +50,6 @@ except ImportError:
 
 # --- Configuration ---
 INPUT_CSV_FILE = 'benchmark_results_multi_run.csv'
-QUESTION_COEFFICIENTS_FILE = 'question_coefficients.csv'
-DEFAULT_QUESTION_COEFFICIENT = 1.0
 TARGETS_FILE = 'combined_all_benches.csv'
 
 current_date = datetime.datetime.now().strftime("%Y%m%d")
@@ -738,40 +736,6 @@ def predict_benchmark_scores(model_key: str, feature_rows, column_table_df):
     return predictions
 
 
-def load_question_coefficients(path):
-    """Load per-question weights from a CSV file keyed by question_id."""
-    coeffs = {}
-    if not path or not os.path.exists(path):
-        return coeffs
-
-    try:
-        with open(path, 'r', newline='', encoding='utf-8') as handle:
-            reader = csv.DictReader(handle)
-            if not reader.fieldnames:
-                return coeffs
-
-            # Normalize headers and allow a couple common aliases
-            normalized = {name.strip().lower(): name for name in reader.fieldnames}
-            q_col = normalized.get('question_id') or normalized.get('questionid')
-            c_col = normalized.get('coefficient') or normalized.get('weight')
-            if not q_col or not c_col:
-                print(f"Warning: Coefficient file '{path}' is missing required headers.")
-                return coeffs
-
-            for row in reader:
-                raw_qid = (row.get(q_col) or '').strip()
-                raw_coeff = (row.get(c_col) or '').strip()
-                if not raw_qid or not raw_coeff:
-                    continue
-                try:
-                    coeffs[str(raw_qid)] = float(raw_coeff)
-                except ValueError:
-                    continue
-    except (IOError, csv.Error) as exc:
-        print(f"Warning: Could not read question coefficients from '{path}': {exc}")
-
-    return coeffs
-
 
 def load_actual_simplebench_scores(path):
     """Return a mapping of model name to actual SimpleBench AVG@5 scores."""
@@ -868,15 +832,6 @@ def calculate_scores(input_filename):
         print(f"Input file '{input_filename}' not found.")
         return []
 
-    question_coefficients = load_question_coefficients(QUESTION_COEFFICIENTS_FILE)
-    if not question_coefficients:
-        print(
-            f"Note: No question coefficients loaded from '{QUESTION_COEFFICIENTS_FILE}'. "
-            "Weighted accuracy will default to standard accuracy."
-        )
-    else:
-        print(f"Loaded coefficients for {len(question_coefficients)} questions.")
-
     # Per model aggregates
     agg = defaultdict(lambda: {
         'model_name': None,
@@ -895,9 +850,6 @@ def calculate_scores(input_filename):
         'sum_answer_tokens': 0,
         'sum_sq_output_tokens': 0,
         'count_with_token_info': 0,
-        # weighted accuracy tracking
-        'weighted_score_sum': 0.0,
-        'weighted_abs_sum': 0.0,
         # per-question statistics
         'question_score_sum': defaultdict(float),
         'question_attempts': defaultdict(int),
@@ -930,19 +882,14 @@ def calculate_scores(input_filename):
             else:
                 a['other_labels'][norm] += 1
 
-            # Weighted accuracy contribution
+            # Per-question score tracking
             question_id = str(row.get('question_id') or '').strip()
-            weight = question_coefficients.get(question_id, DEFAULT_QUESTION_COEFFICIENT)
-            # Map normalized label to a numeric score (same semantics as accuracy calc)
             if norm == 'correct':
                 score_value = 1.0
             elif norm == 'partially_correct':
                 score_value = 0.5
             else:
                 score_value = 0.0
-
-            a['weighted_score_sum'] += weight * score_value
-            a['weighted_abs_sum'] += abs(weight)
 
             if question_id:
                 a['question_score_sum'][question_id] += score_value
@@ -982,10 +929,6 @@ def calculate_scores(input_filename):
         # Simple accuracy with partial credit = 0.5
         acc = (correct + 0.5 * partial) / total
 
-        weight_denom = a['weighted_abs_sum']
-        weighted_acc = (a['weighted_score_sum'] / weight_denom) if weight_denom else 0.0
-        baseline_weighted_percent = round(weighted_acc * 100.0, 4)
-
         # Compute averages (guard divide-by-zero)
         n_tok = max(a['count_with_token_info'], 1)
         avg_output = a['sum_output_tokens'] / n_tok
@@ -1015,7 +958,7 @@ def calculate_scores(input_filename):
             row['avg_output_tokens'] = 'NA'
             row['avg_reasoning_tokens'] = 'NA'
             row['avg_answer_tokens'] = 'NA'
-        row['_baseline_weighted_accuracy'] = baseline_weighted_percent
+        row['_baseline_accuracy_pct'] = round(acc * 100.0, 4)
 
         # Category accuracy: physics (applied math) and trick (lateral thinking)
         def _cat_acc(q_set):
@@ -1083,13 +1026,13 @@ def calculate_scores(input_filename):
         if raw_pred is not None:
             row['weighted_accuracy'] = round(raw_pred, 4)
         else:
-            row['weighted_accuracy'] = row['_baseline_weighted_accuracy']
+            row['weighted_accuracy'] = row['_baseline_accuracy_pct']
 
         # Wire up holdout metrics keys
         actual = actual_scores.get(model_name)
         if actual is not None:
             row['simplebench_actual_score'] = actual
-            row['run_weighted_accuracy'] = row['_baseline_weighted_accuracy']
+            row['run_weighted_accuracy'] = row['_baseline_accuracy_pct']
 
     # Compute principal components from per-question features
     pc_results = compute_principal_components(feature_rows)
