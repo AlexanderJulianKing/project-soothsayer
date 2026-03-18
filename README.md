@@ -15,7 +15,7 @@ Soothsayer runs 4 custom benchmarks against LLMs via the OpenRouter API, then co
 
 Soothsayer EQ and Soothsayer Writing are based on [EQ-Bench](https://eqbench.com) ([GitHub](https://github.com/EQ-bench)) — the scenario format and pairwise judging approach are adapted from their work.
 
-> **Note:** The Soothsayer Logic question set and reference answers are intentionally kept private to prevent benchmark contamination. The evaluation code is included but the questions themselves are not.
+Soothsayer Logic is based on [SimpleBench](https://simple-bench.com). Like SimpleBench, the question set and reference answers are intentionally kept private to prevent benchmark contamination. The evaluation code is included but the questions themselves are not.
 
 ## Architecture
 
