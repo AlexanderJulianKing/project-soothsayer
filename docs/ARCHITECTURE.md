@@ -19,7 +19,8 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 │  • Multi-source benchmark aggregation (20+ sources)                         │
 │  • LLM-assisted model name mapping (Gemini API)                             │
 │  • Per-source mapping JSONs → OpenBench namespace unification               │
-│  Output: benchmarks/clean_combined_all_benches.csv                          │
+│  Output: benchmarks/combined_all_benches.csv                                │
+│  → correlations.py cleans → benchmarks/clean_combined_all_benches.csv       │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
@@ -81,7 +82,7 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 │  Soothsayer Benchmark Results:                                               │
 │  ├── eq_*.csv                   (Soothsayer EQ TrueSkill ratings)           │
 │  ├── writing_*.csv              (Soothsayer Writing TrueSkill ratings)      │
-│  ├── writing_direct_*.csv       (Soothsayer Writing rubric scores)          │
+│  ├── writing_direct_*.csv       (Soothsayer Writing rubric scores, optional)│
 │  ├── logic_*.csv                (Soothsayer Logic scores)                   │
 │  ├── style_*.csv                (Soothsayer Style metrics)                  │
 │  └── tone_*.csv                 (Soothsayer Tone scores)                    │
@@ -108,7 +109,7 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 │                                                                              │
 │  combined_all_benches.csv                                                    │
 │  └── All benchmarks merged on Unified_Name                                   │
-│      (~65 columns, ~160 models)                                              │
+│      (~290 columns, ~1170 models)                                            │
 │                                                                              │
 │  clean_combined_all_benches.csv                                              │
 │  └── Cleaned version (models with too few scores dropped,                   │
@@ -139,7 +140,7 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 │  ├── alt_model_variance_contributions.csv                                   │
 │  ├── conformal_diagnostics.csv                                              │
 │  ├── model_eval_rmse.csv              (Per-model CV RMSE comparison)        │
-│  └── dependency_graph.json            (Column dependency structure)          │
+│  └── column_dependency_graph.json     (Column dependency structure)          │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -308,7 +309,7 @@ For alternative targets (e.g., lmarena) that have missing values:
 | `--poly_limit` | 6 | Max polynomial interaction terms |
 | `--top_tier_boost` | 1 (no boost) | Duplicate top-tier training rows N times |
 | `--top_tier_threshold` | 1450 | ELO threshold for top-tier boost |
-| `--style_only_final` | off | Restrict lmarena interactions to style columns only |
+| `--style_only_final` | off | Restrict final-stage features to lmarena + style/tone columns |
 | `--margin` | 20.0 | Margin for top_by_margin_prob column |
 | `--gp_selector_k_max` | 28 | Feature cap for GP models (mRMR selection) |
 | `--selector_cv` | 5 | Feature selection CV folds |
@@ -330,17 +331,19 @@ Run `python3 predict.py --help` for the full list of ~80 arguments.
 
 ### SpecializedColumnImputer Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `passes` | 14 | Number of imputation passes |
-| `alpha` | 0.1 | Regularization strength |
-| `selector_tau` | 0.8 | De-correlation threshold for predictor selection |
-| `selector_k_max` | 30 | Max predictors per column |
-| `gp_selector_k_max` | 10 | Feature cap for GP models (mRMR) |
-| `categorical_threshold` | 10 | Max distinct values for auto-categorical |
-| `calibrate_tolerances` | False | Enable per-column tolerance calibration |
-| `calibration_target_rmse_ratio` | 0.5 | Target RMSE/std ratio for calibration |
-| `recalibrate_every_n_passes` | 0 | Recalibrate every N passes (0 = only at start) |
+Constructor defaults (CLI flags in `predict.py` override these):
+
+| Parameter | Constructor Default | CLI Default | Description |
+|-----------|-------------------|-------------|-------------|
+| `passes` | 14 | 14 | Number of imputation passes |
+| `alpha` | 0.1 | 0.9361 | Regularization strength |
+| `selector_tau` | 0.8 | 0.9012 | De-correlation threshold for predictor selection |
+| `selector_k_max` | 30 | 37 | Max predictors per column |
+| `gp_selector_k_max` | 10 | 28 | Feature cap for GP models (mRMR) |
+| `categorical_threshold` | 10 | 0 | Max distinct values for auto-categorical |
+| `calibrate_tolerances` | False | False | Enable per-column tolerance calibration |
+| `calibration_target_rmse_ratio` | 0.5 | 0.6266 | Target RMSE/std ratio for calibration |
+| `recalibrate_every_n_passes` | 0 | 5 | Recalibrate every N passes (0 = only at start) |
 
 ---
 
