@@ -70,8 +70,34 @@ soothsayer_style/model_outputs.csv
 soothsayer_style/analysis_results.csv
 soothsayer_style/combined_all_benches.csv
 
-# Scraped benchmark data (regenerable)
-benchmark_combiner/benchmarks/
+# Scraped benchmark data — ignore all, then allow latest snapshot
+benchmark_combiner/benchmarks/*
+!benchmark_combiner/benchmarks/simplebench_20260220.csv
+!benchmark_combiner/benchmarks/livebench_20260315.csv
+!benchmark_combiner/benchmarks/openbench_20260315.csv
+!benchmark_combiner/benchmarks/openbench_release_dates.csv
+!benchmark_combiner/benchmarks/lmsys_20260315.csv
+!benchmark_combiner/benchmarks/lmarena_20260315.csv
+!benchmark_combiner/benchmarks/lechmazur_combined_20251217.csv
+!benchmark_combiner/benchmarks/aiderbench_20260315.csv
+!benchmark_combiner/benchmarks/contextarena_20260315.csv
+!benchmark_combiner/benchmarks/EQ-Bench_combined_20260315.csv
+!benchmark_combiner/benchmarks/arc_20260315.csv
+!benchmark_combiner/benchmarks/artificialanalysis_20260315.csv
+!benchmark_combiner/benchmarks/weirdml_20260315.csv
+!benchmark_combiner/benchmarks/yupp_text_coding_scores_20260315.csv
+!benchmark_combiner/benchmarks/UGI_Leaderboard_20260315.csv
+!benchmark_combiner/benchmarks/aa_gdpval_20260315.csv
+!benchmark_combiner/benchmarks/aa_omniscience_20260315.csv
+!benchmark_combiner/benchmarks/aa_critpt_20260315.csv
+!benchmark_combiner/benchmarks/style_20260313.csv
+!benchmark_combiner/benchmarks/logic_20260313.csv
+!benchmark_combiner/benchmarks/tone_20260313.csv
+!benchmark_combiner/benchmarks/writing_20260313.csv
+!benchmark_combiner/benchmarks/writing_direct_20260313.csv
+!benchmark_combiner/benchmarks/eq_20260313.csv
+!benchmark_combiner/benchmarks/clean_combined_all_benches.csv
+!benchmark_combiner/benchmarks/combined_all_benches.csv
 
 # Combiner analysis output (generated charts/CSVs)
 benchmark_combiner/analysis_output/

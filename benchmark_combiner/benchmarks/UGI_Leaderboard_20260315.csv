@@ -1,0 +1,274 @@
+author/model_name,Writing
+mistralai/Mistral-Small-3.1-24B-Instruct-2503,32.07
+mistralai/Mistral-Small-24B-Instruct-2501,33.93
+mistralai/Mistral-Small-3.2-24B-Instruct-2506,36.26
+Qwen/QwQ-32B,34.87
+google/gemma-3-27b-it,44.99
+openai/gpt-oss-20b (reasoning=low),24.62
+openai/gpt-oss-20b (reasoning=medium),24.5
+openai/gpt-oss-20b (reasoning=high),10.94
+google/gemma-3-12b-it,29.86
+mistralai/Mistral-Nemo-Instruct-2407,33.07
+meta-llama/Llama-3.1-8B-Instruct,24.82
+Qwen/Qwen2.5-7B-Instruct,29.72
+moonshotai/Kimi-K2-Instruct,52.5
+anthropic/claude-3-7-sonnet-20250219 (thinking=disabled),71.17
+anthropic/claude-3-7-sonnet-20250219 (thinking=enabled),68.01
+google/gemini-2.5-pro,65.18
+meta-llama/Llama-3.3-70B-Instruct,26.18
+Qwen/Qwen3-8B (thinking=False),27.96
+Qwen/Qwen3-8B (thinking=True),23.87
+google/gemma-2-2b-it,20.25
+google/gemma-3-4b-it,24.01
+google/gemma-2-9b-it,24.99
+upstage/SOLAR-10.7B-Instruct-v1.0,23.64
+Qwen/Qwen3-14B (thinking=False),34.76
+Qwen/Qwen3-14B (thinking=True),29.64
+mistralai/Mistral-Small-Instruct-2409,32.61
+Qwen/Qwen3-32B (thinking=False),32.95
+Qwen/Qwen3-32B (thinking=True),30.34
+Qwen/Qwen3-30B-A3B (thinking=False),30.24
+Qwen/Qwen3-30B-A3B (thinking=True),28.54
+anthropic/claude-sonnet-4-20250514 (thinking=disabled),63.68
+anthropic/claude-sonnet-4-20250514 (thinking=enabled),62.31
+anthropic/claude-opus-4-20250514 (thinking=disabled),68.24
+anthropic/claude-opus-4-20250514 (thinking=enabled),66.83
+anthropic/claude-opus-4-1-20250805 (thinking=enabled),66.51
+Qwen/Qwen3-4B (thinking=True),18.79
+Qwen/Qwen3-4B (thinking=False),22.41
+Qwen/Qwen3-1.7B (thinking=True),18.77
+Qwen/Qwen3-1.7B (thinking=False),12.24
+Qwen/Qwen3-0.6B (thinking=False),
+Qwen/Qwen3-0.6B (thinking=True),13.07
+zai-org/GLM-4-32B-0414,20.01
+meta-llama/Llama-3.2-1B-Instruct,11.82
+meta-llama/Llama-3.1-70B-Instruct,32.77
+meta-llama/Llama-3.2-3B-Instruct,10.44
+mistralai/Mixtral-8x7B-Instruct-v0.1,25.65
+meta-llama/Llama-3.1-405B-Instruct,29.9
+deepseek-ai/DeepSeek-V3,43.22
+deepseek-ai/DeepSeek-V3-0324,49.07
+meta-llama/Llama-4-Maverick-17B-128E-Instruct,23.99
+Qwen/Qwen3-235B-A22B-Instruct-2507,48.97
+Qwen/Qwen3-235B-A22B-Thinking-2507,32.35
+mistralai/Mixtral-8x22B-Instruct-v0.1,27.36
+ai21labs/AI21-Jamba-Large-1.7,38.05
+ai21labs/AI21-Jamba-Mini-1.7,23.78
+openai/o3-2025-04-16 (reasoning_effort=low),65.79
+Qwen/qwen3-max,38.58
+deepseek-ai/DeepSeek-R1-0528,42.26
+openai/chatgpt-4o-latest-20250326,67.37
+openai/o3-2025-04-16 (reasoning_effort=medium),66.83
+openai/gpt-4.1-2025-04-14,67.48
+openai/gpt-5-2025-08-07 (reasoning_effort=low),48.31
+openai/gpt-4o-2024-05-13,63.37
+openai/gpt-5-2025-08-07 (reasoning_effort=high),53.47
+openai/o1-2024-12-17 (reasoning_effort=low),60.99
+openai/o1-2024-12-17 (reasoning_effort=high),60.11
+deepseek-ai/DeepSeek-R1,51.75
+openai/gpt-5-chat-latest,62.69
+openai/o3-2025-04-16 (reasoning_effort=high),66.75
+xai/grok-4-0709,67.0
+xai/grok-4-fast-non-reasoning,43.04
+xai/grok-4-fast-reasoning,53.37
+Qwen/Qwen2.5-32B-Instruct,34.21
+google/gemma-2-27b-it,35.04
+Qwen/Qwen2.5-Coder-7B-Instruct,18.77
+Qwen/Qwen2.5-14B-Instruct,29.79
+internlm/internlm3-8b-instruct,27.1
+google/gemma-3-1b-it,
+Qwen/Qwen2.5-1.5B-Instruct,22.17
+mistralai/Magistral-Small-2509 (magistral sys prompt),19.19
+mistralai/Magistral-Small-2509,34.02
+mistralai/Mistral-Large-Instruct-2407,40.92
+mistralai/Mistral-Large-Instruct-2411,37.84
+anthropic/claude-sonnet-4-5-20250929 (thinking=disabled),66.88
+anthropic/claude-opus-4-1-20250805 (thinking=disabled),69.91
+anthropic/claude-sonnet-4-5-20250929 (thinking=enabled),64.18
+mistralai/mistral-medium-3.1,39.48
+mistralai/mistral-medium-3,32.61
+openai/gpt-oss-120b (reasoning=medium),38.52
+anthropic/claude-3-opus-20240229,54.28
+anthropic/claude-3-haiku-20240307,31.87
+anthropic/claude-3-5-haiku-20241022,
+zai-org/GLM-4.6 (reasoning=enabled),53.31
+zai-org/GLM-4.5 (reasoning=enabled),57.34
+zai-org/GLM-4.5 (reasoning=disabled),54.18
+deepseek-ai/DeepSeek-V3.2-Exp (reasoning=enabled),54.0
+deepseek-ai/DeepSeek-V3.2-Exp (reasoning=disabled),51.04
+deepseek-ai/DeepSeek-V3.1-Terminus (reasoning=enabled),54.0
+deepseek-ai/DeepSeek-V3.1-Terminus (reasoning=disabled),51.98
+deepseek-ai/DeepSeek-V3.1 (reasoning=enabled),51.85
+deepseek-ai/DeepSeek-V3.1 (reasoning=disabled),51.06
+zai-org/GLM-4.6 (reasoning=disabled),50.01
+openai/o4-mini-2025-04-16 (reasoning_effort=low),46.88
+openai/o4-mini-2025-04-16 (reasoning_effort=medium),45.39
+openai/o4-mini-2025-04-16 (reasoning_effort=high),43.18
+ByteDance-Seed/Seed-OSS-36B-Instruct (- budget 512),31.98
+ByteDance-Seed/Seed-OSS-36B-Instruct (- budget 0),28.16
+ByteDance-Seed/Seed-OSS-36B-Instruct,27.46
+xai/grok-3,58.71
+Qwen/Qwen3-30B-A3B-Instruct-2507,27.89
+Qwen/Qwen3-30B-A3B-Thinking-2507,20.6
+CohereForAI/c4ai-command-r-plus-08-2024,32.27
+CohereForAI/c4ai-command-r-08-2024,26.48
+ibm-granite/granite-4.0-h-small,18.47
+moonshotai/Kimi-K2-Instruct-0905,54.43
+anthropic/claude-haiku-4-5-20251001 (thinking=disabled),52.16
+anthropic/claude-haiku-4-5-20251001 (thinking=enabled),49.08
+Qwen/Qwen3-4B-Instruct-2507,29.92
+tiiuae/Falcon-H1-7B-Instruct,25.67
+tiiuae/Falcon-H1-0.5B-Instruct,14.55
+tiiuae/Falcon-H1-1.5B-Instruct,21.01
+Qwen/Qwen3-4B-Thinking-2507,10.87
+tiiuae/Falcon-H1-1.5B-Deep-Instruct,19.86
+tiiuae/Falcon-H1-3B-Instruct,22.79
+Qwen/Qwen2.5-72B-Instruct,31.52
+Qwen/Qwen2.5-VL-72B-Instruct,35.59
+Qwen/Qwen2.5-VL-32B-Instruct,21.69
+Qwen/Qwen2.5-VL-3B-Instruct,20.43
+Qwen/Qwen3-VL-30B-A3B-Thinking,17.64
+Qwen/Qwen3-Coder-30B-A3B-Instruct,31.8
+Qwen/Qwen3-VL-32B-Thinking,22.88
+inclusionAI/Ling-1T,31.44
+inclusionAI/Ring-1T,32.43
+CohereLabs/c4ai-command-a-03-2025,40.59
+meta-llama/Llama-4-Scout-17B-16E-Instruct,26.67
+MiniMaxAI/MiniMax-M2,17.22
+google/medgemma-27b-text-it,36.1
+moonshotai/Kimi-K2-Thinking,59.28
+LGAI-EXAONE/EXAONE-4.0-32B,25.57
+RekaAI/reka-flash-3,23.75
+openai/gpt-5.1-chat-latest,60.25
+openai/gpt-5.1-2025-11-13 (reasoning_effort=low),50.84
+openai/gpt-5.1-2025-11-13 (reasoning_effort=medium),53.9
+openai/gpt-5.1-2025-11-13 (reasoning_effort=high),55.76
+google/gemini-2.5-flash-preview-09-2025 (reasoning=disabled),44.88
+google/gemini-2.5-flash-preview-09-2025 (reasoning=enabled),43.88
+microsoft/phi-4,25.66
+google/gemma-3-270m-it,
+google/gemini-3-pro-preview (thinking_level=low),65.59
+google/gemini-3-pro-preview (thinking_level=high),66.71
+xai/grok-4-1-fast-non-reasoning,41.88
+xai/grok-4-1-fast-reasoning,51.28
+allenai/Olmo-3-32B-Think,28.52
+anthropic/claude-opus-4-5-20251101 (thinking=disabled),70.4
+anthropic/claude-opus-4-5-20251101 (thinking=enabled),70.34
+zai-org/GLM-4.5-Air (/nothink),47.0
+zai-org/GLM-4.5-Air,41.96
+moonshotai/Kimi-Linear-48B-A3B-Instruct,37.74
+Qwen/Qwen3-Next-80B-A3B-Instruct,41.76
+Qwen/Qwen3-Next-80B-A3B-Thinking,27.16
+deepseek-ai/DeepSeek-V3.2 (reasoning=disabled),56.3
+deepseek-ai/DeepSeek-V3.2 (reasoning=enabled),57.28
+deepseek-ai/DeepSeek-V3.2-Speciale,53.95
+mistralai/Ministral-3-14B-Instruct-2512,31.44
+mistralai/Ministral-3-14B-Instruct-2512 ([THINK] prefill),25.73
+mistralai/Ministral-3-14B-Instruct-2512 ([THINK] + Ministral 3 sys prompt),
+mistralai/Ministral-3-8B-Instruct-2512,28.79
+mistralai/Ministral-3-8B-Instruct-2512 ([THINK] prefill),27.64
+mistralai/Ministral-3-8B-Instruct-2512 ([THINK] + Ministral 3 sys prompt),
+amazon/nova-2-lite-v1 (reasoning=disabled),23.5
+amazon/nova-2-lite-v1 (reasoning=enabled),23.42
+mistralai/Mistral-Large-3-675B-Instruct-2512 (reasoning=disabled),41.64
+mistralai/Mistral-Large-3-675B-Instruct-2512 (reasoning=enabled),41.48
+EssentialAI/rnj-1-instruct,8.99
+mistralai/Ministral-3-14B-Reasoning-2512,25.63
+mistralai/Ministral-3-14B-Reasoning-2512 ([THINK] prefill),19.23
+mistralai/Ministral-3-14B-Reasoning-2512 ([THINK] + Ministral 3 sys prompt),
+mistralai/Ministral-3-8B-Reasoning-2512,27.24
+mistralai/Ministral-3-8B-Reasoning-2512 ([THINK] + Ministral 3 sys prompt),6.05
+mistralai/Ministral-3-8B-Reasoning-2512 ([THINK] prefill),17.77
+mistralai/Devstral-Small-2-24B-Instruct-2512,31.59
+Qwen/Qwen3-VL-8B-Instruct,30.31
+nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16,25.92
+nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 (<think> prefill),3.44
+Qwen/Qwen3-VL-4B-Instruct,12.55
+Qwen/Qwen3-VL-4B-Thinking,17.39
+Qwen/Qwen3-VL-2B-Instruct,15.19
+Qwen/Qwen3-VL-2B-Thinking,11.79
+Qwen/Qwen3-VL-8B-Thinking,18.3
+zai-org/GLM-4.6V (reasoning=disabled),35.21
+zai-org/GLM-4.6V (reasoning=enabled),39.66
+zai-org/GLM-4.7 (reasoning=disabled),44.16
+zai-org/GLM-4.7 (reasoning=enabled),47.38
+google/gemini-3-flash-preview (thinking_level=minimal),65.05
+google/gemini-3-flash-preview (thinking_level=high),63.27
+Qwen/Qwen3-VL-32B-Instruct,34.95
+XiaomiMiMo/MiMo-V2-Flash (reasoning=disabled),41.64
+XiaomiMiMo/MiMo-V2-Flash (reasoning=enabled),44.85
+google/gemini-3-flash-preview (thinking_level=medium),67.71
+LiquidAI/LFM2-8B-A1B,13.08
+Nanbeige/Nanbeige4-3B-Thinking-2511,9.76
+Nanbeige/Nanbeige4-3B-Thinking-2510,5.65
+nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16,33.34
+nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16 (no-think),31.78
+nvidia/NVIDIA-Nemotron-Nano-9B-v2,
+nvidia/NVIDIA-Nemotron-Nano-9B-v2 (no-think),
+arcee-ai/Trinity-Large-Preview,40.72
+moonshotai/Kimi-K2.5 (reasoning=disabled),61.51
+moonshotai/Kimi-K2.5 (reasoning=enabled),62.42
+upstage/solar-pro-3,16.78
+MiniMaxAI/MiniMax-M2.1,41.64
+allenai/Olmo-3-7B-Instruct,24.35
+zai-org/GLM-4.7-Flash (<think> prefill),14.66
+zai-org/GLM-4.7-Flash (no-think),25.0
+"anthropic/claude-opus-4-6 (adaptive, effort=low)",66.06
+"anthropic/claude-opus-4-6 (adaptive, effort=medium)",68.95
+"anthropic/claude-opus-4-6 (adaptive, effort=high)",70.86
+"anthropic/claude-opus-4-6 (adaptive, effort=max)",70.7
+allenai/Olmo-3-7B-Think,25.96
+moonshotai/Kimi-VL-A3B-Instruct,24.41
+stepfun-ai/Step-3.5-Flash,45.87
+zai-org/GLM-5 (reasoning=disabled),49.22
+zai-org/GLM-5 (reasoning=enabled),55.03
+MiniMaxAI/MiniMax-M2.5,41.69
+meta-llama/Llama-2-70b-chat-hf,15.31
+Qwen/Qwen3.5-397B-A17B (reasoning=enabled),49.39
+Qwen/Qwen3.5-397B-A17B (reasoning=disabled),52.7
+ServiceNow-AI/Apriel-1.6-15b-Thinker,
+ServiceNow-AI/Apriel-Nemotron-15b-Thinker,29.99
+"anthropic/claude-sonnet-4-6 (adaptive, effort=low)",59.33
+"anthropic/claude-sonnet-4-6 (adaptive, effort=medium)",61.21
+"anthropic/claude-sonnet-4-6 (adaptive, effort=high)",64.55
+"anthropic/claude-sonnet-4-6 (adaptive, effort=max)",64.15
+google/gemini-3.1-pro-preview (thinking_level=low),72.15
+google/gemini-3.1-pro-preview (thinking_level=medium),70.21
+google/gemini-3.1-pro-preview (thinking_level=high),68.22
+allura-forge/Llama-3.3-8B-Instruct,9.75
+Qwen/Qwen3-VL-235B-A22B-Instruct,43.0
+Qwen/Qwen3-VL-235B-A22B-Thinking,32.29
+Qwen/Qwen3.5-122B-A10B (reasoning=disabled),39.54
+Qwen/Qwen3.5-122B-A10B (reasoning=enabled),38.69
+LiquidAI/LFM2-24B-A2B,27.56
+inflection/inflection-3-pi,19.69
+inflection/inflection-3-productivity,20.12
+Nanbeige/Nanbeige4.1-3B,
+moonshotai/Kimi-VL-A3B-Thinking-2506,20.57
+openai/gpt-5.3-chat-latest,60.65
+openai/gpt-5.2-2025-12-11 (reasoning_effort=low),43.85
+openai/gpt-5.2-2025-12-11 (reasoning_effort=none),39.19
+openai/gpt-5.2-2025-12-11 (reasoning_effort=medium),44.1
+openai/gpt-5.2-2025-12-11 (reasoning_effort=high),49.42
+openai/gpt-5.2-chat-latest,60.78
+openai/gpt-5.4-2026-03-05 (reasoning_effort=none),57.99
+openai/gpt-5.4-2026-03-05 (reasoning_effort=low),64.85
+openai/gpt-5.4-2026-03-05 (reasoning_effort=medium),67.34
+openai/gpt-5.4-2026-03-05 (reasoning_effort=high),68.82
+openai/gpt-5.4-2026-03-05 (reasoning_effort=xhigh),68.65
+xai/grok-4.20-multi-agent-beta-0309 (agent_count=4),63.13
+xai/grok-4.20-beta-0309-reasoning,57.41
+xai/grok-4.20-beta-0309-non-reasoning,43.88
+Qwen/Qwen3.5-35B-A3B (no thinking),37.0
+Qwen/Qwen3.5-35B-A3B (<think> prefill),42.58
+Qwen/Qwen3.5-27B (<think> prefill),42.37
+Qwen/Qwen3.5-27B (no thinking),39.94
+Qwen/Qwen3.5-9B (no thinking),33.52
+Qwen/Qwen3.5-9B (<think> prefill),39.5
+Qwen/Qwen3.5-4B (no thinking),29.68
+Qwen/Qwen3.5-4B (<think> prefill),30.82
+Qwen/Qwen3.5-2B (<think> prefill),19.27
+Qwen/Qwen3.5-2B (no thinking),29.0
+Qwen/Qwen3.5-0.8B (no thinking),23.01
+Qwen/Qwen3.5-0.8B (<think> prefill),
+Qwen/Qwen3-Omni-30B-A3B-Thinking,19.35

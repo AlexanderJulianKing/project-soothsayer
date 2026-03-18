@@ -1,8 +1,8 @@
 # Project Soothsayer
 
-Predict Chatbot Arena ELO scores for LLMs before they appear on the leaderboard.
+Predict [Chatbot Arena](https://lmarena.ai) ELO scores for LLMs before they appear on the leaderboard.
 
-Soothsayer runs 4 custom benchmarks against LLMs via the OpenRouter API, then combines those scores with 13+ public benchmark sources and uses gated iterative imputation + regression to predict Arena ELO scores for models that don't have them yet.
+[Chatbot Arena](https://lmarena.ai) (formerly LMSYS) is the most widely cited ranking of LLM quality — it's based on millions of blind head-to-head votes from real users. But new models can take weeks or months to accumulate enough votes for a stable rating. Soothsayer predicts those ratings early by running 4 custom benchmarks against LLMs via the OpenRouter API, combining those scores with 13+ public benchmark sources, and using iterative imputation + regression to predict Arena ELO.
 
 ## Benchmarks
 
@@ -73,7 +73,7 @@ tests/                   Test suite (112 tests)
 ```bash
 # Clone and install
 git clone https://github.com/AlexanderJulianKing/project-soothsayer.git
-cd project_soothsayer
+cd project-soothsayer
 pip install -e .
 
 # Configure API keys
@@ -87,7 +87,7 @@ python3 -m pytest tests/ -v
 ### Requirements
 
 - Python 3.9+
-- OpenRouter API key (for running benchmarks)
+- OpenRouter API key (for running benchmarks — expect ~$5-20 per full run of all 4 benchmarks across 150+ models, depending on model pricing)
 - Gemini API key (for LLM-assisted model name mapping in the combiner)
 
 ## Usage
@@ -146,9 +146,11 @@ All benchmarks read from a shared `openbench_*.csv` that maps model display name
 
 The prediction pipeline (`scrapers/` → `benchmark_combiner/` → `arena_predictor/`) merges scores from the 4 custom benchmarks with 13+ external sources (LiveBench, Artificial Analysis, AiderBench, ARC, etc.) using a three-tier model name mapping system with LLM-assisted fuzzy matching. The mappings require significant human curation and pruning -- the LLM suggestions are a starting point, but incorrect matches (e.g. confusing model versions or sizes) must be manually reviewed and corrected in `benchmark_combiner/mappings/`.
 
-The combined benchmark matrix is sparse -- most models are missing scores from several benchmarks. `ModelBankImputer` (default) fills these gaps using per-cell predictor selection: for each missing value, it finds the best subset of predictors from columns actually observed in that row, fits a BayesianRidge model (cached by predictor subset), and tracks per-cell uncertainty via analytical hat-matrix LOO. A low-rank coherence projection then reconciles individually-imputed values into a consistent cross-column profile. Columns are auto-classified by type (linear, nonlinear, categorical, bounded, extrapolation-prone) with specialized models (BayesianRidge, Gaussian Processes, LogisticRegression, HurdleModel) and distribution-aware wrappers (BoundedLinkModel for logit-transformed bounded columns).
+The combined benchmark matrix is sparse -- most models are missing scores from several benchmarks. `ModelBankImputer` fills these gaps by selecting the best available predictors for each missing cell (based on what's actually observed in that row), fitting cached per-cell models, and applying a low-rank coherence projection to keep imputed values consistent across columns. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details on the imputation algorithms.
 
 Finally, `predict.py` trains on models that have Arena scores to predict scores for those that don't, using feature selection, polynomial interactions, and conformal prediction intervals.
+
+A snapshot of benchmark data (as of March 2026) is included in `benchmark_combiner/benchmarks/` so the prediction pipeline can run from a fresh clone without needing to re-scrape.
 
 ## License
 

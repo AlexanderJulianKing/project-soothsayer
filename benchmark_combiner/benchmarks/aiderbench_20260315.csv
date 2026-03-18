@@ -1,0 +1,666 @@
+"
+
+",Model,Percent correct,Cost,Command,Correct edit format,Edit Format
+"
+▶
+
+",gpt-5 (high),"
+
+88.0%
+","
+
+$29.08
+",aider --model openai/gpt-5,91.6%,diff
+"
+▶
+
+",gpt-5 (medium),"
+
+86.7%
+","
+
+$17.69
+",aider --model openai/gpt-5,88.4%,diff
+"
+▶
+
+",o3-pro (high),"
+
+84.9%
+","
+
+$146.32
+",aider --model o3-pro,97.8%,diff
+"
+▶
+
+",gemini-2.5-pro-preview-06-05 (32k think),"
+
+83.1%
+","
+
+$49.88
+",aider --model gemini/gemini-2.5-pro-preview-06-05 --thinking-tokens 32k,99.6%,diff-fenced
+"
+▶
+
+",gpt-5 (low),"
+
+81.3%
+","
+
+$10.37
+",aider --model openai/gpt-5,86.7%,diff
+"
+▶
+
+",o3 (high),"
+
+81.3%
+","
+
+$21.23
+",aider --model o3 --reasoning-effort high,94.7%,diff
+"
+▶
+
+",grok-4 (high),"
+
+79.6%
+","
+
+$59.62
+",aider --model openrouter/x-ai/grok-4,97.3%,diff
+"
+▶
+
+",gemini-2.5-pro-preview-06-05 (default think),"
+
+79.1%
+","
+
+$45.6
+",aider --model gemini/gemini-2.5-pro-preview-06-05,100.0%,diff-fenced
+"
+▶
+
+",o3 (high) + gpt-4.1,"
+
+78.2%
+","
+
+$17.55
+",aider --model o3,100.0%,architect
+"
+▶
+
+",o3,"
+
+76.9%
+","
+
+$13.75
+",aider --model o3,93.8%,diff
+"
+▶
+
+",Gemini 2.5 Pro Preview 05-06,"
+
+76.9%
+","
+
+$37.41
+",aider --model gemini/gemini-2.5-pro-preview-05-06,97.3%,diff-fenced
+"
+▶
+
+",DeepSeek-V3.2-Exp (Reasoner),"
+
+74.2%
+","
+
+$1.3
+",aider --model deepseek/deepseek-reasoner,97.3%,diff
+"
+▶
+
+",Gemini 2.5 Pro Preview 03-25,"
+
+72.9%
+","
+
+",aider --model gemini/gemini-2.5-pro-preview-03-25,92.4%,diff-fenced
+"
+▶
+
+",claude-opus-4-20250514 (32k thinking),"
+
+72.0%
+","
+
+$65.75
+",aider --model claude-opus-4-20250514,97.3%,diff
+"
+▶
+
+",o4-mini (high),"
+
+72.0%
+","
+
+$19.64
+",aider --model o4-mini,90.7%,diff
+"
+▶
+
+",DeepSeek R1 (0528),"
+
+71.4%
+","
+
+$4.8
+",aider --model deepseek/deepseek-reasoner,94.6%,diff
+"
+▶
+
+",claude-opus-4-20250514 (no think),"
+
+70.7%
+","
+
+$68.63
+",aider --model claude-opus-4-20250514,98.7%,diff
+"
+▶
+
+",DeepSeek-V3.2-Exp (Chat),"
+
+70.2%
+","
+
+$0.88
+",aider --model deepseek/deepseek-chat,98.2%,diff
+"
+▶
+
+",claude-3-7-sonnet-20250219 (32k thinking tokens),"
+
+64.9%
+","
+
+$36.83
+",aider --model anthropic/claude-3-7-sonnet-20250219 --thinking-tokens 32k,97.8%,diff
+"
+▶
+
+",DeepSeek R1 + claude-3-5-sonnet-20241022,"
+
+64.0%
+","
+
+$13.29
+",aider --architect --model r1 --editor-model sonnet,100.0%,architect
+"
+▶
+
+",o1-2024-12-17 (high),"
+
+61.7%
+","
+
+$186.5
+",aider --model openrouter/openai/o1,91.5%,diff
+"
+▶
+
+",claude-sonnet-4-20250514 (32k thinking),"
+
+61.3%
+","
+
+$26.58
+",aider --model claude-sonnet-4-20250514,97.3%,diff
+"
+▶
+
+",claude-3-7-sonnet-20250219 (no thinking),"
+
+60.4%
+","
+
+$17.72
+",aider --model sonnet,93.3%,diff
+"
+▶
+
+",o3-mini (high),"
+
+60.4%
+","
+
+$18.16
+",aider --model o3-mini --reasoning-effort high,93.3%,diff
+"
+▶
+
+","Qwen3 235B A22B diff, no think, Alibaba API","
+
+59.6%
+","
+
+",aider --model openai/qwen3-235b-a22b,92.9%,diff
+"
+▶
+
+",Kimi K2,"
+
+59.1%
+","
+
+$1.24
+",aider --model openrouter/moonshotai/kimi-k2,92.9%,diff
+"
+▶
+
+",DeepSeek R1,"
+
+56.9%
+","
+
+$5.42
+",aider --model deepseek/deepseek-reasoner,96.9%,diff
+"
+▶
+
+",claude-sonnet-4-20250514 (no thinking),"
+
+56.4%
+","
+
+$15.82
+",aider --model claude-sonnet-4-20250514,98.2%,diff
+"
+▶
+
+",gemini-2.5-flash-preview-05-20 (24k think),"
+
+55.1%
+","
+
+$8.56
+",aider --model gemini/gemini-2.5-flash-preview-05-20,95.6%,diff
+"
+▶
+
+",DeepSeek V3 (0324),"
+
+55.1%
+","
+
+$1.12
+",aider --model deepseek/deepseek-chat,99.6%,diff
+"
+▶
+
+",Quasar Alpha,"
+
+54.7%
+","
+
+",aider --model openrouter/openrouter/quasar-alpha,98.2%,diff
+"
+▶
+
+",o3-mini (medium),"
+
+53.8%
+","
+
+$8.86
+",aider --model o3-mini,95.1%,diff
+"
+▶
+
+",Grok 3 Beta,"
+
+53.3%
+","
+
+$11.03
+",aider --model openrouter/x-ai/grok-3-beta,99.6%,diff
+"
+▶
+
+",Optimus Alpha,"
+
+52.9%
+","
+
+",aider --model openrouter/openrouter/optimus-alpha,97.3%,diff
+"
+▶
+
+",gpt-4.1,"
+
+52.4%
+","
+
+$9.86
+",aider --model gpt-4.1,98.2%,diff
+"
+▶
+
+",claude-3-5-sonnet-20241022,"
+
+51.6%
+","
+
+$14.41
+",aider --model claude-3-5-sonnet-20241022,99.6%,diff
+"
+▶
+
+",Grok 3 Mini Beta (high),"
+
+49.3%
+","
+
+$0.73
+",aider --model xai/grok-3-mini-beta --reasoning-effort high,99.6%,whole
+"
+▶
+
+",DeepSeek Chat V3 (prev),"
+
+48.4%
+","
+
+$0.34
+",aider --model deepseek/deepseek-chat,98.7%,diff
+"
+▶
+
+",gemini-2.5-flash-preview-04-17 (default),"
+
+47.1%
+","
+
+$1.85
+",aider --model gemini/gemini-2.5-flash-preview-04-17,85.3%,diff
+"
+▶
+
+",chatgpt-4o-latest (2025-03-29),"
+
+45.3%
+","
+
+$19.74
+",aider --model chatgpt-4o-latest,64.4%,diff
+"
+▶
+
+",gpt-4.5-preview,"
+
+44.9%
+","
+
+$183.18
+",aider --model openai/gpt-4.5-preview,97.3%,diff
+"
+▶
+
+",gemini-2.5-flash-preview-05-20 (no think),"
+
+44.0%
+","
+
+$1.14
+",aider --model gemini/gemini-2.5-flash-preview-05-20,93.8%,diff
+"
+▶
+
+",gpt-oss-120b (high),"
+
+41.8%
+","
+
+$0.74
+",aider --model openrouter/openai/gpt-oss-120b --reasoning-effort high,79.1%,diff
+"
+▶
+
+",Qwen3 32B,"
+
+40.0%
+","
+
+$0.76
+",aider --model openrouter/qwen/qwen3-32b,83.6%,diff
+"
+▶
+
+",gemini-exp-1206,"
+
+38.2%
+","
+
+",aider --model gemini/gemini-exp-1206,98.2%,whole
+"
+▶
+
+",Gemini 2.0 Pro exp-02-05,"
+
+35.6%
+","
+
+",aider --model gemini/gemini-2.0-pro-exp-02-05,100.0%,whole
+"
+▶
+
+",Grok 3 Mini Beta (low),"
+
+34.7%
+","
+
+$0.79
+",aider --model openrouter/x-ai/grok-3-mini-beta,100.0%,whole
+"
+▶
+
+",o1-mini-2024-09-12,"
+
+32.9%
+","
+
+$18.58
+",aider --model o1-mini,96.9%,whole
+"
+▶
+
+",gpt-4.1-mini,"
+
+32.4%
+","
+
+$1.99
+",aider --model gpt-4.1-mini,92.4%,diff
+"
+▶
+
+",claude-3-5-haiku-20241022,"
+
+28.0%
+","
+
+$6.06
+",aider --model claude-3-5-haiku-20241022,91.1%,diff
+"
+▶
+
+",chatgpt-4o-latest (2025-02-15),"
+
+27.1%
+","
+
+$14.37
+",aider --model chatgpt-4o-latest,93.3%,diff
+"
+▶
+
+",QwQ-32B + Qwen 2.5 Coder Instruct,"
+
+26.2%
+","
+
+",aider --model fireworks_ai/accounts/fireworks/models/qwq-32b --architect,100.0%,architect
+"
+▶
+
+",gpt-4o-2024-08-06,"
+
+23.1%
+","
+
+$7.03
+",aider --model gpt-4o-2024-08-06,94.2%,diff
+"
+▶
+
+",gemini-2.0-flash-exp,"
+
+22.2%
+","
+
+",aider --model gemini/gemini-2.0-flash-exp,100.0%,whole
+"
+▶
+
+",qwen-max-2025-01-25,"
+
+21.8%
+","
+
+",OPENAI_API_BASE=https://dashscope-intl.aliyuncs.com/compatible-mode/v1 aider --model openai/qwen-max-2025-01-25,90.2%,diff
+"
+▶
+
+",QwQ-32B,"
+
+20.9%
+","
+
+",aider --model fireworks_ai/accounts/fireworks/models/qwq-32b,67.6%,diff
+"
+▶
+
+",gemini-2.0-flash-thinking-exp-01-21,"
+
+18.2%
+","
+
+",aider --model gemini/gemini-2.0-flash-thinking-exp-01-21,77.8%,diff
+"
+▶
+
+",gpt-4o-2024-11-20,"
+
+18.2%
+","
+
+$6.74
+",aider --model gpt-4o-2024-11-20,95.1%,diff
+"
+▶
+
+",DeepSeek Chat V2.5,"
+
+17.8%
+","
+
+$0.51
+",aider --model deepseek/deepseek-chat,92.9%,diff
+"
+▶
+
+",Qwen2.5-Coder-32B-Instruct,"
+
+16.4%
+","
+
+",aider --model openai/Qwen2.5-Coder-32B-Instruct,99.6%,whole
+"
+▶
+
+",Llama 4 Maverick,"
+
+15.6%
+","
+
+",aider --model nvidia_nim/meta/llama-4-maverick-17b-128e-instruct,99.1%,whole
+"
+▶
+
+",yi-lightning,"
+
+12.9%
+","
+
+",aider --model openai/yi-lightning,92.9%,whole
+"
+▶
+
+",command-a-03-2025-quality,"
+
+12.0%
+","
+
+",OPENAI_API_BASE=https://api.cohere.ai/compatibility/v1 aider --model openai/command-a-03-2025-quality,99.6%,whole
+"
+▶
+
+",Codestral 25.01,"
+
+11.1%
+","
+
+$1.98
+",aider --model mistral/codestral-latest,100.0%,whole
+"
+▶
+
+",openhands-lm-32b-v0.1,"
+
+10.2%
+","
+
+",aider --model openrouter/all-hands/openhands-lm-32b-v0.1,95.1%,whole
+"
+▶
+
+",gpt-4.1-nano,"
+
+8.9%
+","
+
+$0.43
+",aider --model gpt-4.1-nano,94.2%,whole
+"
+▶
+
+",gemma-3-27b-it,"
+
+4.9%
+","
+
+",aider --model openrouter/google/gemma-3-27b-it,100.0%,whole
+"
+▶
+
+",gpt-4o-mini-2024-07-18,"
+
+3.6%
+","
+
+$0.32
+",aider --model gpt-4o-mini-2024-07-18,100.0%,whole
