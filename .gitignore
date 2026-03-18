@@ -54,6 +54,8 @@ soothsayer_logic/model_outputs.csv
 soothsayer_logic/questions.json
 soothsayer_logic/combined_all_benches.csv
 soothsayer_logic/clean_combined_all_benches.csv
+soothsayer_logic/column_table_generated.csv
+tests/golden/simplebench_first5.csv
 
 # Soothsayer Style
 soothsayer_style/outputs/
