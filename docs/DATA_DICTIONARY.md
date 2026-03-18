@@ -52,7 +52,7 @@ See [Combined Column Descriptions](#combined-column-descriptions) for detailed d
 | Source | File Pattern | What It Measures |
 |--------|-------------|-----------------|
 | Soothsayer EQ | `eq_*.csv` | Emotional intelligence (TrueSkill pairwise) |
-| Soothsayer Writing | `writing_*.csv`, `writing_direct_*.csv` | Creative writing (TrueSkill + rubric scores) |
+| Soothsayer Writing | `writing_*.csv` | Creative writing (TrueSkill pairwise) |
 | Soothsayer Logic | `logic_*.csv` | Commonsense reasoning (ML-predicted SimpleBench scores) |
 | Soothsayer Style | `style_*.csv` | Writing style metrics (length, formatting, bold, lists) |
 | Soothsayer Tone | `tone_*.csv` | Response quality/tone (TrueSkill pairwise) |
@@ -209,7 +209,7 @@ Combined benchmark data from all sources, merged on model name. Models with too 
 |--------|-------------|
 | `logic_accuracy` | Raw accuracy on in-house commonsense question set |
 | `logic_weighted_accuracy` | ExtraTrees prediction of SimpleBench score from per-question results |
-| `logic_PC1` through `logic_PC4` | Principal components of per-question scores |
+| `logic_PC2` through `logic_PC4` | Principal components of per-question scores (PC1 dropped due to collinearity) |
 | `logic_physics_acc` | Accuracy on physics/applied math questions |
 | `logic_trick_acc` | Accuracy on lateral thinking questions |
 | `logic_avg_reasoning_tokens` | Average reasoning tokens per response |
@@ -235,7 +235,7 @@ Combined benchmark data from all sources, merged on model name. Models with too 
 
 ## Output Data
 
-All outputs are written to a timestamped subdirectory under `arena_predictor/analysis_output/`.
+All outputs are written to a timestamped subdirectory under `analysis_output/` (relative to where `predict.py` is run, typically `arena_predictor/analysis_output/`).
 
 ### imputed_full.csv
 
@@ -243,7 +243,7 @@ Complete imputed benchmark matrix.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `Unified_Name` | string | Model identifier |
+| `model_name` | string | Model identifier |
 | All benchmark columns | float | Imputed score (original if observed, imputed if missing) |
 
 ### predictions_best_model.csv
@@ -252,11 +252,14 @@ Final ELO predictions with confidence intervals.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `Unified_Name` | string | Model identifier |
-| `predicted` | float | Predicted Arena ELO |
-| `lower` | float | Lower prediction interval |
-| `upper` | float | Upper prediction interval |
-| `actual` | float | Actual ELO (if known) |
+| `model_name` | string | Model identifier |
+| `predicted_score` | float | Predicted Arena ELO |
+| `actual_score` | float | Actual ELO (if known) |
+| `sigma_hat` | float | Estimated prediction uncertainty |
+| `lower_bound` | float | Lower prediction interval |
+| `upper_bound` | float | Upper prediction interval |
+| `num_one_prob` | float | Predicted probability of being #1 |
+| `top_by_margin_prob` | float | Probability of being top by margin |
 
 ### Other Output Files
 
@@ -272,7 +275,7 @@ Final ELO predictions with confidence intervals.
 | `alt_model_variance_contributions.csv` | Per-feature variance contributions (ALT model) |
 | `conformal_diagnostics.csv` | Conformal interval calibration diagnostics |
 | `model_eval_rmse.csv` | Per-model CV RMSE comparison |
-| `dependency_graph.json` | Column dependency structure |
+| `column_dependency_graph.json` | Column dependency structure |
 | `metadata.json` | Run metadata including OOF RMSE |
 
 ---

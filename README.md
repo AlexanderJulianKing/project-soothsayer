@@ -113,7 +113,7 @@ cd soothsayer_writing && python3 main.py && python3 super_bench.py
 cd soothsayer_logic && python3 collect_and_grade.py && python3 score.py
 
 # Soothsayer Style
-cd soothsayer_style && python3 collect.py && python3 style_analysis.py && python3 process_analysis.py
+cd soothsayer_style && python3 collect.py && python3 super_bench.py && python3 score.py
 ```
 
 ### Prediction pipeline
@@ -144,7 +144,7 @@ All benchmarks read from a shared `openbench_*.csv` that maps model display name
 
 ### Prediction Phase
 
-The prediction pipeline (`scrapers/` → `benchmark_combiner/` → `arena_predictor/`) merges scores from the 4 custom benchmarks with 13+ external sources (LiveBench, Artificial Analysis, AiderBench, ARC, etc.) using a three-tier model name mapping system with LLM-assisted fuzzy matching. The mappings require significant human curation and pruning -- the LLM suggestions are a starting point, but incorrect matches (e.g. confusing model versions or sizes) must be manually reviewed and corrected in `benchmark_combiner/mappings/`.
+The prediction pipeline (`scrapers/` → `benchmark_combiner/` → `arena_predictor/`) merges scores from the 4 custom benchmarks with 13+ external sources (LiveBench, Artificial Analysis, AiderBench, ARC, etc.) using per-source model name mapping JSONs with LLM-assisted suggestions for unmapped models. The mappings require significant human curation and pruning -- the LLM suggestions are a starting point, but incorrect matches (e.g. confusing model versions or sizes) must be manually reviewed and corrected in `benchmark_combiner/mappings/`.
 
 The combined benchmark matrix is sparse -- most models are missing scores from several benchmarks. `ModelBankImputer` fills these gaps by selecting the best available predictors for each missing cell (based on what's actually observed in that row), fitting cached per-cell models, and applying a low-rank coherence projection to keep imputed values consistent across columns. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details on the imputation algorithms.
 
