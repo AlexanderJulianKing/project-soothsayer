@@ -13,6 +13,8 @@ Soothsayer runs 4 custom benchmarks against LLMs via the OpenRouter API, then co
 | **Soothsayer Logic** | Commonsense / trick questions | Multi-run answer collection + LLM grading + ML regression |
 | **Soothsayer Style** | Writing style tendencies | Style metric extraction + statistical analysis |
 
+> **Note:** The Soothsayer Logic question set and reference answers are intentionally kept private to prevent benchmark contamination. The evaluation code is included but the questions themselves are not.
+
 ## Architecture
 
 ```
