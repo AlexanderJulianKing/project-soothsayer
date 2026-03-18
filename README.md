@@ -87,7 +87,7 @@ python3 -m pytest tests/ -v
 ### Requirements
 
 - Python 3.9+
-- OpenRouter API key (for running benchmarks — expect ~$5-20 per full run of all 4 benchmarks across 150+ models, depending on model pricing)
+- OpenRouter API key (for running benchmarks — a full run across all 178 models costs roughly $50-150 in API fees, dominated by frontier model pricing; running only budget/mid-tier models is ~$15-30)
 - Gemini API key (for LLM-assisted model name mapping in the combiner)
 
 ## Usage
