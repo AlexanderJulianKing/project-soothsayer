@@ -43,7 +43,6 @@ bench_dir() {
         logic)        echo "$ROOT/soothsayer_logic" ;;
         style)        echo "$ROOT/soothsayer_style" ;;
         writing)      echo "$ROOT/soothsayer_writing" ;;
-        zebra)        echo "$ROOT/soothsayer_zebra" ;;
         *) return 1 ;;
     esac
 }
@@ -55,7 +54,6 @@ bench_cmds() {
         logic)        echo "python3 collect_and_grade.py|python3 score.py" ;;
         style)        echo "python3 collect.py|python3 super_bench.py|python3 score.py" ;;
         writing)      echo "python3 main.py|python3 super_bench.py" ;;
-        zebra)        echo "python3 collect_and_grade.py|python3 score.py" ;;
         *) return 1 ;;
     esac
 }

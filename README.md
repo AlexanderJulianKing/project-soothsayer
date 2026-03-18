@@ -65,7 +65,7 @@ arena_predictor/         Impute + predict Arena ELO scores
   column_imputer.py        Per-cell model-bank imputation (default) + per-column specialized
 
 docs/                    Documentation (architecture, data dictionary)
-tests/                   Test suite (112 tests)
+tests/                   Test suite (105 tests)
 ```
 
 ## Setup

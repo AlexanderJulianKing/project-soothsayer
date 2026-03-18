@@ -28,6 +28,9 @@ docs/MODEL_BANK_TODO.md
 docs/README_feature_selector.md
 docs/llm_benchmarks_methodology.pdf
 docs/llm_benchmarks_methodology.tex
+arena_predictor/EXPERIMENT_LOOP.md
+run_experiment_loop.bash
+soothsayer_writing/analyze_history.py
 
 # OS
 .DS_Store
