@@ -4,7 +4,7 @@
 
 This pipeline aggregates benchmark data from 13+ sources, performs statistical transformations, and uses advanced imputation techniques to predict missing benchmark scores (particularly LMSYS/Arena ELO ratings) for large language models.
 
-The system supports two imputation architectures: the original **per-column specialized imputer** (`SpecializedColumnImputer`) that auto-classifies columns by type and assigns one model per column, and the newer **per-cell model-bank imputer** (`ModelBankImputer`) that selects the best predictor subset for each individual missing cell based on what that row actually has observed, with per-cell uncertainty tracking and low-rank coherence projection.
+The system supports two imputation architectures: the **per-cell model-bank imputer** (`ModelBankImputer`, default) that selects the best predictor subset for each individual missing cell based on what that row actually has observed, with per-cell uncertainty tracking and low-rank coherence projection; and the legacy **per-column specialized imputer** (`SpecializedColumnImputer`) that auto-classifies columns by type and assigns one model per column.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -37,13 +37,14 @@ The system supports two imputation architectures: the original **per-column spec
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      IMPUTATION & PREDICTION LAYER                           │
 │  predict.py (orchestrator)                                                   │
-│  └── column_imputer.py (core imputer with per-column models)                │
+│  └── column_imputer.py (ModelBankImputer + SpecializedColumnImputer)        │
 │                                                                              │
 │  Key Components:                                                             │
-│  • Column type classification (categorical, linear, nonlinear, bounded)     │
-│  • Two imputer backends: SpecializedColumnImputer, ModelBankImputer         │
+│  • Column type classification (categorical, linear, nonlinear, bounded,     │
+│    extrapolation_prone)                                                      │
+│  • Two imputer backends: ModelBankImputer (default), SpecializedColumnImputer│
 │  • ModelBankImputer: per-cell predictor selection + σ² tracking             │
-│  • SpecializedColumnImputer: SVD warm-start + per-column models             │
+│  • SpecializedColumnImputer: SVD warm-start + per-column models (legacy)    │
 │  • Low-rank coherence projection (ModelBankImputer)                         │
 │  • ALT target imputation via OOF stacking                                   │
 │                                                                              │
@@ -173,7 +174,7 @@ The system supports two imputation architectures: the original **per-column spec
 1. **Feature selection** - Tree-based ranking (LightGBM/XGBoost) with 1-SE rule
 2. **GP-specific feature selection** - mRMR with Spearman correlation for GP models (v7.2)
 3. **Collinearity pruning** - Remove redundant features via R² threshold
-4. **Imputation orchestration** - Interface with SpecializedColumnImputer or ModelBankImputer (selected via `--imputer_type`)
+4. **Imputation orchestration** - Interface with ModelBankImputer (default) or SpecializedColumnImputer (selected via `--imputer_type`)
 5. **Per-column tolerance calibration** - Calibrate uncertainty thresholds via masked evaluation (v7.2)
 6. **Periodic recalibration** - Optionally recalibrate tolerances every N passes (v7.2)
 7. **ALT target handling** - Out-of-fold stacking for alternative targets
@@ -216,14 +217,19 @@ The system supports two imputation architectures: the original **per-column spec
 The core architecture uses **per-column type classification** to assign specialized models:
 
 **Column Type Classification:**
-| Type | Criteria | Model |
-|------|----------|-------|
-| CATEGORICAL | Boolean, string, or low-cardinality integer (≤10 unique) | LogisticRegression or RandomForestClassifier |
+| Type | Criteria | Base Model |
+|------|----------|------------|
+| CATEGORICAL | Boolean, string, or low-cardinality integer (≤10 unique) | LogisticRegression (binary) or RandomForestClassifier (multi-class) |
 | LINEAR | High Pearson correlation with predictors | BayesianRidge |
 | NONLINEAR | Spearman >> Pearson (nonlinear monotonic relationships) | GP with Matérn kernel |
-| BOUNDED | Values in [0,1] or [0,100] | GP with Linear+Matérn kernel |
 | EXTRAPOLATION_PRONE | High missingness + low correlation | GP with Linear+Matérn kernel |
 | GP_LINEAR_MATERN | Default fallback | GP with Linear+Matérn kernel |
+
+**Distribution Tags (applied independently, modify base model):**
+| Tag | Criteria | Effect |
+|-----|----------|--------|
+| BOUNDED | Values in [0,1] or [0,100] | LINEAR columns get BoundedLinkModel wrapper (logit transform) |
+| FLOOR_INFLATED | Bimodal floor cluster detected | Overrides base model with HurdleModel (LogisticRegression gate + BayesianRidge value) |
 
 **Dependency-Aware Ordering:**
 Columns are ordered by imputation difficulty (easy columns first):
@@ -385,7 +391,7 @@ Optionally recalibrate tolerances every N imputation passes:
 | `--calibration_n_rounds` | 3 | Monte Carlo rounds for calibration |
 | `--calibration_holdout_frac` | 0.2 | Fraction of known values to hold out |
 | `--recalibrate_every_n_passes` | 1 | Recalibrate every N passes (0 = only at start) |
-| `--imputer_type` | specialized | Imputer backend: `specialized` or `model_bank` |
+| `--imputer_type` | model_bank | Imputer backend: `model_bank` (default) or `specialized` |
 | `--confidence_threshold` | 0.4 | ModelBankImputer: σ/sd threshold for pass 2 |
 | `--coherence_lambda` | 1.0 | ModelBankImputer: coherence projection shrinkage |
 

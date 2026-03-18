@@ -24,6 +24,7 @@ venv_arena/
 CLAUDE.md
 arena_predictor/CLAUDE.md
 docs/FINDINGS.md
+docs/MODEL_BANK_TODO.md
 
 # OS
 .DS_Store
