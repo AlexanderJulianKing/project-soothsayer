@@ -111,7 +111,8 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 │      (~65 columns, ~160 models)                                              │
 │                                                                              │
 │  clean_combined_all_benches.csv                                              │
-│  └── Cleaned version (low-variance columns removed, outliers handled)       │
+│  └── Cleaned version (models with too few scores dropped,                   │
+│      low-variance columns removed)                                           │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
                                       │
@@ -190,7 +191,7 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 
 ### predict.py — Prediction Pipeline Orchestrator
 
-**Purpose:** End-to-end pipeline for predicting Chatbot Arena ELO scores using imputed benchmark data.
+**Purpose:** Impute missing benchmark scores and predict Chatbot Arena ELO from the combined benchmark matrix.
 
 **Key Responsibilities:**
 1. **Feature selection** — Tree-based ranking (LightGBM/XGBoost) with 1-SE rule
