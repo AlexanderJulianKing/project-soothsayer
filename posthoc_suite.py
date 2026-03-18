@@ -591,7 +591,7 @@ def _radar_chart(ax, categories, values_dict, colors_dict, title=""):
         ax.fill(angles, vals_closed, alpha=0.1, color=colors_dict.get(label, None))
 
     ax.set_title(title, fontsize=14, pad=20)
-    ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1), fontsize=8)
+    ax.legend(loc="lower right", bbox_to_anchor=(1.3, -0.1), fontsize=8)
 
 
 def plot_radar_top_models(scores_df, factor_names, df_combined, run_dir, df_f1_scores=None, top_n=8):
@@ -831,8 +831,34 @@ def plot_prediction_calibration(df_predictions, df_oof, run_dir):
     ci_hi = np.nanpercentile(boot_means, 97.5, axis=1)
 
     # Panel 2: Prediction interval coverage (if bounds available)
+    # Use OOF predictions for training models to avoid refit overfit.
+    # Merge OOF predictions with the CI bounds from df_predictions (which are
+    # based on conformal groups, not the refit point prediction).
     has_bounds = "lower_bound" in df_predictions.columns and "upper_bound" in df_predictions.columns
-    if has_bounds:
+    if has_bounds and not df_oof.empty:
+        # Get sigma_hat (halfwidth) from predictions, apply to OOF point predictions
+        df_cov = df_predictions.dropna(subset=["actual_score"]).copy()
+        df_cov = df_cov.merge(
+            df_oof[["model_name", "oof_predicted_score"]],
+            on="model_name", how="inner"
+        )
+        cov_actual = df_cov["actual_score"].values
+        cov_pred = df_cov["oof_predicted_score"].values
+        halfwidth = df_cov["sigma_hat"].values
+        cov_lower = cov_pred - halfwidth
+        cov_upper = cov_pred + halfwidth
+        in_interval = (cov_actual >= cov_lower) & (cov_actual <= cov_upper)
+
+        cov_bin_edges = np.percentile(cov_pred, np.linspace(0, 100, n_bins + 1))
+        cov_bin_edges[0] -= 1e-6
+        cov_bin_edges[-1] += 1e-6
+        cov_bin_idx = np.clip(np.digitize(cov_pred, cov_bin_edges) - 1, 0, n_bins - 1)
+
+        cov_by_bin = np.array([in_interval[cov_bin_idx == b].mean() if np.sum(cov_bin_idx == b) > 0 else np.nan
+                               for b in range(n_bins)])
+        overall_cov = in_interval.mean()
+    elif has_bounds:
+        # Fallback: use refit predictions if no OOF available
         df_cov = df_predictions.dropna(subset=["actual_score"]).copy()
         cov_actual = df_cov["actual_score"].values
         cov_pred = df_cov["predicted_score"].values
@@ -1667,6 +1693,231 @@ def plot_capability_over_time(df_scores, df_clean, df_predictions, df_combined, 
 # ──────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────
+# Chart 14: Capability Profiles (absolute z-scored category averages)
+# ──────────────────────────────────────────────────────────────────
+
+# Hand-picked benchmark categories for interpretable capability profiles.
+# Each benchmark appears in exactly one category. Z-scores are averaged
+# within category, so categories with fewer benchmarks are noisier but
+# not over-counted.
+CAPABILITY_CATEGORIES = {
+    "Reasoning": [
+        "livebench_zebra_puzzle", "livebench_consecutive_events", "livebench_integrals_with_game",
+        "livebench_connections", "livebench_logic_with_navigation", "livebench_spatial",
+        "livebench_theory_of_mind",
+        "aa_eval_hle", "arc_ARC-AGI-1", "arc_ARC-AGI-2",
+        "logic_trick_acc", "logic_physics_acc",
+        "simplebench_Score (AVG@5)",
+    ],
+    "STEM\nKnowledge": [
+        "aa_eval_aime_25", "aa_eval_gpqa", "aa_eval_mmlu_pro",
+        "livebench_olympiad",
+        "aaomniscience_OmniscienceAccuracy",
+    ],
+    "Coding": [
+        "aa_eval_livecodebench", "aa_eval_scicode", "aa_eval_terminalbench_hard",
+        "livebench_code_generation", "livebench_code_completion",
+        "livebench_javascript", "livebench_typescript", "livebench_python",
+        "aiderbench_Percent correct",
+    ],
+    "Creative\nWriting": [
+        "eqbench_creative_elo", "ugileaderboard_Writing",
+        "writing_Grok 4 Fast TrueSkill",
+        "yupp_Text_Score", "livebench_typos",
+    ],
+    "Instruction\nFollowing": [
+        "aa_eval_ifbench", "aa_eval_tau2", "livebench_IF Average",
+    ],
+    "Emotional\nIntelligence": [
+        "eqbench_eq_elo",
+        "eq_Gemini 3.0 Flash Preview (2025-12-17) TrueSkill",
+        "eq_Grok 4 Fast TrueSkill",
+    ],
+}
+
+
+def compute_capability_profiles(df_imputed: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-model capability scores via PCA PC1 within each category.
+
+    For each category, z-scores the constituent benchmarks, runs PCA, and
+    uses the first principal component as the category score. This lets
+    benchmarks contribute proportionally to their shared variance rather
+    than equally (which over-counts redundant benchmarks).
+    """
+    print("  Computing capability profiles (PCA within category)...")
+    df = df_imputed.copy()
+
+    result = pd.DataFrame({"model_name": df["model_name"]})
+
+    for cat, cols in CAPABILITY_CATEGORIES.items():
+        available = [c for c in cols if c in df.columns]
+        if len(available) < 2:
+            # Need at least 2 columns for PCA; fall back to z-score
+            if available:
+                vals = pd.to_numeric(df[available[0]], errors="coerce")
+                mu, std = vals.mean(), vals.std()
+                result[cat] = (vals - mu) / std if std > 0 else vals * 0
+            else:
+                result[cat] = np.nan
+            continue
+
+        # Z-score each benchmark
+        X = df[available].apply(lambda c: pd.to_numeric(c, errors="coerce"))
+        X_z = (X - X.mean()) / X.std()
+        X_z = X_z.fillna(0)  # fill remaining NaNs for PCA
+
+        # PCA: extract PC1
+        pca = PCA(n_components=1)
+        pc1 = pca.fit_transform(X_z).ravel()
+
+        # Flip sign so positive = better (check correlation with column means)
+        avg_z = X_z.mean(axis=1)
+        if np.corrcoef(pc1, avg_z)[0, 1] < 0:
+            pc1 = -pc1
+
+        result[cat] = pc1
+        var_expl = pca.explained_variance_ratio_[0]
+        print(f"    {cat.replace(chr(10), ' '):25s} {len(available):2d} cols, PC1 explains {var_expl:.1%}")
+
+    # Scale each category to 0-100 across all models
+    cats = list(CAPABILITY_CATEGORIES.keys())
+    for cat in cats:
+        if cat in result.columns:
+            vals = result[cat]
+            lo, hi = vals.min(), vals.max()
+            if hi - lo > 1e-12:
+                result[cat] = (vals - lo) / (hi - lo) * 100
+            else:
+                result[cat] = 50.0
+
+    print(f"  {len(cats)} categories, {len(result)} models (scaled 0-100)")
+    return result
+
+
+# Colors for the 3 major labs + best-of-rest
+HIGHLIGHT_COLORS_BY_GROUP = {
+    "OpenAI": "#9C27B0",      # purple
+    "Google": "#E53935",      # red
+    "Anthropic": "#F5A623",   # orange/gold
+    "Other": "#2196F3",       # blue
+}
+
+
+def _select_highlight_models(cap_df: pd.DataFrame) -> list:
+    """Auto-select: top model from each major lab + top model outside them."""
+    cats = [c for c in cap_df.columns if c != "model_name"]
+    df = cap_df.copy()
+    df["_overall"] = df[cats].mean(axis=1)
+
+    def _brand(name):
+        n = name.lower()
+        if "claude" in n:
+            return "Anthropic"
+        if any(k in n for k in ("gpt", "chatgpt", "o3 ", "o3-", "o4 ", "o4-")):
+            return "OpenAI"
+        if "gemini" in n or "gemma" in n:
+            return "Google"
+        return "Other"
+
+    df["_brand"] = df["model_name"].apply(_brand)
+    picks = []
+    for group in ["OpenAI", "Google", "Anthropic", "Other"]:
+        grp = df[df["_brand"] == group]
+        if not grp.empty:
+            picks.append(grp.nlargest(1, "_overall").iloc[0]["model_name"])
+    return picks
+
+
+def plot_capability_profiles(cap_df: pd.DataFrame, df_predictions: pd.DataFrame,
+                             df_combined: pd.DataFrame, run_dir: Path,
+                             highlight: list = None):
+    """Radar + bar chart of capability profiles for highlighted models.
+
+    By default auto-selects: top model from OpenAI, Google, Anthropic,
+    and the top model outside those three (by mean PC1 across categories).
+    """
+    print("  Plotting capability profiles...")
+
+    cats = [c for c in cap_df.columns if c != "model_name"]
+    highlight = highlight or _select_highlight_models(cap_df)
+    print(f"    Highlighted: {highlight}")
+
+    # Select highlighted models
+    selected = cap_df[cap_df["model_name"].isin(highlight)].copy()
+    missing = set(highlight) - set(selected["model_name"])
+    if missing:
+        print(f"  WARNING: models not found: {missing}")
+
+    # Preserve requested order
+    found_names = selected["model_name"].tolist()
+    ordered = [m for m in highlight if m in found_names]
+    selected = selected.set_index("model_name").loc[ordered].reset_index()
+
+    n_models = len(selected)
+    if n_models == 0:
+        print("  WARNING: no highlight models found, skipping capability profiles plot")
+        return
+
+    # Assign colors by lab group
+    def _brand(name):
+        n = name.lower()
+        if "claude" in n:
+            return "Anthropic"
+        if any(k in n for k in ("gpt", "chatgpt", "o3 ", "o3-", "o4 ", "o4-")):
+            return "OpenAI"
+        if "gemini" in n or "gemma" in n:
+            return "Google"
+        return "Other"
+
+    colors_dict = {}
+    for _, row in selected.iterrows():
+        name = row["model_name"]
+        colors_dict[name] = HIGHLIGHT_COLORS_BY_GROUP.get(_brand(name), "#888888")
+
+    # Short display names
+    def _short(name):
+        return (name.replace(" Preview", "").replace(" Thinking", " T")
+                .replace("(2025-", "(").replace("(2026-", "("))
+
+    # --- Radar chart ---
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
+    vals_dict = {}
+    for _, row in selected.iterrows():
+        name = row["model_name"]
+        vals_dict[name] = row[cats].values.astype(float)
+
+    _radar_chart(ax, cats, vals_dict, colors_dict,
+                 title="Capability Profile Comparison")
+    fig.tight_layout()
+    fig.savefig(run_dir / "capability_profiles_radar.png", dpi=300)
+    plt.close(fig)
+
+    # --- Bar chart ---
+    fig2, ax2 = plt.subplots(figsize=(12, 6))
+    x = np.arange(len(cats))
+    width = 0.8 / n_models
+    for i, (_, row) in enumerate(selected.iterrows()):
+        name = row["model_name"]
+        vals = row[cats].values.astype(float)
+        ax2.bar(x + i * width - 0.4 + width / 2, vals, width,
+                label=_short(name), color=colors_dict[name],
+                alpha=0.9, edgecolor="white", linewidth=0.5)
+
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(cats, fontsize=11)
+    ax2.set_ylabel("PC1 score (higher = better)", fontsize=11)
+    ax2.set_title("Capability Profile Comparison", fontsize=14)
+    ax2.legend(fontsize=9, loc="upper right")
+    ax2.axhline(y=0, color="gray", linewidth=0.5, linestyle="--")
+    ax2.grid(axis="y", alpha=0.3)
+    fig2.tight_layout()
+    fig2.savefig(run_dir / "capability_profiles_bars.png", dpi=300)
+    plt.close(fig2)
+
+    print(f"  Saved capability_profiles_radar.png and capability_profiles_bars.png ({n_models} models)")
+
+
+# ──────────────────────────────────────────────────────────────────
 
 def main():
     print("=" * 60)
@@ -1725,6 +1976,11 @@ def main():
 
     # Chart 13
     plot_capability_over_time(df_scores, df_clean, df_predictions, df_combined, run_dir)
+
+    # Chart 14
+    cap_df = compute_capability_profiles(df_imputed)
+    cap_df.to_csv(run_dir / "capability_profiles.csv", index=False)
+    plot_capability_profiles(cap_df, df_predictions, df_combined, run_dir)
 
     # Summary
     outputs = sorted(run_dir.glob("*"))

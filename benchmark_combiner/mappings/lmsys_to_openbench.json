@@ -536,5 +536,13 @@
   "step-3.5-flash": "Step 3.5 Flash",
   "trinity-large": "",
   "grok-4.20-beta1": "",
-  "amazon-nova-experimental-chat-26-01-10": ""
+  "amazon-nova-experimental-chat-26-01-10": "",
+  "gpt-5.4": "",
+  "qwen3.5-flash": "",
+  "qwen3.5-122b-a10b": "Qwen3.5 122B A10B Thinking",
+  "qwen3.5-27b": "Qwen3.5 27B Thinking",
+  "nvidia-nemotron-3-super-120b-a12b": "Nemotron 3 Super",
+  "gemini-3.1-flash-lite-preview": "Gemini 3.1 Flash Lite Preview (2026-03-03)",
+  "qwen3.5-35b-a3b": "Qwen3.5 35B A3B Thinking",
+  "gpt-5.4-high": ""
 }

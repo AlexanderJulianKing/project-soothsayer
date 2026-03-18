@@ -558,6 +558,9 @@ def combine_benchmarks_with_auto_mapping():
         "df3": {"name": "OpenBench", "pattern": "benchmarks/openbench_*.csv", "is_base": True}, # OpenBench is base
         "df5": {"name": "LMSYS", "pattern": "benchmarks/lmsys_*.csv", "map_dict": lmsys_to_openbench,
                 "columns": ["Model", "Rank", "Rank Spread", "Score", "95% CI (±)", "Votes", "Organization", "License"]},
+        # NOTE: partial correlation analysis (2026-03-16) showed lechmazur hurts
+        # per-model (partial_r=+0.212, p=0.019) but removing it worsens pipeline
+        # RMSE 19.04→20.53 because the imputer uses it as predictor for other columns.
         "df6": {"name": "LechmazurConfabulations", "pattern": "benchmarks/lechmazur_combined_*.csv", "map_dict": lechmazurconfabulations_to_openbench},
         "df7": {"name": "AiderBench", "pattern": "benchmarks/aiderbench_*.csv", "map_dict": aiderbench_to_openbench},
         "df11": {"name": "ContextArena", "pattern": "benchmarks/contextarena_*.csv", "map_dict": contextarena_to_openbench},
@@ -579,11 +582,12 @@ def combine_benchmarks_with_auto_mapping():
                              "normalized_bold_count", "normalized_list_count", "predicted_delta",
                              "cv_length", "cv_header_count", "cv_bold_count", "cv_list_count",
                              "min_length", "min_header_count", "min_bold_count", "min_list_count",
-                             "frac_used_header_count", "frac_used_bold_count", "frac_used_list_count",
-                             "q7_length", "q7_header_count", "q7_bold_count", "q7_list_count"]},
+                             "frac_used_length", "frac_used_header_count", "frac_used_bold_count", "frac_used_list_count",
+                             "q7_length", "q7_header_count", "q7_bold_count", "q7_list_count",
+                             "combined_length", "combined_header_count", "combined_bold_count", "combined_list_count"]},
         "df9": {"name": "Logic", "pattern": "benchmarks/logic_*.csv", "model_col": "model_name",
-                "columns": ["model_name", "accuracy", "weighted_accuracy", "avg_answer_tokens",
-                             "avg_reasoning_tokens", "PC1", "PC2", "PC3", "PC4"]},
+                "columns": ["model_name", "accuracy", "weighted_accuracy", "physics_acc", "trick_acc",
+                             "avg_answer_tokens", "avg_reasoning_tokens", "PC1", "PC2", "PC3", "PC4"]},
         "df10": {"name": "Tone", "pattern": "benchmarks/tone_*.csv", "model_col": "judged_model"},
         "df12": {"name": "Writing", "pattern": "benchmarks/writing_*.csv", "model_col": "writer_model"},
         # EQ uses OpenBench canonical names directly

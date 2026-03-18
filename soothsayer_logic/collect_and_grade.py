@@ -187,7 +187,7 @@ def save_results(results: List[Dict[str, Any]], filename: str):
     
     try:
         with open(filename, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
             if not file_exists:
                 writer.writeheader()
             writer.writerows(results)
@@ -225,7 +225,8 @@ def save_results(results: List[Dict[str, Any]], filename: str):
                     f.write(b'\n')
 
         with open(filename, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore',
+                                    quoting=csv.QUOTE_ALL)
             if write_header:
                 writer.writeheader()
             writer.writerows(results)

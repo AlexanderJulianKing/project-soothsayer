@@ -59,6 +59,10 @@ current_date = datetime.datetime.now().strftime("%Y%m%d")
 OUTPUT_CSV_FILE = 'output/logic_{}.csv'.format(current_date)
 TOKEN_MODEL_EXCLUSIONS = {'Nova 2 Lite'}
 
+# Question category definitions
+PHYSICS_QUESTIONS = {'1', '2', '4', '7', '9'}   # Physical reasoning / applied math
+TRICK_QUESTIONS = {'3', '5', '6', '8', '10', '11'}  # Trick / lateral thinking
+
 MODEL_SPECS = {
     'simplebench': {
         'target_col': 'simplebench_Score (AVG@5)',
@@ -1013,6 +1017,14 @@ def calculate_scores(input_filename):
             row['avg_answer_tokens'] = 'NA'
         row['_baseline_weighted_accuracy'] = baseline_weighted_percent
 
+        # Category accuracy: physics (applied math) and trick (lateral thinking)
+        def _cat_acc(q_set):
+            scores = [a['question_score_sum'][q] / a['question_attempts'][q]
+                      for q in q_set if a['question_attempts'].get(q, 0) > 0]
+            return round(np.mean(scores), 4) if scores else None
+        row['physics_acc'] = _cat_acc(PHYSICS_QUESTIONS)
+        row['trick_acc'] = _cat_acc(TRICK_QUESTIONS)
+
         feature_rows.append(build_feature_vector(a, acc))
         # Include unexpected labels as separate columns if any (helps debugging)
         if a['other_labels']:
@@ -1124,6 +1136,8 @@ def write_scores_csv(output_filename, score_data):
         'unsafe',
         'accuracy',
         'weighted_accuracy',
+        'physics_acc',
+        'trick_acc',
     ] + [f'PC{i}' for i in range(1, N_PRINCIPAL_COMPONENTS + 1)] + [
         'avg_output_tokens',
         'avg_reasoning_tokens',

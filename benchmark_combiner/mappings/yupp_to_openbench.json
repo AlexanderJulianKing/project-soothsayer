@@ -380,5 +380,16 @@
   "Qwen3.535B A3B": "",
   "Qwen3.5122B A17B": "",
   "GPT-5.3Codex (High)": "GPT-5.3 Codex",
-  "NemotronNano 12B v2": ""
+  "NemotronNano 12B v2": "",
+  "MercuryCoder": "",
+  "Gemini3.1 Flash Lite Preview Thinking": "Gemini 3.1 Flash Lite Preview (2026-03-03)",
+  "Qwen3.527B": "Qwen3.5 27B Thinking",
+  "Seed2.0 Mini (Medium)": "",
+  "GPT-5.4(High)": "",
+  "Seed2.0 Lite (Medium)": "",
+  "GPT-5.3Instant": "",
+  "GPT-5.4": "",
+  "OLMo3.1 32B Think": "Olmo 3.1 32B (Reasoning)",
+  "Gemini3.1 Flash Lite Preview": "",
+  "MiniMaxM2.5 FP8": ""
 }

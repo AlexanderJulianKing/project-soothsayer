@@ -151,5 +151,12 @@
   "Claude 4.6 Sonnet Thinking Low Effort": "",
   "Claude 4.6 Sonnet Thinking Medium Effort": "",
   "GPT-5.3 Codex High": "",
-  "GPT-5.3 Codex xHigh": "GPT-5.3 Codex"
+  "GPT-5.3 Codex xHigh": "GPT-5.3 Codex",
+  "Grok 4.20 Beta (Non-Reasoning)": "",
+  "GPT-5.4 Thinking xHigh Effort": "GPT-5.4 Thinking",
+  "Gemini 3.1 Pro Preview High**5th rank in unseen questions across all categories": "Gemini 3.1 Pro Preview (2026-02-19)",
+  "Gemini 3.1 Flash Lite Preview High": "Gemini 3.1 Flash Lite Preview (2026-03-03)",
+  "GPT-5.4 Thinking High Effort": "",
+  "GPT-5.3 Instant": "",
+  "Grok 4.20 Beta": "Grok 4.2 beta"
 }

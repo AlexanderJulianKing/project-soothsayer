@@ -60,7 +60,7 @@ bench_cmds() {
     esac
 }
 
-ALL_BENCHES="eq logic style writing zebra"
+ALL_BENCHES="eq logic style writing"
 
 # ── helpers ──────────────────────────────────────────────────────────────
 run_bench() {
