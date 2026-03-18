@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post-hoc analysis suite: 13 charts for benchmark/prediction diagnostics.
+"""Post-hoc analysis suite: 16 charts for benchmark/prediction diagnostics.
 
 Charts produced:
   1. Cost vs Performance + Pareto Frontier

@@ -170,8 +170,6 @@ def read_and_clean_data(file_path):
     #             df = df[df[col].notna()]
     #             break
 
-    # print(df['model_name'])
-    # print(fnskjfns)
     return df
 
 

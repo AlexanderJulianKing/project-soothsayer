@@ -33,13 +33,11 @@ def _load_registry() -> Dict[str, Benchmark]:
     from soothsayer_writing.benchmark import WritingBenchmark
     from soothsayer_style.benchmark import StyleBenchmark
     from soothsayer_logic.benchmark import LogicBenchmark
-    from soothsayer_zebra.benchmark import ZebraBenchmark
 
     _REGISTRY["eq"] = EQBenchmark
     _REGISTRY["writing"] = WritingBenchmark
     _REGISTRY["logic"] = LogicBenchmark
     _REGISTRY["style"] = StyleBenchmark
-    _REGISTRY["zebra"] = ZebraBenchmark
 
     return {name: cls() for name, cls in _REGISTRY.items()}
 
@@ -137,7 +135,7 @@ def main():
     )
     parser.add_argument(
         "benchmarks", nargs="*",
-        help="Benchmarks to run (default: all). Valid: eq, writing, logic, style, zebra",
+        help="Benchmarks to run (default: all). Valid: eq, writing, logic, style",
     )
     parser.add_argument(
         "--skip-preflight", action="store_true",
@@ -154,7 +152,7 @@ def main():
         return 0
 
     if not args.benchmarks:
-        args.benchmarks = ["eq", "writing", "logic", "style", "zebra"]
+        args.benchmarks = ["eq", "writing", "logic", "style"]
 
     return run_benchmarks(args.benchmarks, skip_preflight=args.skip_preflight)
 
