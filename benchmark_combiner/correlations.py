@@ -217,7 +217,7 @@ def prepare_data_for_analysis(df, exclude_columns=None, threshold_margin=0.2, in
     numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
     
     # Exclude rank columns and vote counts
-    exclude_patterns = ['rank', 'Rank', 'votes', 'Skipped']
+    exclude_patterns = ['rank', 'Rank', 'votes', 'Skipped', 'Sigma']
     numeric_cols = [col for col in numeric_cols if col == "lechmazur_gen_Avg Rank" or not any(pattern in col for pattern in exclude_patterns)]
     
     # Exclude specific columns if provided
@@ -1326,7 +1326,8 @@ def main(file_path):
             'logic_no_answer',
             'logic_refusal',
             'logic_unsafe',
-            'logic_label_skipped: model failed'
+            'logic_label_skipped: model failed',
+            'logic_PC1',
 
         ],
         'style': [
@@ -1507,8 +1508,15 @@ def main(file_path):
             'aacritpt_Rank',
             'aacritpt_isReasoning',
             'aacritpt_Model_Mapped_to_OpenBench',
-        ]
+        ],
 
+        # LOBO-confirmed harmful columns (2026-03-16)
+        'lobo_harmful': [
+            'eqbench_creative_elo',  # LOBO: -0.21 all, -0.79 T20, -1.06 T10
+            # yupp_Coding_Score: LOBO says harmful (-0.39 all) but dropping it
+            # changes column set → changes which models pass cleaning threshold
+            # → destabilizes feature selection → net worse. Keep it.
+        ],
     }
 
     exclude_columns = []

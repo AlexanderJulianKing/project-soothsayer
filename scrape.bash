@@ -8,12 +8,12 @@ if [[ -f "$ROOT/.env" ]]; then
     source "$ROOT/.env"
     set +a
 fi
-
+bash benchmark_combiner/collect_benchmarks.sh
 cd "$ROOT/benchmark_combiner"
 
 START_TIME=$SECONDS
 
-bash collect_benchmarks.sh
+
 python3 ../scrapers/arena_ai_grabber.py
 # python3 ../scrapers/lmarena_grabber.py  # replaced by arena_ai_grabber.py
 # python3 ../scrapers/vectara_grabber.py

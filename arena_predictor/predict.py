@@ -592,6 +592,28 @@ def _ensure_frame_series(X, y):
 # POLYNOMIAL INTERACTION EXPANSION
 # ==============================================================================
 
+# lmarena_Score should only interact with style features (the lmarena→lmsys
+# difference is purely style-control coefficients on length/headers/bold/lists).
+# Allowing lmarena to interact with capability benchmarks creates a near-circular
+# "predict Arena from Arena × benchmarks" path that overfits for existing models
+# and extrapolates badly for new ones.
+_LMARENA_STYLE_ONLY_PARTNERS = {
+    "style_normalized_length", "style_log_normalized_length",
+    "style_normalized_header_count", "style_normalized_bold_count",
+    "style_normalized_list_count", "style_predicted_delta",
+    "style_cv_length", "style_cv_header_count", "style_cv_bold_count",
+    "style_cv_list_count", "style_min_length", "style_min_bold_count",
+    "style_min_list_count",
+    "style_frac_used_length", "style_frac_used_header_count",
+    "style_frac_used_bold_count", "style_frac_used_list_count",
+    "style_q7_length", "style_q7_header_count", "style_q7_bold_count",
+    "style_q7_list_count",
+    "style_combined_length", "style_combined_header_count",
+    "style_combined_bold_count", "style_combined_list_count",
+    "_pw_top_style",
+}
+
+
 def expand_poly_interactions(
     X: pd.DataFrame,
     include_squares: bool = False,
@@ -605,6 +627,9 @@ def expand_poly_interactions(
     Creates pairwise interaction features (A*B) and optionally squared terms (A^2)
     from input features. When many features exist, interactions can be limited to
     the highest-variance columns to control dimensionality.
+
+    lmarena_Score interactions are restricted to style features only (see
+    _LMARENA_STYLE_ONLY_PARTNERS) to prevent circular Arena→Arena prediction.
 
     Args:
         X: Input feature DataFrame.
@@ -656,9 +681,27 @@ def expand_poly_interactions(
     )
     Z = poly.fit_transform(X[core].values)
     names = poly.get_feature_names_out(core)
-    # sanitize: "A B" -> "A:B"
+    # sanitize: "A B" -> "A*B"
     names = [n.replace(" ", "*") for n in names]
     Zdf = pd.DataFrame(Z, index=X.index, columns=names)
+
+    # Drop disallowed lmarena interactions (lmarena × non-style)
+    lmarena_key = "lmarena_Score"
+    if lmarena_key in core:
+        drop_cols = []
+        for col_name in Zdf.columns:
+            if "*" not in col_name:
+                continue
+            parts = col_name.split("*")
+            if len(parts) != 2:
+                continue
+            if lmarena_key not in parts:
+                continue
+            partner = parts[0] if parts[1] == lmarena_key else parts[1]
+            if partner not in _LMARENA_STYLE_ONLY_PARTNERS:
+                drop_cols.append(col_name)
+        if drop_cols:
+            Zdf = Zdf.drop(columns=drop_cols)
 
     if limit and limit < len(cols_all):
         # keep main effects for the non-core columns (no interactions)
@@ -1057,6 +1100,20 @@ PRED_CALIBRATION_ENABLED = False
 # Boost=2 means each top-tier row appears twice in training.
 TOP_TIER_BOOST = 1       # integer multiplier (1 = no boost)
 TOP_TIER_THRESHOLD = 0.0  # ELO threshold for "top-tier" (set by --top_tier_threshold)
+
+# Style-only final model: restrict final-stage features to lmarena + style columns.
+# Based on the insight that lmsys = lmarena + style_adjustment (contextual BT).
+STYLE_ONLY_FINAL = False
+
+# Continuous ELO weighting: sample_weight = exp((ELO - center) / scale)
+# Smooth gradient instead of binary boost cliff.
+ELO_WEIGHT_ENABLED = False
+ELO_WEIGHT_CENTER = 1300.0
+ELO_WEIGHT_SCALE = 100.0
+
+# Top-tier residual correction: second-stage model on top-N residuals
+TOP_CORRECTION_ENABLED = False
+TOP_CORRECTION_N = 50
 
 # Post-PCA interactions: cross-terms appended AFTER PCA dimensionality reduction.
 # PCA(10) captures linear signal from all base features; these raw (scaled)
@@ -3042,24 +3099,54 @@ def compute_coverage(y_true: np.ndarray, y_pred: np.ndarray, intervals: Tuple[np
     return np.mean(covered)
 
 
+class _ScaledPositiveRidge:
+    """Ridge(positive=True) with built-in StandardScaler for fair penalization."""
+
+    def __init__(self, alpha=1.0):
+        self.alpha = alpha
+        self.scaler = StandardScaler()
+        self.ridge = Ridge(alpha=alpha, positive=True)
+
+    def fit(self, X, y):
+        X_s = self.scaler.fit_transform(X)
+        self.ridge.fit(X_s, y)
+        return self
+
+    def predict(self, X):
+        X_s = self.scaler.transform(X)
+        return self.ridge.predict(X_s)
+
+    @property
+    def coef_(self):
+        """Return coefficients in original feature scale for diagnostics."""
+        return self.ridge.coef_ / self.scaler.scale_
+
+    @property
+    def intercept_(self):
+        return self.ridge.intercept_ - np.dot(self.ridge.coef_, self.scaler.mean_ / self.scaler.scale_)
+
+
 def _fit_positive_ridge(X_tr, y_tr, X_va, alphas=None):
     """Fit Ridge(positive=True) with manual alpha selection via LOO approximation.
 
     Since RidgeCV doesn't support positive=True, we loop over alphas and pick
     the one with lowest training MSE (with regularization acting as implicit CV).
+
+    Features are standardized internally so Ridge penalizes all features
+    equally regardless of scale (e.g. missing_frac in 0-1 vs score_dist in 0-300).
     """
     if alphas is None:
         alphas = np.logspace(-3, 3, 20)
     best_alpha = alphas[len(alphas) // 2]
     best_loss = np.inf
     for a in alphas:
-        r = Ridge(alpha=a, positive=True)
+        r = _ScaledPositiveRidge(alpha=a)
         r.fit(X_tr, y_tr)
-        loss = np.mean((y_tr - r.predict(X_tr)) ** 2) + a * np.sum(r.coef_ ** 2)
+        loss = np.mean((y_tr - r.predict(X_tr)) ** 2) + a * np.sum(r.ridge.coef_ ** 2)
         if loss < best_loss:
             best_loss = loss
             best_alpha = a
-    final = Ridge(alpha=best_alpha, positive=True)
+    final = _ScaledPositiveRidge(alpha=best_alpha)
     final.fit(X_tr, y_tr)
     return final, final.predict(X_va)
 
@@ -3093,6 +3180,174 @@ def _detect_suite_missing_fracs(
 
     # Average across suites: how many suites is this model largely missing?
     return np.mean(np.column_stack(suite_missing_fracs), axis=1)
+
+
+def compute_grouped_conformal_intervals(
+    mu: np.ndarray,
+    oof_preds: np.ndarray,
+    y_train: np.ndarray,
+    train_idx: np.ndarray,
+    pre_imputation_missing: np.ndarray,
+    feature_names: Optional[List[str]] = None,
+    target_coverage: float = 0.95,
+    top_threshold: float = 1400.0,
+    min_group_size: int = 10,
+    high_missing_frac: float = 0.35,
+) -> dict:
+    """Compute prediction intervals using coarse group-based conformal calibration.
+
+    Instead of learning a 6-feature heteroscedastic scale model (which overfits
+    at n~120), this assigns each model to a small number of predeclared groups
+    and uses empirical OOF residual quantiles per group.
+
+    Groups (hierarchical, backs off to parent if cell < min_group_size):
+      1. predicted_top (mu >= threshold) vs predicted_rest
+      2. Optionally split each by high vs low missingness
+
+    Args:
+        mu: Point predictions for ALL models, shape (n_all,).
+        oof_preds: OOF predictions for training rows with valid OOF, shape (n_valid,).
+        y_train: Actual target values for valid training rows, shape (n_valid,).
+        train_idx: Global indices of valid training rows, shape (n_valid,).
+        pre_imputation_missing: Boolean missing mask, shape (n_all, n_features).
+        feature_names: Column names for pre_imputation_missing.
+        target_coverage: Desired marginal coverage (default 0.95).
+        top_threshold: ELO threshold for "top" group.
+        min_group_size: Minimum group size; back off to parent if smaller.
+        high_missing_frac: Threshold for "high missingness" split.
+
+    Returns:
+        Dict matching compute_normalized_conformal_intervals interface.
+    """
+    n_all = len(mu)
+    n_valid = len(y_train)
+
+    # --- Compute group assignments ---
+    raw_missing_frac = pre_imputation_missing.astype(float).mean(axis=1)
+
+    # Suite-level missingness
+    suite_missing_frac = _detect_suite_missing_fracs(
+        pre_imputation_missing,
+        feature_names if feature_names is not None else [f"col_{i}" for i in range(pre_imputation_missing.shape[1])],
+    )
+
+    # OOF residuals
+    oof_residuals = np.abs(y_train - oof_preds)
+
+    # Group training rows by predicted score (use OOF preds to avoid leakage)
+    is_top_train = oof_preds >= top_threshold
+    is_high_missing_train = raw_missing_frac[train_idx] >= high_missing_frac
+
+    # Build groups with hierarchical fallback
+    groups = {}  # group_name -> (train_mask, all_mask)
+
+    # Try 4-way split first
+    candidates = {
+        "top_low_miss": (is_top_train & ~is_high_missing_train,
+                         (mu >= top_threshold) & (raw_missing_frac < high_missing_frac)),
+        "top_high_miss": (is_top_train & is_high_missing_train,
+                          (mu >= top_threshold) & (raw_missing_frac >= high_missing_frac)),
+        "rest_low_miss": (~is_top_train & ~is_high_missing_train,
+                          (mu < top_threshold) & (raw_missing_frac < high_missing_frac)),
+        "rest_high_miss": (~is_top_train & is_high_missing_train,
+                           (mu < top_threshold) & (raw_missing_frac >= high_missing_frac)),
+    }
+
+    # Back off small groups to parent
+    parent_map = {
+        "top_low_miss": "top", "top_high_miss": "top",
+        "rest_low_miss": "rest", "rest_high_miss": "rest",
+    }
+    parent_candidates = {
+        "top": (is_top_train, mu >= top_threshold),
+        "rest": (~is_top_train, mu < top_threshold),
+    }
+
+    # Determine which groups are viable
+    for name, (train_mask, all_mask) in candidates.items():
+        if int(train_mask.sum()) >= min_group_size:
+            groups[name] = (train_mask, all_mask)
+        else:
+            # Merge into parent
+            parent = parent_map[name]
+            if parent not in groups:
+                p_train, p_all = parent_candidates[parent]
+                groups[parent] = (p_train, p_all)
+
+    # If any parent is also too small, fall back to global
+    final_groups = {}
+    for name, (train_mask, all_mask) in groups.items():
+        if int(train_mask.sum()) >= min_group_size:
+            final_groups[name] = (train_mask, all_mask)
+
+    if not final_groups:
+        # Global fallback
+        final_groups["global"] = (np.ones(n_valid, dtype=bool), np.ones(n_all, dtype=bool))
+
+    # --- Compute per-group quantiles ---
+    pct = target_coverage * 100
+    group_q = {}
+    for name, (train_mask, _) in final_groups.items():
+        resids = oof_residuals[train_mask]
+        group_q[name] = float(np.percentile(resids, pct))
+
+    # --- Assign sigma_hat (= halfwidth) for all models ---
+    sigma_hat = np.full(n_all, np.nan)
+    group_labels = np.full(n_all, "", dtype=object)
+
+    for name, (_, all_mask) in final_groups.items():
+        sigma_hat[all_mask & np.isnan(sigma_hat)] = group_q[name]
+        group_labels[all_mask] = name
+
+    # Any unassigned models get the global worst-case
+    global_q = float(np.percentile(oof_residuals, pct))
+    still_nan = np.isnan(sigma_hat)
+    sigma_hat[still_nan] = global_q
+    group_labels[still_nan] = "global_fallback"
+
+    # --- Build intervals ---
+    lower = mu - sigma_hat
+    upper = mu + sigma_hat
+    std_new = sigma_hat / 1.96
+
+    # --- OOF coverage check (using OOF preds, not refit mu) ---
+    oof_lower = oof_preds - sigma_hat[train_idx]
+    oof_upper = oof_preds + sigma_hat[train_idx]
+    oof_coverage = float(np.mean((y_train >= oof_lower) & (y_train <= oof_upper)))
+
+    sigma_cv = float(np.std(sigma_hat) / np.mean(sigma_hat)) if np.mean(sigma_hat) > 0 else 0.0
+
+    # --- Diagnostics ---
+    scale_model_coef = {"method": "grouped_conformal"}
+    for name, (train_mask, _) in final_groups.items():
+        scale_model_coef[f"group_{name}_q{pct:.0f}"] = group_q[name]
+        scale_model_coef[f"group_{name}_n_train"] = int(train_mask.sum())
+    scale_model_coef["intercept"] = 0.0  # compat with diagnostics CSV
+
+    print(f"  Grouped conformal ({len(final_groups)} groups, coverage target={target_coverage:.0%}):")
+    for name in sorted(final_groups.keys()):
+        train_mask, all_mask = final_groups[name]
+        print(f"    {name}: n_train={int(train_mask.sum())}, n_all={int(all_mask.sum())}, "
+              f"halfwidth=±{group_q[name]:.1f}")
+
+    return {
+        "std": std_new,
+        "lower": lower,
+        "upper": upper,
+        "sigma_hat": sigma_hat,
+        "q_hat": 1.0,  # halfwidth IS sigma_hat (no separate q_hat)
+        "sigma_floor": 0.0,
+        "oof_sigma": sigma_hat[train_idx],
+        "sigma_cv": sigma_cv,
+        "oof_coverage": oof_coverage,
+        "scale_model_coef": scale_model_coef,
+        "uncertainty_features": pd.DataFrame({
+            "raw_missing_frac": raw_missing_frac,
+            "suite_missing_frac": suite_missing_frac,
+            "group": group_labels,
+            "sigma_hat": sigma_hat,
+        }),
+    }
 
 
 def compute_normalized_conformal_intervals(
@@ -5108,6 +5363,19 @@ def main():
                          "Counteracts regularisation shrinkage for extreme models.")
     ap.add_argument("--top_tier_threshold", type=float, default=1450.0,
                     help="ELO threshold for top-tier boost (default 1450).")
+    ap.add_argument("--style_only_final", action="store_true",
+                    help="Restrict final-stage features to lmarena + style columns only. "
+                         "Based on lmsys = lmarena + style_adjustment.")
+    ap.add_argument("--elo_weight", action="store_true",
+                    help="Use continuous exp((ELO-center)/scale) sample weighting instead of binary boost.")
+    ap.add_argument("--elo_weight_center", type=float, default=1300.0,
+                    help="Center for ELO weighting (default 1300).")
+    ap.add_argument("--elo_weight_scale", type=float, default=100.0,
+                    help="Scale for ELO weighting (default 100).")
+    ap.add_argument("--top_correction", action="store_true",
+                    help="Train second-stage residual correction model on top-N models.")
+    ap.add_argument("--top_correction_n", type=int, default=50,
+                    help="Number of top models for residual correction (default 50).")
     ap.add_argument("--exclude_models", type=str, default="",
                     help="Comma-separated model names to exclude from the dataset before imputation/prediction.")
     args = ap.parse_args()
@@ -5181,6 +5449,24 @@ def main():
     TOP_TIER_THRESHOLD = getattr(args, 'top_tier_threshold', 1450.0)
     if TOP_TIER_BOOST > 1:
         print(f"Top-tier boost: {TOP_TIER_BOOST}x for models with ELO >= {TOP_TIER_THRESHOLD}")
+
+    global STYLE_ONLY_FINAL
+    STYLE_ONLY_FINAL = getattr(args, 'style_only_final', False)
+    if STYLE_ONLY_FINAL:
+        print("Style-only final: restricting final model to lmarena + style features")
+
+    global ELO_WEIGHT_ENABLED, ELO_WEIGHT_CENTER, ELO_WEIGHT_SCALE
+    ELO_WEIGHT_ENABLED = getattr(args, 'elo_weight', False)
+    ELO_WEIGHT_CENTER = getattr(args, 'elo_weight_center', 1300.0)
+    ELO_WEIGHT_SCALE = getattr(args, 'elo_weight_scale', 100.0)
+    if ELO_WEIGHT_ENABLED:
+        print(f"ELO weighting: exp((ELO - {ELO_WEIGHT_CENTER}) / {ELO_WEIGHT_SCALE})")
+
+    global TOP_CORRECTION_ENABLED, TOP_CORRECTION_N
+    TOP_CORRECTION_ENABLED = getattr(args, 'top_correction', False)
+    TOP_CORRECTION_N = getattr(args, 'top_correction_n', 50)
+    if TOP_CORRECTION_ENABLED:
+        print(f"Top-tier correction: second-stage model on top-{TOP_CORRECTION_N} residuals")
 
     if not os.path.exists(args.csv_path):
         print(f"ERROR: CSV not found at {args.csv_path}", file=sys.stderr)
@@ -5260,6 +5546,17 @@ def main():
     completeness = 1.0 - row_missing_ratio
     weight_power = 2 if args.imputer_type == "model_bank" else COMPLETENESS_WEIGHT_POWER
     sample_weights_all = completeness ** weight_power
+
+    # Optionally multiply in ELO-proportional weights (continuous alternative to binary boost)
+    if ELO_WEIGHT_ENABLED:
+        elo_vals = df[TARGET].values.copy()
+        # Only weight training rows (non-NaN target); prediction rows get weight=1
+        elo_weights = np.ones(len(df))
+        has_target = ~np.isnan(elo_vals)
+        elo_weights[has_target] = np.exp((elo_vals[has_target] - ELO_WEIGHT_CENTER) / ELO_WEIGHT_SCALE)
+        # Normalize so mean weight on training rows = 1 (preserves effective sample size)
+        elo_weights[has_target] /= elo_weights[has_target].mean()
+        sample_weights_all = sample_weights_all * elo_weights
     dense_mask_all = row_missing_ratio <= DENSE_THRESHOLD
     n_dense = int(dense_mask_all.sum())
     n_sparse = int((~dense_mask_all).sum())
@@ -5806,6 +6103,25 @@ def main():
 
     target_base_features = safe_features.copy()
 
+    # Style-only final: restrict to lmarena + style/tone columns
+    if STYLE_ONLY_FINAL:
+        style_cols = [c for c in target_base_features.columns
+                      if c.startswith("style_") or c.startswith("tone_")
+                      or c == ALT_TARGET]
+        dropped = len(target_base_features.columns) - len(style_cols)
+        target_base_features = target_base_features[style_cols]
+        print(f"Style-only final: kept {len(style_cols)} columns, dropped {dropped}")
+
+    # Piecewise style interaction: above threshold, style delta has weaker effect.
+    # Captures the empirical finding that top-tier models have homogeneous formatting
+    # so lmarena ≈ lmsys at the top (style correction is noise there).
+    if ALT_TARGET in target_base_features.columns and "style_predicted_delta" in target_base_features.columns:
+        alt_vals = target_base_features[ALT_TARGET].values
+        delta_vals = target_base_features["style_predicted_delta"].values
+        pw_threshold = TOP_TIER_THRESHOLD if TOP_TIER_THRESHOLD > 0 else 1400.0
+        target_base_features["_pw_top_style"] = np.maximum(alt_vals - pw_threshold, 0) * delta_vals
+        print(f"Piecewise style feature: _pw_top_style (threshold={pw_threshold})")
+
     # Add PCA components of benchmark columns as target model features
     pca_in_target = getattr(args, 'pca_in_target', 0)
     if pca_in_target > 0:
@@ -6162,6 +6478,49 @@ def main():
         "fold": oof_folds,
     })
     oof_df = oof_df.dropna(subset=["oof_predicted_score"])
+
+    # --- Top-tier residual correction (second-stage) ---
+    if TOP_CORRECTION_ENABLED and len(oof_df) > TOP_CORRECTION_N:
+        _top_n = TOP_CORRECTION_N
+        # Sort by actual score, get top-N indices
+        top_mask = oof_df["actual_score"].rank(ascending=False) <= _top_n
+        top_idx = oof_df.index[top_mask]
+
+        # Get features for these models from the safe_features matrix
+        top_model_names = oof_df.loc[top_idx, "model_name"].values
+        train_names_list = list(train_names)
+        top_positions = [train_names_list.index(n) for n in top_model_names if n in train_names_list]
+
+        if len(top_positions) >= 10:
+            from sklearn.linear_model import RidgeCV
+            top_X = safe_features.iloc[top_positions].values
+            top_residuals = (oof_df.loc[top_idx, "actual_score"].values -
+                             oof_df.loc[top_idx, "oof_predicted_score"].values)
+
+            # LOO correction to avoid leakage
+            corrections = np.zeros(len(top_positions))
+            for i in range(len(top_positions)):
+                loo_mask = np.ones(len(top_positions), dtype=bool)
+                loo_mask[i] = False
+                ridge = RidgeCV(alphas=np.logspace(-2, 4, 20))
+                ridge.fit(top_X[loo_mask], top_residuals[loo_mask])
+                corrections[i] = ridge.predict(top_X[i:i+1])[0]
+
+            # Apply corrections to OOF predictions
+            for i, pos in enumerate(top_positions):
+                model_name = train_names_list[pos]
+                oof_mask = oof_df["model_name"] == model_name
+                oof_df.loc[oof_mask, "oof_predicted_score"] += corrections[i]
+
+            corrected_rmse = float(np.sqrt(((oof_df["oof_predicted_score"] - oof_df["actual_score"]) ** 2).mean()))
+            top_corrected = oof_df[top_mask]
+            top_rmse = float(np.sqrt(((top_corrected["oof_predicted_score"] - top_corrected["actual_score"]) ** 2).mean()))
+            print(f"Top-{_top_n} correction: overall RMSE -> {corrected_rmse:.2f}, top-{_top_n} RMSE -> {top_rmse:.2f}")
+
+            # Also update the oof_preds array for conformal
+            for i, pos in enumerate(top_positions):
+                oof_preds[pos] += corrections[i]
+
     oof_df.to_csv(os.path.join(out_dir, "oof_predictions.csv"), index=False)
     print(f"OOF predictions: {len(oof_df)} rows saved")
 
@@ -6187,17 +6546,16 @@ def main():
     train_idx_all = np.where(~y_missing_mask)[0]
     train_idx_valid = train_idx_all[oof_valid_mask]
 
-    conformal = compute_normalized_conformal_intervals(
+    conformal = compute_grouped_conformal_intervals(
         mu=mu,
         oof_preds=oof_preds_valid,
         y_train=y_train_valid,
-        X_features=X_for_pred.values,
         train_idx=train_idx_valid,
         pre_imputation_missing=pre_imputation_missing,
-        feature_gains=feature_gains,
         feature_names=list(feature_cols),
         target_coverage=0.95,
-        seed=SEED,
+        top_threshold=TOP_TIER_THRESHOLD if TOP_TIER_THRESHOLD > 0 else 1400.0,
+        min_group_size=10,
     )
 
     # Overwrite intervals with heteroscedastic conformal intervals
@@ -6405,9 +6763,22 @@ def main():
         col for col in imputer_predictors_map.keys()
         if _col_has_missing(col)
     }
-    # Register imputer dependencies, filtered by 1% variance contribution
+    # Register imputer dependencies, filtered by 1% variance contribution.
+    # Also exclude same-suite predictor links (e.g. livebench → livebench)
+    # which are selected by the imputer but produce circular dependencies
+    # when an entire suite is missing for a model. The availability filter
+    # already zeros these out at imputation time, so the graph should reflect
+    # what actually contributes.
+    _get_suite = None
+    try:
+        from column_imputer import get_benchmark_suite
+        _get_suite = get_benchmark_suite
+    except Exception:
+        pass
+
     imputer_total_deps = 0
     imputer_filtered_deps = 0
+    imputer_same_suite_dropped = 0
     for col, preds in imputer_predictors_map.items():
         if not _col_has_missing(col):
             continue
@@ -6416,15 +6787,27 @@ def main():
         important_preds = imputer_important_predictors.get(col)
         if important_preds is not None:
             filtered_preds = [p for p in (preds or []) if p in important_preds]
-            imputer_total_deps += len(preds or [])
-            imputer_filtered_deps += len(filtered_preds)
-            register(col, filtered_preds)
         else:
-            imputer_total_deps += len(preds or [])
-            imputer_filtered_deps += len(preds or [])
-            register(col, preds or [])
+            filtered_preds = list(preds or [])
+        imputer_total_deps += len(preds or [])
+
+        # Drop same-suite links from the graph
+        if _get_suite is not None:
+            col_suite = _get_suite(col)
+            clean_preds = []
+            for p in filtered_preds:
+                if col_suite != '_other' and _get_suite(p) == col_suite:
+                    imputer_same_suite_dropped += 1
+                else:
+                    clean_preds.append(p)
+            filtered_preds = clean_preds
+
+        imputer_filtered_deps += len(filtered_preds)
+        register(col, filtered_preds)
     if imputer_total_deps > 0:
         print(f"Imputer dependency graph: {imputer_filtered_deps}/{imputer_total_deps} predictor links kept (>= 1% contribution)")
+        if imputer_same_suite_dropped > 0:
+            print(f"  Dropped {imputer_same_suite_dropped} same-suite links from dependency graph")
 
     # Ensure every dependency node exists in the graph
     for deps in list(dependency_graph.values()):

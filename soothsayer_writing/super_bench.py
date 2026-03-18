@@ -642,7 +642,9 @@ def main():
         print("No new battle records were added this run.")
 
     # Find all unique judges in the battle history
+    # Normalize whitespace in judge names to prevent duplicate columns
     if "judge_model" in history_df.columns:
+        history_df["judge_model"] = history_df["judge_model"].str.strip().str.replace(r'\s+', ' ', regex=True)
         all_judges = sorted(history_df["judge_model"].dropna().unique())
     else:
         all_judges = []

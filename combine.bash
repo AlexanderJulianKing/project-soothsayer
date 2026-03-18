@@ -8,6 +8,7 @@ if [[ -f "$ROOT/.env" ]]; then
     source "$ROOT/.env"
     set +a
 fi
+bash benchmark_combiner/collect_benchmarks.sh
 
 cd "$ROOT/benchmark_combiner"
 

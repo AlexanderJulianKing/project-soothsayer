@@ -131,5 +131,10 @@
   "Minimax M2.5": "MiniMax M2.5",
   "Kimi K2.5": "Kimi K2.5",
   "Deepseek V3.2": "DeepSeek V3.2",
-  "GLM-5": "GLM-5"
+  "GLM-5": "GLM-5",
+  "GPT-5.4 (Medium)": "",
+  "GPT-5.4 Pro (xHigh)": "",
+  "GPT-5.4 (xHigh)": "GPT-5.4 Thinking",
+  "GPT-5.4 (High)": "",
+  "GPT-5.4 (Low)": ""
 }

@@ -13,6 +13,24 @@ Key features:
 """
 
 from enum import Enum
+
+
+def get_benchmark_suite(col: str) -> str:
+    """Extract benchmark suite prefix from a column name.
+
+    Used to identify same-suite columns in dependency graph output.
+    Same-suite links (e.g. livebench_X → livebench_Y) appear in the
+    imputer's predictor lists but are neutralized by the availability
+    filter when the entire suite is missing for a model.
+    """
+    for prefix in ('livebench_', 'aa_eval_', 'aa_pricing_', 'lechmazur_',
+                    'eqbench_', 'style_', 'logic_', 'writing_', 'eq_',
+                    'tone_', 'arc_', 'contextarena_', 'aaomniscience_',
+                    'aagdpval_', 'aacritpt_', 'weirdml_', 'yupp_',
+                    'simplebench_', 'openbench_'):
+        if col.startswith(prefix):
+            return prefix.rstrip('_')
+    return '_other'
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any

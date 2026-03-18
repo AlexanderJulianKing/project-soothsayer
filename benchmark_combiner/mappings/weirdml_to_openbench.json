@@ -92,5 +92,11 @@
   "glm-5 (thinking)": "GLM-5",
   "claude-sonnet-4.6 (medium)": "",
   "gemini-3.1-pro-preview (high)": "",
-  "gpt-5.3-codex (xhigh)": "GPT-5.3 Codex"
+  "gpt-5.3-codex (xhigh)": "GPT-5.3 Codex",
+  "mercury-2 (high)": "",
+  "gemini-3.1-flash-lite-preview (high)": "Gemini 3.1 Flash Lite Preview (2026-03-03)",
+  "gpt-5-nano (low)": "GPT-5 Nano (low)",
+  "gpt-5.4 (xhigh)": "GPT-5.4 Thinking",
+  "grok-4.20-beta": "Grok 4.2 beta",
+  "gpt-5.4 (no thinking)": ""
 }
