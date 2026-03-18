@@ -31,7 +31,7 @@ predict.sh          -- impute missing scores + predict Arena ELO
     |
     v
 analysis_output/    -- predictions, imputed matrices, diagnostics
-posthoc_suite.py    -- 12-chart post-hoc analysis
+posthoc_suite.py    -- 16-chart post-hoc analysis
 ```
 
 ### Directory Layout
@@ -58,17 +58,17 @@ benchmark_combiner/      Merge + clean all benchmark CSVs
   mappings/                Model name mapping JSONs
 arena_predictor/         Impute + predict Arena ELO scores
   predict.py               Orchestrator (feature selection, prediction, intervals)
-  column_imputer.py        Per-column specialized imputation
+  column_imputer.py        Per-cell model-bank imputation (default) + per-column specialized
 
-docs/                    Documentation (architecture, data dictionary, findings)
-tests/                   Test suite (62 tests)
+docs/                    Documentation (architecture, data dictionary)
+tests/                   Test suite (112 tests)
 ```
 
 ## Setup
 
 ```bash
 # Clone and install
-git clone https://github.com/YOUR_USERNAME/project_soothsayer.git
+git clone https://github.com/AlexanderJulianKing/project-soothsayer.git
 cd project_soothsayer
 pip install -e .
 
@@ -118,7 +118,7 @@ cd soothsayer_style && python3 collect.py && python3 style_analysis.py && python
 ./scrape.bash        # Collect external benchmark data
 ./combine.bash       # Combine + clean -> clean_combined_all_benches.csv
 ./predict.sh         # Impute missing scores + predict Arena ELO
-python3 posthoc_suite.py  # Generate 12-chart analysis suite
+python3 posthoc_suite.py  # Generate 16-chart analysis suite
 ```
 
 ### CLI
@@ -142,7 +142,7 @@ All benchmarks read from a shared `openbench_*.csv` that maps model display name
 
 The prediction pipeline (`scrapers/` → `benchmark_combiner/` → `arena_predictor/`) merges scores from the 4 custom benchmarks with 13+ external sources (LiveBench, Artificial Analysis, AiderBench, ARC, etc.) using a three-tier model name mapping system with LLM-assisted fuzzy matching. The mappings require significant human curation and pruning -- the LLM suggestions are a starting point, but incorrect matches (e.g. confusing model versions or sizes) must be manually reviewed and corrected in `benchmark_combiner/mappings/`.
 
-The combined benchmark matrix is sparse -- most models are missing scores from several benchmarks. `SpecializedColumnImputer` fills these gaps using per-column specialized models (Gaussian Processes, BayesianRidge, LogisticRegression) chosen by automatic column type classification.
+The combined benchmark matrix is sparse -- most models are missing scores from several benchmarks. `ModelBankImputer` (default) fills these gaps using per-cell predictor selection: for each missing value, it finds the best subset of predictors from columns actually observed in that row, fits a BayesianRidge model (cached by predictor subset), and tracks per-cell uncertainty via analytical hat-matrix LOO. A low-rank coherence projection then reconciles individually-imputed values into a consistent cross-column profile. Columns are auto-classified by type (linear, nonlinear, categorical, bounded, extrapolation-prone) with specialized models (BayesianRidge, Gaussian Processes, LogisticRegression, HurdleModel) and distribution-aware wrappers (BoundedLinkModel for logit-transformed bounded columns).
 
 Finally, `predict.py` trains on models that have Arena scores to predict scores for those that don't, using feature selection, polynomial interactions, and conformal prediction intervals.
 
