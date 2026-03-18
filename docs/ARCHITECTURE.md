@@ -301,20 +301,20 @@ For alternative targets (e.g., lmarena) that have missing values:
 | `--passes` | 14 | Imputation passes (SpecializedColumnImputer) |
 | `--alpha` | 0.9361 | Regularization parameter |
 | `--coherence_lambda` | 1.0 | ModelBankImputer: coherence projection shrinkage (0 = disable) |
-| `--coherence_shape` | `linear` | Coherence shrinkage shape: linear, exp, squared, etc. |
+| `--coherence_shape` | `exp` | Coherence shrinkage shape: linear, exp, squared, etc. |
 | `--confidence_threshold` | 0.4 | ModelBankImputer: σ/sd threshold for pass 2 expansion |
 | `--eb_parent` | off | Enable empirical-Bayes parent shrinkage |
 | `--poly_interactions` | off | Enable polynomial feature interactions |
-| `--poly_limit` | (configurable) | Max polynomial interaction terms |
-| `--top_tier_boost` | (configurable) | Duplicate top-tier training rows N times |
+| `--poly_limit` | 6 | Max polynomial interaction terms |
+| `--top_tier_boost` | 1 (no boost) | Duplicate top-tier training rows N times |
 | `--top_tier_threshold` | 1450 | ELO threshold for top-tier boost |
 | `--style_only_final` | off | Restrict lmarena interactions to style columns only |
 | `--margin` | 20.0 | Margin for top_by_margin_prob column |
 | `--gp_selector_k_max` | 28 | Feature cap for GP models (mRMR selection) |
 | `--selector_cv` | 5 | Feature selection CV folds |
-| `--outer_cv` | 5 | Outer evaluation CV folds |
+| `--outer_cv` | None (uses `selector_cv`) | Outer evaluation CV folds |
 | `--feature_selector` | `lgbm` | Feature selector: `none`, `lgbm`, `xgb` |
-| `--max_workers` | (configurable) | Parallel workers for imputation |
+| `--max_workers` | 0 (auto) | Parallel workers for imputation |
 | `--exclude_models` | (none) | Comma-separated model names to exclude |
 
 Run `python3 predict.py --help` for the full list of ~80 arguments.
