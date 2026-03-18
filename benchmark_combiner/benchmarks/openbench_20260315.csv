@@ -1,0 +1,238 @@
+Model,Organization,Release_Date,Model_codename,openbench_id,Source,Reasoning,Reasoning Output Tokens Used to Run Artificial Analysis Intelligence Index (million),Answer Output Tokens Used to Run Artificial Analysis Intelligence Index (million)
+GPT-4 (0314),OpenAI,3/14/23,,openai/gpt-4-0314,OpenAI,FALSE,0,
+Mistral 7B Instruct,Mistral,9/27/23,,mistralai/mistral-7b-instruct,Mistral,FALSE,0,
+GPT-4 Turbo,OpenAI,11/6/23,,,OpenAI,FALSE,0,1.2
+Mistral 7B Instruct v0.2,Mistral,1/1/24,,mistralai/mistral-7b-instruct-v0.2,Mistral,FALSE,0,
+Command R,Cohere,3/1/24,command-r-08-2024,cohere/command-r-08-2024,Other,FALSE,0,
+Claude 3 Opus,Anthropic,3/4/24,,,Anthropic,FALSE,0,1.3
+Command R Plus,Cohere,4/4/24,command-r-plus-08-2024,cohere/command-r-plus-08-2024,Other,FALSE,0,
+Llama 3 70B Instruct,Meta,4/18/24,,meta-llama/llama-3-70b-instruct,Meta,FALSE,0,
+Llama 3 8B Instruct,Meta,4/18/24,,meta-llama/llama-3-8b-instruct,Meta,FALSE,0,
+GPT-4o (2024-05-13),OpenAI,5/13/24,,openai/gpt-4o-2024-05-13,OpenAI,FALSE,0,
+Gemini 1.5 Flash,Google,5/14/24,,,Google,FALSE,0,
+Gemma 2 9B IT,Google,6/27/24,,google/gemma-2-9b-it,Google,FALSE,0,
+gemma-2-27b-it,Google,6/27/24,gemma-2-27b-it,,Google,FALSE,0,
+Step 2 16K,StepFun,7/4/24,,,Other,FALSE,0,
+GPT-4o Mini,OpenAI,7/18/24,gpt-4o-mini-2024-07-18,openai/gpt-4o-mini,OpenAI,FALSE,0,1.6
+Llama 3.1 405B Instruct Turbo,Meta,7/23/24,meta-llama-3.1-405b-instruct-turbo,meta-llama/llama-3.1-405b-instruct,Meta,FALSE,0,3.7
+Llama 3.1 70B Instruct Turbo,Meta,7/23/24,meta-llama-3.1-70b-instruct-turbo,meta-llama/llama-3.1-70b-instruct,Meta,FALSE,0,4.7
+Llama 3.1 8B Instruct Turbo,Meta,7/23/24,meta-llama-3.1-8b-instruct-turbo,meta-llama/llama-3.1-8b-instruct,Meta,FALSE,0,5.2
+Mistral Large (2407),Mistral,7/24/24,,mistralai/mistral-large-2407,Mistral,FALSE,0,
+GPT-4o (2024-08-06),OpenAI,8/6/24,gpt-4o-2024-08-06,openai/gpt-4o-2024-08-06,OpenAI,FALSE,0,2.9
+Grok 2,xAI,8/13/24,grok-2-1212,,xAI,FALSE,0,
+o1-Mini,OpenAI,9/12/24,,,OpenAI,TRUE,,
+o1-Preview,OpenAI,9/12/24,,,OpenAI,TRUE,,
+Mistral Small,Mistral AI,9/17/24,mistral-small-2503,mistralai/mistral-small-3.1-24b-instruct,Other,FALSE,0,
+Qwen2.5 72B Instruct Turbo,Alibaba,9/19/24,qwen2.5-72b-instruct-turbo,qwen/qwen-2.5-72b-instruct,Alibaba,FALSE,0,
+Qwen2.5 7B Instruct Turbo,Alibaba,9/19/24,qwen2.5-7b-instruct-turbo,qwen/qwen-2.5-7b-instruct,Alibaba,FALSE,0,
+Llama 3.2 1B Instruct,Meta,9/25/24,,meta-llama/llama-3.2-1b-instruct,Meta,FALSE,0,
+Llama 3.2 3B Instruct,Meta,9/25/24,,meta-llama/llama-3.2-3b-instruct,Meta,FALSE,0,
+Gemini 1.5 Flash 8B,Google,10/3/24,gemini-1.5-flash-8b-exp-0924,,Google,FALSE,0,1.8
+Llama 3.1 Nemotron 70B Instruct,Nvidia,10/15/24,,nvidia/llama-3.1-nemotron-70b-instruct,Other,FALSE,0,
+Claude 3.5 Sonnet,Anthropic,10/22/24,claude-3-5-sonnet-20241022,anthropic/claude-3.5-sonnet,Anthropic,FALSE,0,1
+Claude 3.5 Haiku,Anthropic,11/4/24,claude-3-5-haiku-20241022,,Anthropic,FALSE,0,2.3
+Mistral Large,Mistral AI,11/19/24,mistral-large-2411,mistralai/mistral-large-2411,Other,FALSE,0,
+Mistral Large (2411),Mistral,11/19/24,,mistralai/mistral-large-2411,Mistral,FALSE,0,
+GPT-4o (2024-11-20),OpenAI,11/20/24,gpt-4o-2024-11-20,openai/gpt-4o-2024-11-20,OpenAI,FALSE,0,2.7
+Nova Lite,Amazon,12/3/24,amazon.nova-lite-v1:0,amazon/nova-lite-v1,Other,FALSE,0,7
+Nova Micro,Amazon,12/3/24,amazon.nova-micro-v1:0,amazon/nova-micro-v1,Other,FALSE,0,7
+Nova Pro,Amazon,12/3/24,amazon.nova-pro-v1:0,amazon/nova-pro-v1,Other,FALSE,0,4.4
+o1 High,OpenAI,12/5/24,,,OpenAI,TRUE,,
+o1 Medium,OpenAI,12/5/24,,,OpenAI,TRUE,32,3.1
+Llama 3.3 70B Instruct Turbo,Meta,12/6/24,llama-3.3-70b-instruct-turbo,meta-llama/llama-3.3-70b-instruct,Meta,FALSE,0,3.8
+Gemini 2.0 Flash,Google,12/11/24,gemini-2.0-flash,google/gemini-2.0-flash-001,Google,FALSE,0,5
+Gemini 2.0 Flash Thinking Experimental,Google,12/19/24,gemini-2.0-flash-thinking-exp-01-21,,Google,TRUE,,
+LearnLM 1.5 Pro Experimental,Google,12/19/24,learnlm-1.5-pro-experimental,,Google,FALSE,0,
+DeepSeek V3 (2024-12-26),DeepSeek,12/26/24,,deepseek/deepseek-chat,DeepSeek,FALSE,0,
+Phi-4,Microsoft,1/9/25,phi-4,microsoft/phi-4,Other,FALSE,0,4.2
+DeepSeek R1,DeepSeek,1/20/25,deepseek-r1,deepseek/deepseek-r1,DeepSeek,TRUE,40,22
+DeepSeek R1 Distill Llama 70B,DeepSeek,1/20/25,deepseek-r1-distill-llama-70b,deepseek/deepseek-r1-distill-llama-70b,DeepSeek,TRUE,17,3
+DeepSeek R1 Distill Qwen 32B,DeepSeek,1/20/25,deepseek-r1-distill-qwen-32b,deepseek/deepseek-r1-distill-qwen-32b,DeepSeek,TRUE,12,1.6
+GPT-4o Feb 2025,OpenAI,1/29/25,chatgpt-4o-latest-2025-01-29,,OpenAI,FALSE,0,
+Qwen2.5 Max,Alibaba,1/29/25,qwen2.5-max,qwen/qwen-max,Alibaba,FALSE,0,
+Mistral Small (2025-01-30),Mistral AI,1/30/25,mistral-small-2501,,Other,FALSE,0,
+o3-Mini High,OpenAI,1/31/25,o3-mini-2025-01-31-high,openai/o3-mini-high,OpenAI,TRUE,58,3
+o3-Mini Low,OpenAI,1/31/25,o3-mini-2025-01-31-low,,OpenAI,TRUE,,
+o3-Mini Medium,OpenAI,1/31/25,o3-mini-2025-01-31-medium,openai/o3-mini,OpenAI,TRUE,11,1.4
+Gemini 2.0 Flash Lite,Google,2/5/25,gemini-2.0-flash-lite,google/gemini-2.0-flash-lite-001,Google,FALSE,0,2.2
+Gemini 2.0 Pro Experimental,Google,2/5/25,gemini-2.0-pro-exp-02-05,,Google,FALSE,0,2.5
+Grok 3 Beta,xAI,2/17/25,grok-3,x-ai/grok-3-beta,xAI,FALSE,0,
+Grok 3 Mini Beta,xAI,2/17/25,,x-ai/grok-3-mini-beta,xAI,FALSE,0,
+Grok 3 Mini Beta (High),xAI,2/17/25,grok-3-mini-reasoning-0217,x-ai/grok-3-mini-beta,xAI,TRUE,95,4.9
+Claude 3.7 Sonnet,Anthropic,2/24/25,claude-3-7-sonnet,anthropic/claude-3.7-sonnet,Anthropic,FALSE,0,5.6
+Claude 3.7 Sonnet Thinking,Anthropic,2/24/25,claude-3-7-sonnet-thinking,anthropic/claude-3.7-sonnet:thinking,Anthropic,TRUE,52,5.5
+Mercury,Inception AI,2/26/25,,inception/mercury,Other,FALSE,0,
+GPT-4.5 Preview,OpenAI,2/27/25,gpt-4.5-preview,,OpenAI,FALSE,0,
+Hunyuan Turbos,Tencent,2/27/25,,,Other,FALSE,0,
+QwQ 32B,Alibaba,3/5/25,qwq-32b,qwen/qwq-32b,Alibaba,TRUE,,
+Gemma 3 12B,Google,3/12/25,,google/gemma-3-12b-it,Google,FALSE,0,
+Gemma 3 27B,Google,3/12/25,gemma-3-27b-it,google/gemma-3-27b-it,Google,FALSE,0,
+Gemma 3 4B,Google,3/12/25,,google/gemma-3-4b-it,Google,FALSE,0,
+Command A,Cohere,3/13/25,,cohere/command-a,Other,FALSE,0,
+Llama 3.1 Nemotron Ultra 253B,Nvidia,3/18/25,,nvidia/llama-3.1-nemotron-ultra-253b-v1,Other,FALSE,0,
+DeepSeek V3 (2025-03-24),DeepSeek,3/24/25,deepseek-v3-0324,deepseek/deepseek-chat-v3-0324,DeepSeek,FALSE,0,4
+Gemini 2.5 Pro Preview (2025-03-25),Google,3/25/25,gemini-2.5-pro-exp-03-25,,Google,TRUE,29,3.8
+ChatGPT-4o,OpenAI,3/27/25,chatgpt-4o-latest-2025-03-27,,OpenAI,FALSE,0,
+Llama 4 Maverick 17B 128E Instruct,Meta,4/5/25,llama-4-maverick,meta-llama/llama-4-maverick,Meta,FALSE,0,8.2
+llama-4-scout,Meta,4/5/25,llama-4-scout,meta-llama/llama-4-scout,Meta,FALSE,0,7.3
+GPT-4.1,OpenAI,4/14/25,GPT-4.1,openai/gpt-4.1,OpenAI,FALSE,0,4.5
+GPT-4.1 Mini,OpenAI,4/14/25,GPT-4.1 mini,openai/gpt-4.1-mini,OpenAI,FALSE,0,4.6
+GPT-4.1 Nano,OpenAI,4/14/25,GPT-4.1 nano,openai/gpt-4.1-nano,OpenAI,FALSE,0,5.2
+o3 High,OpenAI,4/16/25,,openai/o3,OpenAI,TRUE,,
+o3 Low,OpenAI,4/16/25,,,OpenAI,TRUE,,
+o3 Medium,OpenAI,4/16/25,,openai/o3,OpenAI,TRUE,41,7.3
+o4-Mini High,OpenAI,4/16/25,,openai/o4-mini-high,OpenAI,TRUE,79,3
+o4-Mini Medium,OpenAI,4/16/25,,openai/o4-mini,OpenAI,TRUE,,
+Gemini 2.5 Flash Preview (2025-04-17),Google,4/17/25,,,Google,TRUE,43,5.2
+Qwen 3 14B Thinking,Alibaba,4/29/25,,,Alibaba,TRUE,,
+Qwen 3 235B A22B Nonthinking,Alibaba,4/29/25,,,Alibaba,FALSE,0,4.1
+Qwen 3 235B A22B Thinking,Alibaba,4/29/25,,qwen/qwen3-235b-a22b,Alibaba,TRUE,37,4
+Qwen 3 30B A3B Nonthinking,Alibaba,4/29/25,,,Alibaba,FALSE,0,3.1
+Qwen 3 30B A3B Thinking,Alibaba,4/29/25,,qwen/qwen3-30b-a3b,Alibaba,TRUE,30,2.8
+Qwen 3 32B Nonthinking,Alibaba,4/29/25,,,Alibaba,FALSE,0,1.8
+Qwen 3 32B Thinking,Alibaba,4/29/25,,qwen/qwen3-32b,Alibaba,TRUE,27,2.7
+Qwen 3 4B Nonthinking,Alibaba,4/29/25,,,Alibaba,FALSE,0,
+Qwen3 14B Nonthinking,Alibaba,4/29/25,,,Alibaba,FALSE,0,
+Qwen3 4B Thinking,Alibaba,4/29/25,,,Alibaba,TRUE,,
+Nova Premier,Amazon,4/30/25,Nova Premier,,Other,FALSE,0,4.2
+Phi-4 Reasoning Plus,Microsoft,4/30/25,Phi-4 Reasoning Plus,,Other,TRUE,,
+Gemini 2.5 Pro Preview (2025-05-06),Google,5/6/25,,,Google,TRUE,19,9.4
+Mistral Medium 3,Mistral AI,5/7/25,,mistralai/mistral-medium-3,Other,FALSE,0,4
+Gemini 2.5 Flash Preview (2025-05-20),Google,5/20/25,,google/gemini-2.5-flash,Google,TRUE,42,9.9
+Gemini 2.5 Flash Preview Nonthinking,Google,5/20/25,,google/gemini-2.5-flash,Google,FALSE,0,17
+Gemma 3n 2B,Google,5/20/25,,,Google,FALSE,0,
+Gemma 3n 4B,Google,5/20/25,,google/gemma-3n-e4b-it,Google,FALSE,0,
+Claude 4 Opus,Anthropic,5/22/25,,anthropic/claude-opus-4,Anthropic,FALSE,0,1.7
+Claude 4 Opus Thinking,Anthropic,5/22/25,,anthropic/claude-opus-4,Anthropic,TRUE,,
+Claude 4 Sonnet,Anthropic,5/22/25,,anthropic/claude-sonnet-4,Anthropic,FALSE,0,6
+Claude 4 Sonnet Thinking,Anthropic,5/22/25,,anthropic/claude-sonnet-4,Anthropic,TRUE,22,6
+DeepSeek R1 (2025-05-28),DeepSeek,5/28/25,,deepseek/deepseek-r1-0528,DeepSeek,TRUE,45,4.6
+Gemini 2.5 Pro Preview (2025-06-05),Google,6/5/25,,google/gemini-2.5-pro-preview,Google,TRUE,49,5.5
+Gemini 2.5 Pro Preview (2025-06-05) Limited,Google,6/5/25,,google/gemini-2.5-pro,Google,TRUE,,
+o3 Pro,OpenAI,6/10/25,,,OpenAI,TRUE,,
+MiniMax M1,MiniMax,6/16/25,,minimax/minimax-m1,Other,FALSE,0,5.4
+Gemini 2.5 Flash Lite Preview (2025-06-17),Google,6/17/25,,google/gemini-2.5-flash-lite,Google,TRUE,84,24
+Gemini 2.5 Flash Lite Preview (2025-06-17) Nonthinking,Google,6/17/25,,google/gemini-2.5-flash-lite,Google,FALSE,0,35
+Mistral Small 3.2,Mistral AI,6/20/25,,,Other,FALSE,0,4.5
+Grok 4,xAI,7/9/25,,x-ai/grok-4,xAI,TRUE,85,3.2
+Kimi K2,Moonshot AI,7/11/25,,moonshotai/kimi-k2,Other,FALSE,0,12
+Qwen 3 235B A22B Nonthinking (2025-07-21),Alibaba,7/21/25,,qwen/qwen3-235b-a22b-07-25,Alibaba,FALSE,0,15
+Qwen 3 235B A22B Thinking (2025-07-21),Alibaba,7/21/25,,qwen/qwen3-235b-a22b-thinking-2507,Alibaba,TRUE,61,2.6
+Qwen 3 30B A3B Thinking (2025-07-21),Alibaba,7/21/25,,,Alibaba,TRUE,50,3.1
+Qwen3 30B A3B Nonthinking (2025-07-21),Alibaba,7/21/25,,,Alibaba,FALSE,0,15
+Qwen3 4B Thinking (2025-07-21),Alibaba,7/21/25,,,Alibaba,TRUE,,
+Qwen 3 Coder 480B A35B Instruct,Alibaba,7/22/25,,qwen/qwen3-coder,Alibaba,FALSE,0,
+GLM 4.5 Air,Z.AI,7/28/25,,z-ai/glm-4.5-air,Other,TRUE,64,3.7
+GLM-4.5,Z.AI,7/28/25,,z-ai/glm-4.5,Other,TRUE,,
+Claude Opus 4.1,Anthropic,8/5/25,,anthropic/claude-opus-4.1,Anthropic,FALSE,0,
+Claude Opus 4.1 Thinking,Anthropic,8/5/25,,anthropic/claude-opus-4.1,Anthropic,TRUE,,
+GPT OSS 120B,OpenAI,8/5/25,,openai/gpt-oss-120b,OpenAI,TRUE,73,4.3
+GPT OSS 20B,OpenAI,8/5/25,,openai/gpt-oss-20b,OpenAI,TRUE,58,3
+GPT-5 (high),OpenAI,8/7/25,,openai/gpt-5,OpenAI,TRUE,72,4.2
+GPT-5 (low),OpenAI,8/7/25,,openai/gpt-5,OpenAI,TRUE,12,3.1
+GPT-5 (medium),OpenAI,8/7/25,,openai/gpt-5,OpenAI,TRUE,38,4.4
+GPT-5 (minimal),OpenAI,8/7/25,,openai/gpt-5,OpenAI,TRUE,,
+GPT-5 Chat,OpenAI,8/7/25,,openai/gpt-5-chat,OpenAI,FALSE,0,2.8
+GPT-5 Codex,OpenAI,8/7/25,,openai/gpt-5-codex,OpenAI,TRUE,68,3.7
+GPT-5 Mini,OpenAI,8/7/25,,openai/gpt-5-mini,OpenAI,TRUE,17,3.6
+GPT-5 Mini (High),OpenAI,8/7/25,,openai/gpt-5-mini,OpenAI,TRUE,65,3.8
+GPT-5 Mini (low),OpenAI,8/7/25,,openai/gpt-5-mini,OpenAI,TRUE,,
+GPT-5 Mini (minimal),OpenAI,8/7/25,,openai/gpt-5-mini,OpenAI,TRUE,0,2.9
+GPT-5 Nano,OpenAI,8/7/25,,openai/gpt-5-nano,OpenAI,TRUE,41,4.7
+GPT-5 Nano (high),OpenAI,8/7/25,,openai/gpt-5-nano,OpenAI,TRUE,100,5.2
+GPT-5 Nano (low),OpenAI,8/7/25,,openai/gpt-5-nano,OpenAI,TRUE,,
+GPT-5 Nano (minimal),OpenAI,8/7/25,,openai/gpt-5-nano,OpenAI,TRUE,0,9
+Mistral Medium 3.1 (2025-08-12),Mistral AI,8/12/25,,mistralai/mistral-medium-3.1,Other,FALSE,0,7.6
+DeepSeek V3.1 (Non-Reasoning),DeepSeek,8/21/25,vendor:deepseek,deepseek/deepseek-chat-v3.1,DeepSeek,FALSE,0,9.2
+DeepSeek V3.1 (Reasoning),DeepSeek,8/21/25,,deepseek/deepseek-chat-v3.1,DeepSeek,TRUE,33,27
+Grok 4 Code Fast 1,xAI,8/28/25,,x-ai/grok-code-fast-1,xAI,TRUE,,
+Grok 4 Fast,xAI,8/28/25,,x-ai/grok-4-fast,xAI,TRUE,40,2.8
+Grok 4 Fast (Non-Reasoning),xAI,8/28/25,,x-ai/grok-4-fast,xAI,FALSE,0,4.3
+LongCat Flash Chat,Meituan,9/1/25,,meituan/longcat-flash-chat,Other,FALSE,0,
+Qwen3 Max,Alibaba,9/5/25,,qwen/qwen3-max,Alibaba,FALSE,0,13
+Qwen3 Max Thinking,Alibaba,9/5/25,,,Alibaba,TRUE,79,6.4
+Qwen3-Max (Preview),Alibaba,9/5/25,,,Alibaba,FALSE,0,
+Kimi K2 0905,Moonshot AI,9/9/25,,moonshotai/kimi-k2-0905,Other,FALSE,0,7.9
+Qwen3 Next 80B A3B Instruct,Alibaba,9/10/25,,qwen/qwen3-next-80b-a3b-instruct,Alibaba,FALSE,0,15
+Qwen3 Next 80B A3B Thinking,Alibaba,9/10/25,,qwen/qwen3-next-80b-a3b-thinking,Alibaba,TRUE,48,3
+DeepSeek V3.1 Terminus,DeepSeek,9/22/25,,deepseek/deepseek-v3.1-terminus,DeepSeek,FALSE,0,
+DeepSeek V3.1 Terminus (Reasoning),DeepSeek,9/22/25,,deepseek/deepseek-v3.1-terminus,DeepSeek,TRUE,39,3.8
+Gemini 2.5 Flash Lite Preview 09-2025,Google,9/25/25,,google/gemini-2.5-flash-lite-preview-09-2025,Google,TRUE,35,9.9
+Gemini 2.5 Flash Lite Preview 09-2025 Nonthinking,Google,9/25/25,,google/gemini-2.5-flash-lite-preview-09-2025,Google,FALSE,0,28
+Gemini 2.5 Flash Preview 09-2025,Google,9/25/25,,,Google,TRUE,37,5.4
+Gemini 2.5 Flash Preview 09-2025 Nonthinking,Google,9/25/25,,,Google,FALSE,0,23
+Claude Sonnet 4.5,Anthropic,9/29/25,,anthropic/claude-4.5-sonnet,Anthropic,FALSE,0,7.9
+Claude Sonnet 4.5 Thinking,Anthropic,9/29/25,,anthropic/claude-4.5-sonnet,Anthropic,TRUE,28,7.4
+DeepSeek V3.2 Exp,DeepSeek,9/29/25,,deepseek/deepseek-v3.2-exp,DeepSeek,FALSE,0,10
+DeepSeek V3.2 Exp (Reasoning),DeepSeek,9/29/25,,deepseek/deepseek-v3.2-exp,DeepSeek,TRUE,36,3.8
+GLM-4.6,Z.AI,9/30/25,,z-ai/glm-4.6,Other,TRUE,53,4.9
+Claude Haiku 4.5,Anthropic,10/15/25,,anthropic/claude-haiku-4.5,Anthropic,FALSE,0,8.3
+Claude Haiku 4.5 Thinking,Anthropic,10/15/25,,anthropic/claude-haiku-4.5,Anthropic,TRUE,33,8
+MiniMax M2,MiniMax,10/26/25,,minimax/minimax-m2,Other,TRUE,65,4.6
+Kimi K2 Thinking,Moonshot AI,11/6/25,,moonshotai/kimi-k2-thinking,Other,TRUE,95,4.8
+GPT-5.1 (high),OpenAI,11/12/25,,openai/gpt-5.1,OpenAI,TRUE,64,5.2
+GPT-5.1 (medium),OpenAI,11/12/25,,openai/gpt-5.1,OpenAI,TRUE,,
+GPT-5.1 (Non-reasoning),OpenAI,11/12/25,,openai/gpt-5.1,OpenAI,FALSE,0,3.9
+GPT-5.1 Chat,OpenAI,11/12/25,,openai/gpt-5.1-chat,OpenAI,FALSE,0,
+Grok 4.1,xAI,11/17/25,,,xAI,TRUE,,
+Grok 4.1 (Non-Reasoning),xAI,11/17/25,,,xAI,FALSE,0,
+Grok 4.1 Fast,xAI,11/17/25,,x-ai/grok-4.1-fast,xAI,TRUE,50,2.8
+Grok 4.1 Fast (Non-Reasoning),xAI,11/17/25,,x-ai/grok-4.1-fast,xAI,FALSE,0,4.4
+Gemini 3.0 Pro Preview (2025-11-18),Google,11/18/25,,google/gemini-3-pro-preview,Google,TRUE,51,5
+Gemini 3.0 Pro Preview (2025-11-18) (Low),Google,11/18/25,,google/gemini-3-pro-preview,Google,TRUE,4.1,12
+GPT-5.1 Codex,OpenAI,11/19/25,,openai/gpt-5.1-codex,OpenAI,TRUE,54,3
+GPT-5.1 Codex Max,OpenAI,11/19/25,,openai/gpt-5.1-codex-max,OpenAI,TRUE,,
+GPT-5.1 Codex Max (medium),OpenAI,11/19/25,,,OpenAI,TRUE,,
+GPT-5.1 Codex Max (xhigh),OpenAI,11/19/25,,,OpenAI,TRUE,,
+GPT-5.1 Codex Mini,OpenAI,11/19/25,,openai/gpt-5.1-codex-mini,OpenAI,TRUE,72,2.5
+Olmo 3 32B (Reasoning),AllenAI,11/20/25,,allenai/olmo-3.1-32b-think,Other,TRUE,41,1.8
+Claude Opus 4.5,Anthropic,11/24/25,,anthropic/claude-4.5-opus,Anthropic,FALSE,0,7.9
+Claude Opus 4.5 Thinking,Anthropic,11/24/25,,anthropic/claude-4.5-opus,Anthropic,TRUE,27,7.6
+Claude Opus 4.5 Thinking (Low),Anthropic,11/24/25,,anthropic/claude-4.5-opus,Anthropic,TRUE,,
+Intellect-3,Prime Intellect,11/27/25,,prime-intellect/intellect-3,Other,FALSE,0,
+DeepSeek V3.2,DeepSeek,12/1/25,,deepseek/deepseek-v3.2,DeepSeek,TRUE,57,4.2
+DeepSeek V3.2 (Non-Reasoning),DeepSeek,12/1/25,,deepseek/deepseek-v3.2,DeepSeek,FALSE,0,15
+DeepSeek V3.2 Speciale,DeepSeek,12/1/25,,deepseek/deepseek-v3.2-speciale,DeepSeek,TRUE,85,0.8
+Mistral Large 3 (2025-12-1),Mistral AI,12/1/25,,mistralai/mistral-large-2512,Other,FALSE,0,5.2
+Nova 2 Lite,Amazon,12/2/25,,amazon/nova-2-lite-v1,Other,TRUE,58,4.2
+GPT-5.2 (high),OpenAI,12/11/25,,openai/gpt-5.2,OpenAI,TRUE,,
+GPT-5.2 (medium),OpenAI,12/11/25,,openai/gpt-5.2,OpenAI,TRUE,17,4.9
+GPT-5.2 (Non-reasoning),OpenAI,12/11/25,,openai/gpt-5.2,OpenAI,FALSE,0,3.8
+GPT-5.2 (xhigh),OpenAI,12/11/25,GPT-5.2 (xhigh),openai/gpt-5.2,OpenAI,TRUE,130,4.6
+GPT-5.2 Chat,OpenAI,12/11/25,,openai/gpt-5.2-chat,OpenAI,FALSE,0,
+Nemotron 3 Nano 30B A3B (Reasoning),Nvidia,12/15/25,,nvidia/nemotron-3-nano-30b-a3b:free,Other,TRUE,,
+MiMo-V2-Flash (Reasoning),Xiaomi,12/16/25,,xiaomi/mimo-v2-flash,Other,TRUE,94,4.1
+Olmo 3.1 32B (Reasoning),AllenAI,12/16/25,,allenai/olmo-3.1-32b-instruct,Other,TRUE,57,0.69
+OLMo 3.1 32B Instruct,AllenAI,12/16/25,,allenai/olmo-3.1-32b-instruct,Other,FALSE,0,18
+Gemini 3.0 Flash Preview (2025-12-17),Google,12/17/25,,google/gemini-3-flash-preview,Google,TRUE,68,4.2
+Gemini 3.0 Flash Preview (2025-12-17) (Low),Google,12/17/25,,google/gemini-3-flash-preview,Google,TRUE,,
+Gemini 3.0 Flash Preview (2025-12-17) (Minimal),Google,12/17/25,,google/gemini-3-flash-preview,Google,FALSE,0,4.1
+GPT-5.2 Codex (xhigh),OpenAI,12/18/25,,,OpenAI,TRUE,200,3.3
+GLM-4.7,Z.AI,12/22/25,,z-ai/glm-4.7,Other,TRUE,160,6.8
+MiniMax M2.1,MiniMax,12/23/25,,minimax/minimax-m2.1,Other,TRUE,51,7.4
+GLM-4.7 Flash,Z.AI,1/19/26,,z-ai/glm-4.7-flash,Other,TRUE,56,7.9
+Kimi K2.5,Moonshot AI,1/27/26,,moonshotai/kimi-k2.5,Other,TRUE,82,6.8
+Kimi K2.5 (Non-Reasoning),Moonshot AI,1/27/26,,moonshotai/kimi-k2.5,Other,FALSE,0,13
+Step 3.5 Flash,StepFun,2/2/26,,stepfun/step-3.5-flash,Other,TRUE,,
+Claude Opus 4.6,Anthropic,2/5/26,,anthropic/claude-opus-4.6,Anthropic,FALSE,0,11
+Claude Opus 4.6 Thinking,Anthropic,2/5/26,,anthropic/claude-opus-4.6,Anthropic,TRUE,54,8.2
+GPT-5.3 Codex,OpenAI,2/5/26,,openai/gpt-5.3-codex,OpenAI,TRUE,73,4.2
+GLM-5,Z.AI,2/11/26,,z-ai/glm-5,Other,TRUE,100,7.3
+MiniMax M2.5,MiniMax,2/12/26,,minimax/minimax-m2.5,Other,TRUE,51,5.3
+Qwen3.5 Plus 2026-02-15 Nonthinking,Alibaba,2/15/26,,qwen/qwen3.5-plus-02-15,Alibaba,FALSE,0,
+Qwen3.5 Plus 2026-02-15 Thinking,Alibaba,2/15/26,,qwen/qwen3.5-plus-02-15,Alibaba,TRUE,,
+Qwen3.5 397B A17B Nonthinking,Alibaba,2/16/26,,qwen/qwen3.5-397b-a17b,Alibaba,FALSE,0,20
+Qwen3.5 397B A17B Thinking,Alibaba,2/16/26,,qwen/qwen3.5-397b-a17b,Alibaba,TRUE,80,6.3
+Claude Sonnet 4.6 Non-Thinking,Anthropic,2/17/26,,anthropic/claude-sonnet-4.6,Anthropic,FALSE,0,14
+Claude Sonnet 4.6 Thinking,Anthropic,2/17/26,,anthropic/claude-sonnet-4.6,Anthropic,TRUE,69,11
+Gemini 3.1 Pro Preview (2026-02-19),Google,2/19/26,,google/gemini-3.1-pro-preview,Google,TRUE,53,4.3
+Qwen3.5 35B A3B Thinking,Alibaba,2/24/26,,qwen/qwen3.5-35b-a3b,Alibaba,TRUE,90,11
+Qwen3.5 122B A10B Thinking,Alibaba,2/24/26,,qwen/qwen3.5-122b-a10b,Alibaba,TRUE,82,9.1
+Qwen3.5 27B Thinking,Alibaba,2/24/26,,qwen/qwen3.5-27b,Alibaba,TRUE,88,10
+Gemini 3.1 Flash Lite Preview (2026-03-03),Google,3/3/26,,google/gemini-3.1-flash-lite-preview,Google,TRUE,50,2.6
+GPT-5.4 Thinking,OpenAI,3/5/26,,openai/gpt-5.4,OpenAI,TRUE,110,6.1
+Nemotron 3 Super,Nvidia,3/11/26,,nvidia/nemotron-3-super-120b-a12b:free,Other,TRUE,100,5.7
+Grok 4.2 beta,xAI,3/12/26,,x-ai/grok-4.20-beta,xAI,TRUE,,
+AzeroGPT,SoundAI,,,,Other,FALSE,0,
+Dracarys2 72B Instruct,AbacusAI,,,,,FALSE,0,
+Dracarys2 Llama 3.1 70B Instruct,AbacusAI,,dracarys2-llama-3.1-70b-instruct,,Other,FALSE,0,

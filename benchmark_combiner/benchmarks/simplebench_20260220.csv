@@ -1,0 +1,63 @@
+Rank,Model,Score (AVG@5),Organization
+-,Human Baseline*,83.70%,
+,Gemini 3.1 Pro Preview,79.60%,
+1st,Gemini 3 Pro Preview,76.40%,Google
+,Claude Opus 4.6 Thinking,67.60%,Anthropic
+2nd,Gemini 2.5 Pro (06-05),62.40%,Google
+3rd,Claude Opus 4.5,62.00%,Anthropic
+4th,GPT-5 Pro,61.60%,OpenAI
+5thNEW,Gemini 3 Flash Preview,61.10%,Google
+6th,Grok 4,60.50%,xAI
+7th,Claude 4.1 Opus,60.00%,Anthropic
+8th,Claude 4 Opus,58.80%,Anthropic
+9thNEW,GPT-5.2 Pro (xhigh),57.40%,OpenAI
+10th,GPT-5 (high),56.70%,OpenAI
+11th,Grok 4.1 Fast,56.00%,xAI
+12th,Claude 4.5 Sonnet,54.30%,Anthropic
+13th,GPT-5.1 (high),53.20%,OpenAI
+14th,o3 (high),53.10%,OpenAI
+15thNEW,DeepSeek 3.2 Speciale,52.60%,DeepSeek
+16th,Gemini 2.5 Pro (03-25),51.60%,Google
+17thNEW,GLM 4.7,47.70%,Z.ai
+18th,Claude 3.7 Sonnet (thinking),46.40%,Anthropic
+19thNEW,GPT-5.2 (high),45.80%,OpenAI
+20th,Claude 4 Sonnet (thinking),45.50%,Anthropic
+21st,Claude 3.7 Sonnet,44.90%,Anthropic
+22nd,o1-preview,41.70%,OpenAI
+23rd,Claude 3.5 Sonnet 10-22,41.40%,Anthropic
+24th,Gemini 2.5 Flash (latest),41.20%,Google
+25th,DeepSeek R1 05/28,40.80%,DeepSeek
+26th,o1-2024-12-17 (high),40.10%,OpenAI
+27th,DeepSeek V3.1,40.00%,DeepSeek
+28th,Kimi K2 Thinking,39.60%,Moonshot AI
+29th,o4-mini (high),38.70%,OpenAI
+30th,o1-2024-12-17 (med),36.70%,OpenAI
+31st,Grok 3,36.10%,xAI
+32ndNEW,MiniMax M2.1,34.70%,MiniMax
+33rd,GPT-4.5,34.50%,OpenAI
+34th,Gemini-exp-1206,31.10%,Google
+35th,Qwen3 235B-A22B,31.00%,Alibaba
+36th,DeepSeek R1,30.90%,DeepSeek
+37th,Gemini 2.0 Flash Thinking,30.70%,Google
+38th,Llama 4 Maverick,27.70%,Meta
+39th,Claude 3.5 Sonnet 06-20,27.50%,Anthropic
+40th,DeepSeek V3 03-24,27.20%,DeepSeek
+41st,Gemini 1.5 Pro 002,27.10%,Google
+42nd,GPT-4.1,27.00%,OpenAI
+43rd,Kimi K2,26.30%,Kimi AI
+44th,GPT-4 Turbo,25.10%,OpenAI
+45th,MiniMax M2,25.00%,MiniMax
+46th,Claude 3 Opus,23.50%,Anthropic
+47th,Llama 3.1 405b instruct,23.00%,Meta
+48th,o3-mini (high),22.80%,OpenAI
+49th,Grok 2,22.70%,xAI
+50th,Mistral Large v2,22.50%,Mistral
+51st,GPT-OSS 120B,22.10%,OpenAI
+52nd,Mistral Large 3,20.40%,Mistral
+53rd,Llama 3.3 70b instruct,19.90%,Meta
+54th,DeepSeek V3,18.90%,DeepSeek
+55th,Gemini 2.0 Flash Exp,18.90%,Google
+56th,o1-mini,18.10%,OpenAI
+57th,GPT-4o 08-06,17.80%,OpenAI
+58th,Command R+,17.40%,Cohere
+59th,GPT-4o mini,10.70%,OpenAI

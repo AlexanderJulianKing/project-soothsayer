@@ -1,0 +1,236 @@
+Model,Organization,Release_Date,Date_Source
+AzeroGPT,SoundAI,,unknown
+ChatGPT-4o,OpenAI,2025-03-27,codename chatgpt-4o-latest-2025-03-27
+Claude 3 Opus,Anthropic,2024-03-04,anthropic blog
+Claude 3.5 Haiku,Anthropic,2024-11-04,anthropic blog (API availability)
+Claude 3.5 Sonnet,Anthropic,2024-10-22,anthropic blog (october upgrade)
+Claude 3.7 Sonnet,Anthropic,2025-02-24,anthropic blog
+Claude 3.7 Sonnet Thinking,Anthropic,2025-02-24,anthropic blog
+Claude 4 Opus,Anthropic,2025-05-22,anthropic blog
+Claude 4 Opus Thinking,Anthropic,2025-05-22,anthropic blog
+Claude 4 Sonnet,Anthropic,2025-05-22,anthropic blog
+Claude 4 Sonnet Thinking,Anthropic,2025-05-22,anthropic blog
+Claude Haiku 4.5,Anthropic,2025-10-15,anthropic blog
+Claude Haiku 4.5 Thinking,Anthropic,2025-10-15,anthropic blog
+Claude Opus 4.1,Anthropic,2025-08-05,anthropic blog
+Claude Opus 4.1 Thinking,Anthropic,2025-08-05,anthropic blog
+Claude Opus 4.5,Anthropic,2025-11-24,anthropic blog
+Claude Opus 4.5 Thinking,Anthropic,2025-11-24,anthropic blog
+Claude Opus 4.5 Thinking (Low),Anthropic,2025-11-24,anthropic blog
+Claude Opus 4.6,Anthropic,2026-02-05,anthropic blog
+Claude Opus 4.6 Thinking,Anthropic,2026-02-05,anthropic blog
+Claude Sonnet 4.5,Anthropic,2025-09-29,anthropic blog
+Claude Sonnet 4.5 Thinking,Anthropic,2025-09-29,anthropic blog
+Claude Sonnet 4.6 Non-Thinking,Anthropic,2026-02-17,anthropic blog
+Claude Sonnet 4.6 Thinking,Anthropic,2026-02-17,anthropic blog
+Command A,Cohere,2025-03-13,cohere release notes
+Command R,Cohere,2024-03-01,cohere blog
+Command R Plus,Cohere,2024-04-04,cohere blog
+DeepSeek R1,DeepSeek,2025-01-20,deepseek release notes
+DeepSeek R1 (2025-05-28),DeepSeek,2025-05-28,model name date
+DeepSeek R1 Distill Llama 70B,DeepSeek,2025-01-20,deepseek release notes
+DeepSeek R1 Distill Qwen 32B,DeepSeek,2025-01-20,deepseek release notes
+DeepSeek V3 (2024-12-26),DeepSeek,2024-12-26,model name date
+DeepSeek V3 (2025-03-24),DeepSeek,2025-03-24,model name date
+DeepSeek V3.1 (Non-Reasoning),DeepSeek,2025-08-21,deepseek release notes
+DeepSeek V3.1 (Reasoning),DeepSeek,2025-08-21,deepseek release notes
+DeepSeek V3.1 Terminus,DeepSeek,2025-09-22,deepseek release notes
+DeepSeek V3.1 Terminus (Reasoning),DeepSeek,2025-09-22,deepseek release notes
+DeepSeek V3.2,DeepSeek,2025-12-01,deepseek release notes
+DeepSeek V3.2 (Non-Reasoning),DeepSeek,2025-12-01,deepseek release notes
+DeepSeek V3.2 Exp,DeepSeek,2025-09-29,deepseek release notes
+DeepSeek V3.2 Exp (Reasoning),DeepSeek,2025-09-29,deepseek release notes
+DeepSeek V3.2 Speciale,DeepSeek,2025-12-01,deepseek release notes
+Dracarys2 72B Instruct,AbacusAI,,unknown
+Dracarys2 Llama 3.1 70B Instruct,AbacusAI,,unknown
+Gemini 1.5 Flash,Google,2024-05-14,google I/O 2024
+Gemini 1.5 Flash 8B,Google,2024-10-03,google developers blog
+Gemini 2.0 Flash,Google,2024-12-11,google blog (experimental preview)
+Gemini 2.0 Flash Lite,Google,2025-02-05,google blog
+Gemini 2.0 Flash Thinking Experimental,Google,2024-12-19,google blog
+Gemini 2.0 Pro Experimental,Google,2025-02-05,google blog
+Gemini 2.5 Flash Lite Preview (2025-06-17),Google,2025-06-17,model name date
+Gemini 2.5 Flash Lite Preview (2025-06-17) Nonthinking,Google,2025-06-17,model name date
+Gemini 2.5 Flash Lite Preview 09-2025,Google,2025-09-25,google developers blog
+Gemini 2.5 Flash Lite Preview 09-2025 Nonthinking,Google,2025-09-25,google developers blog
+Gemini 2.5 Flash Preview (2025-04-17),Google,2025-04-17,model name date
+Gemini 2.5 Flash Preview (2025-05-20),Google,2025-05-20,model name date / google I/O 2025
+Gemini 2.5 Flash Preview 09-2025,Google,2025-09-25,google developers blog
+Gemini 2.5 Flash Preview 09-2025 Nonthinking,Google,2025-09-25,google developers blog
+Gemini 2.5 Flash Preview Nonthinking,Google,2025-05-20,same release as thinking variant
+Gemini 2.5 Pro Preview (2025-03-25),Google,2025-03-25,model name date
+Gemini 2.5 Pro Preview (2025-05-06),Google,2025-05-06,model name date
+Gemini 2.5 Pro Preview (2025-06-05),Google,2025-06-05,model name date
+Gemini 2.5 Pro Preview (2025-06-05) Limited,Google,2025-06-05,model name date
+"Gemini 3.0 Flash Preview (2025-12-17) ",Google,2025-12-17,model name date
+Gemini 3.0 Flash Preview (2025-12-17) (Low),Google,2025-12-17,model name date
+Gemini 3.0 Flash Preview (2025-12-17) (Minimal),Google,2025-12-17,model name date
+"Gemini 3.0 Pro Preview (2025-11-18) ",Google,2025-11-18,model name date
+Gemini 3.0 Pro Preview (2025-11-18) (Low),Google,2025-11-18,model name date
+Gemini 3.1 Flash Lite Preview (2026-03-03),Google,2026-03-03,model name date
+Gemini 3.1 Pro Preview (2026-02-19),Google,2026-02-19,model name date
+Gemma 2 9B IT,Google,2024-06-27,google blog
+Gemma 3 12B,Google,2025-03-12,google developers blog
+Gemma 3 27B,Google,2025-03-12,google developers blog
+Gemma 3 4B,Google,2025-03-12,google developers blog
+Gemma 3n 2B,Google,2025-05-20,google I/O 2025
+Gemma 3n 4B,Google,2025-05-20,google I/O 2025
+gemma-2-27b-it,Google,2024-06-27,google blog
+GLM 4.5 Air,Z.AI,2025-07-28,zhipu announcement
+GLM-4.5,Z.AI,2025-07-28,zhipu announcement
+GLM-4.6,Z.AI,2025-09-30,marktechpost
+GLM-4.7,Z.AI,2025-12-22,prnewswire
+GLM-4.7 Flash,Z.AI,2026-01-19,marktechpost
+GLM-5,Z.AI,2026-02-11,huggingface
+GPT OSS 120B,OpenAI,2025-08-05,openai blog
+GPT OSS 20B,OpenAI,2025-08-05,openai blog
+GPT-4 (0314),OpenAI,2023-03-14,openai blog
+GPT-4 Turbo,OpenAI,2023-11-06,openai devday
+GPT-4.1,OpenAI,2025-04-14,openai blog
+GPT-4.1 Mini,OpenAI,2025-04-14,openai blog
+GPT-4.1 Nano,OpenAI,2025-04-14,openai blog
+GPT-4.5 Preview,OpenAI,2025-02-27,openai blog
+GPT-4o (2024-05-13),OpenAI,2024-05-13,model name date
+GPT-4o (2024-08-06),OpenAI,2024-08-06,model name date
+GPT-4o (2024-11-20),OpenAI,2024-11-20,model name date
+GPT-4o Feb 2025,OpenAI,2025-01-29,codename chatgpt-4o-latest-2025-01-29
+GPT-4o Mini,OpenAI,2024-07-18,openai blog
+GPT-5 (high),OpenAI,2025-08-07,openai blog
+GPT-5 (low),OpenAI,2025-08-07,openai blog
+GPT-5 (medium),OpenAI,2025-08-07,openai blog
+GPT-5 (minimal),OpenAI,2025-08-07,openai blog
+GPT-5 Chat,OpenAI,2025-08-07,openai blog
+GPT-5 Codex,OpenAI,2025-08-07,openai blog
+GPT-5 Mini,OpenAI,2025-08-07,openai blog
+GPT-5 Mini (High),OpenAI,2025-08-07,openai blog
+GPT-5 Mini (low),OpenAI,2025-08-07,openai blog
+GPT-5 Mini (minimal),OpenAI,2025-08-07,openai blog
+GPT-5 Nano,OpenAI,2025-08-07,openai blog
+GPT-5 Nano (high),OpenAI,2025-08-07,openai blog
+GPT-5 Nano (low),OpenAI,2025-08-07,openai blog
+GPT-5 Nano (minimal),OpenAI,2025-08-07,openai blog
+GPT-5.1 (high),OpenAI,2025-11-12,openai blog
+GPT-5.1 (medium),OpenAI,2025-11-12,openai blog
+GPT-5.1 (Non-reasoning),OpenAI,2025-11-12,openai blog
+GPT-5.1 Chat,OpenAI,2025-11-12,openai blog
+GPT-5.1 Codex,OpenAI,2025-11-19,openai blog
+GPT-5.1 Codex Max,OpenAI,2025-11-19,openai blog
+GPT-5.1 Codex Max (medium),OpenAI,2025-11-19,openai blog
+GPT-5.1 Codex Max (xhigh),OpenAI,2025-11-19,openai blog
+GPT-5.1 Codex Mini,OpenAI,2025-11-19,openai blog
+GPT-5.2 (high),OpenAI,2025-12-11,openai blog
+GPT-5.2 (medium),OpenAI,2025-12-11,openai blog
+GPT-5.2 (Non-reasoning),OpenAI,2025-12-11,openai blog
+GPT-5.2 (xhigh),OpenAI,2025-12-11,openai blog
+GPT-5.2 Chat,OpenAI,2025-12-11,openai blog
+GPT-5.2 Codex (xhigh),OpenAI,2025-12-18,openai blog
+GPT-5.3 Codex,OpenAI,2026-02-05,openai blog
+GPT-5.4 Thinking,OpenAI,2026-03-05,openai blog
+Grok 2,xAI,2024-08-13,xai announcement
+Grok 3 Beta,xAI,2025-02-17,xai announcement
+Grok 3 Mini Beta,xAI,2025-02-17,xai announcement
+Grok 3 Mini Beta (High),xAI,2025-02-17,xai announcement
+Grok 4,xAI,2025-07-09,xai announcement
+Grok 4 Code Fast 1,xAI,2025-08-28,xai release notes
+Grok 4 Fast,xAI,2025-08-28,xai release notes
+Grok 4 Fast (Non-Reasoning),xAI,2025-08-28,xai release notes
+Grok 4.1,xAI,2025-11-17,xai release notes
+Grok 4.1 (Non-Reasoning),xAI,2025-11-17,xai release notes
+Grok 4.1 Fast,xAI,2025-11-17,xai release notes
+Grok 4.1 Fast (Non-Reasoning),xAI,2025-11-17,xai release notes
+Hunyuan Turbos,Tencent,2025-02-27,bloomberg
+Intellect-3,Prime Intellect,2025-11-27,primeintellect blog
+Kimi K2,Moonshot AI,2025-07-11,kimi announcement
+Kimi K2 0905,Moonshot AI,2025-09-09,model name date
+Kimi K2 Thinking,Moonshot AI,2025-11-06,kimi announcement
+Kimi K2.5,Moonshot AI,2026-01-27,kimi announcement
+Kimi K2.5 (Non-Reasoning),Moonshot AI,2026-01-27,kimi announcement
+LearnLM 1.5 Pro Experimental,Google,2024-12-19,google AI studio changelog
+Llama 3 70B Instruct,Meta,2024-04-18,meta blog
+Llama 3 8B Instruct,Meta,2024-04-18,meta blog
+Llama 3.1 405B Instruct Turbo,Meta,2024-07-23,meta blog
+Llama 3.1 70B Instruct Turbo,Meta,2024-07-23,meta blog
+Llama 3.1 8B Instruct Turbo,Meta,2024-07-23,meta blog
+Llama 3.1 Nemotron 70B Instruct,Nvidia,2024-10-15,nvidia blog
+Llama 3.1 Nemotron Ultra 253B,Nvidia,2025-03-18,nvidia GTC 2025
+Llama 3.2 1B Instruct,Meta,2024-09-25,meta blog
+Llama 3.2 3B Instruct,Meta,2024-09-25,meta blog
+Llama 3.3 70B Instruct Turbo,Meta,2024-12-06,huggingface
+Llama 4 Maverick 17B 128E Instruct,Meta,2025-04-05,meta blog
+llama-4-scout,Meta,2025-04-05,meta blog
+LongCat Flash Chat,Meituan,2025-09-01,huggingface
+Mercury,Inception AI,2025-02-26,inception blog
+MiMo-V2-Flash (Reasoning),Xiaomi,2025-12-16,huggingface
+MiniMax M1,MiniMax,2025-06-16,minimax news
+MiniMax M2,MiniMax,2025-10-26,minimax news
+MiniMax M2.1,MiniMax,2025-12-23,minimax news
+MiniMax M2.5,MiniMax,2026-02-12,minimax news
+Mistral 7B Instruct,Mistral,2023-09-27,mistral blog
+Mistral 7B Instruct v0.2,Mistral,2024-01-01,huggingface
+Mistral Large,Mistral AI,2024-11-19,codename mistral-large-2411
+Mistral Large (2407),Mistral,2024-07-24,mistral blog
+Mistral Large (2411),Mistral,2024-11-19,mistral blog
+Mistral Large 3 (2025-12-1),Mistral AI,2025-12-01,model name date
+Mistral Medium 3,Mistral AI,2025-05-07,mistral blog
+Mistral Medium 3.1 (2025-08-12),Mistral AI,2025-08-12,model name date
+Mistral Small,Mistral AI,2024-09-17,mistral blog
+Mistral Small (2025-01-30),Mistral AI,2025-01-30,model name date
+Mistral Small 3.2,Mistral AI,2025-06-20,mistral docs
+Nemotron 3 Nano 30B A3B (Reasoning),Nvidia,2025-12-15,nvidia newsroom
+Nova 2 Lite,Amazon,2025-12-02,aws announcement
+Nova Lite,Amazon,2024-12-03,amazon press release
+Nova Micro,Amazon,2024-12-03,amazon press release
+Nova Premier,Amazon,2025-04-30,techcrunch
+Nova Pro,Amazon,2024-12-03,amazon press release
+o1 High,OpenAI,2024-12-05,openai blog
+o1 Medium,OpenAI,2024-12-05,openai blog
+o1-Mini,OpenAI,2024-09-12,openai blog
+o1-Preview,OpenAI,2024-09-12,openai blog
+o3 High,OpenAI,2025-04-16,openai blog
+o3 Low,OpenAI,2025-04-16,openai blog
+o3 Medium,OpenAI,2025-04-16,openai blog
+o3 Pro,OpenAI,2025-06-10,openai blog
+o3-Mini High,OpenAI,2025-01-31,openai blog
+o3-Mini Low,OpenAI,2025-01-31,openai blog
+o3-Mini Medium,OpenAI,2025-01-31,openai blog
+o4-Mini High,OpenAI,2025-04-16,openai blog
+o4-Mini Medium,OpenAI,2025-04-16,openai blog
+Olmo 3 32B (Reasoning),AllenAI,2025-11-20,allenai blog
+Olmo 3.1 32B (Reasoning),AllenAI,2025-12-16,huggingface
+OLMo 3.1 32B Instruct,AllenAI,2025-12-16,huggingface
+Phi-4,Microsoft,2025-01-09,huggingface (open-source release)
+Phi-4 Reasoning Plus,Microsoft,2025-04-30,microsoft blog
+Qwen 3 14B Thinking,Alibaba,2025-04-29,qwen blog
+Qwen 3 235B A22B Nonthinking,Alibaba,2025-04-29,qwen blog
+Qwen 3 235B A22B Nonthinking (2025-07-21),Alibaba,2025-07-21,model name date
+Qwen 3 235B A22B Thinking,Alibaba,2025-04-29,qwen blog
+Qwen 3 235B A22B Thinking (2025-07-21),Alibaba,2025-07-21,model name date
+Qwen 3 30B A3B Nonthinking,Alibaba,2025-04-29,qwen blog
+Qwen 3 30B A3B Thinking,Alibaba,2025-04-29,qwen blog
+Qwen 3 30B A3B Thinking (2025-07-21),Alibaba,2025-07-21,model name date
+Qwen 3 32B Nonthinking,Alibaba,2025-04-29,qwen blog
+Qwen 3 32B Thinking,Alibaba,2025-04-29,qwen blog
+Qwen 3 4B Nonthinking,Alibaba,2025-04-29,qwen blog
+Qwen 3 Coder 480B A35B Instruct,Alibaba,2025-07-22,qwen blog
+Qwen2.5 72B Instruct Turbo,Alibaba,2024-09-19,qwen blog
+Qwen2.5 7B Instruct Turbo,Alibaba,2024-09-19,qwen blog
+Qwen2.5 Max,Alibaba,2025-01-29,qwen blog
+Qwen3 14B Nonthinking,Alibaba,2025-04-29,qwen blog
+Qwen3 30B A3B Nonthinking (2025-07-21),Alibaba,2025-07-21,model name date
+Qwen3 4B Thinking,Alibaba,2025-04-29,qwen blog
+Qwen3 4B Thinking (2025-07-21),Alibaba,2025-07-21,model name date
+Qwen3 Max,Alibaba,2025-09-05,qwen announcement
+Qwen3 Max Thinking,Alibaba,2025-09-05,qwen announcement
+Qwen3 Next 80B A3B Instruct,Alibaba,2025-09-10,qwen announcement
+Qwen3 Next 80B A3B Thinking,Alibaba,2025-09-10,qwen announcement
+Qwen3-Max (Preview),Alibaba,2025-09-05,qwen announcement
+Qwen3.5 35B A3B Thinking,Alibaba,2026-02-24,qwen blog
+Qwen3.5 122B A10B Thinking,Alibaba,2026-02-24,qwen blog
+Qwen3.5 27B Thinking,Alibaba,2026-02-24,qwen blog
+Qwen3.5 397B A17B Nonthinking,Alibaba,2026-02-16,qwen blog
+Qwen3.5 397B A17B Thinking,Alibaba,2026-02-16,qwen blog
+Qwen3.5 Plus 2026-02-15 Nonthinking,Alibaba,2026-02-15,model name date
+Qwen3.5 Plus 2026-02-15 Thinking,Alibaba,2026-02-15,model name date
+QwQ 32B,Alibaba,2025-03-05,alibaba blog
+Step 2 16K,StepFun,2024-07-04,stepfun announcement
+Step 3.5 Flash,StepFun,2026-02-02,stepfun blog

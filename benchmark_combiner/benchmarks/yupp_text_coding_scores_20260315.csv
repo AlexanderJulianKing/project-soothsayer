@@ -1,0 +1,308 @@
+model,text_score,coding_score
+ClaudeOpus 4.6 (Thinking),1468,1592
+GPT-5.4,1439,1587
+ClaudeOpus 4.6,1433,1607
+GPT-5.4(High),1424,1475
+ClaudeSonnet 4.6,1380,1589
+ClaudeSonnet 4.6 (Thinking),1356,1471
+Gemini3.1 Pro,1337,1450
+ClaudeOpus 4.5 (Thinking),1303,1449
+GPT-5.1,1295,1329
+GPT-5.1(High),1292,1301
+GPT-5.2Instant,1280,1367
+Gemini3 Pro,1278,1344
+ClaudeSonnet 4.5 (Thinking),1277,1367
+GPT-5.3Instant,1271,1285
+NovaExperimental Chat 11-10,1254,1236
+Gemini3 Flash Preview Thinking,1249,1300
+GPT-5.2,1243,1356
+Gemini3 Pro (Low),1242,1299
+ClaudeOpus 4.5,1233,1422
+Gemini3 Flash Preview,1227,1224
+GPT-5.2(High),1226,1314
+GLM5,1225,1295
+GPT-5Chat,1223,1232
+NovaExperimental Chat 12-10,1219,1201
+GPT-5(High),1216,1260
+Grok4.1 Fast Non-Reasoning,1216,1244
+Qwen3VL 235B A22B Instruct,1209,1229
+Gemini2.5 Pro High,1206,1209
+ClaudeHaiku 4.5 (Extended Thinking),1202,1345
+Qwen330B A3B Instruct 2507,1201,1199
+Qwen3Next 80B A3B Instruct,1200,1236
+ClaudeSonnet 4.5,1194,1295
+KimiK2.5,1190,1287
+KimiK2.5 Instant,1190,1228
+DeepSeekV3.2,1188,1201
+Qwen3Omni 30B A3B Thinking,1188,1115
+Qwen3235B A22B Instruct 2507,1186,1176
+GPT-5.2(Extra High),1183,1231
+Qwen3Max Instruct Preview,1182,1202
+Gemini3.1 Flash Lite Preview Thinking,1179,1058
+Qwen3.5122B A17B,1177,1157
+KimiK2 Thinking Turbo,1175,1199
+Gemini2.5 Pro,1175,1180
+Grok4.1 Fast Reasoning,1175,1185
+DeepSeekV3.1 Terminus Chat,1173,1157
+Grok4 Fast Reasoning,1172,1179
+gpt-oss-120b,1172,1170
+ClaudeSonnet 4 (Thinking),1170,1257
+Grok4 Fast Non-Reasoning,1169,1197
+ClaudeHaiku 4.5,1169,1290
+GPT-5,1165,1187
+Step3.5 Flash,1164,1095
+DeepSeekV3.2 Thinking,1161,1175
+DeepSeekV3.1 Turbo,1160,1142
+MiniMaxM2.1,1160,1208
+Gemini2.5 Flash Preview 0925,1158,1143
+MistralLarge 3,1157,1168
+MiniMaxM2.1 Lightning,1156,1212
+GPT-5.1Instant,1153,1185
+MiniMaxM2,1153,1194
+GLM4.6,1142,1188
+DeepSeekV3.2 Exp Chat,1142,1116
+Grok4,1142,1129
+Qwen3Omni 30B A3B Instruct,1141,1079
+DeepSeekV3.1 Nex N1,1141,1040
+Gemini3.1 Flash Lite Preview,1140,
+Gemini2.5 Flash Lite Preview 0925,1139,1134
+DeepSeekV3.1,1138,1094
+Seed1.8 251228,1137,1089
+QwenPlus (Aug'24),1137,1149
+GLM4.7,1137,1173
+GPT-5Mini,1136,1138
+Gemini2.5 Flash Thinking,1136,1130
+MiniMaxM2.5 FP8,1135,
+Qwen3Max Thinking Preview,1132,1142
+Qwen3.5397B A17B,1131,1128
+OpenAIo3-pro,1129,1098
+GPT-4o,1128,1115
+MiniMaxM2.5,1123,
+GPT-5Mini Minimal,1121,1123
+AmazonNova 2 Lite,1121,1043
+Nemotron3 Nano (Thinking),1121,1028
+MiniMaxM2.5 Lightning,1120,1241
+GPT-5(Low),1119,1093
+SolarPro 3 (Reasoning),1118,929
+DeepSeekV3.1 Chat,1117,1111
+Qwen3235B A22B,1117,1093
+Gemini2.5 Flash Lite Thinking Preview 0925,1114,1051
+DeepSeekV3 0324 Turbo,1114,1094
+QwenMax,1113,1108
+DeepSeekV3 (Turbo),1109,1099
+KimiK2 Thinking,1107,1054
+Qwen332B,1106,1053
+Gemini2.5 Flash,1106,1102
+Qwen3.527B,1104,
+ClaudeSonnet 4,1104,1173
+Gemini2.5 Flash Lite,1103,1107
+DeepSeek-R1Turbo,1103,1012
+DeepSeekV3.2 Exp Thinking,1102,1099
+gpt-oss-20b,1099,1072
+Grok3,1099,1104
+DeepSeekV3 0324,1098,1102
+DeepSeekV3.1 Terminus Thinking,1095,1063
+ClaudeSonnet 3.5 v2,1094,1167
+Grok3 Fast,1089,1101
+LongCatFlash Chat,1089,1062
+Gemini2.5 Flash Lite Thinking,1085,1070
+GPT-4.1mini,1084,1089
+GLM4.5,1083,1078
+KimiK2 Fast,1083,1071
+GLM4.5 AirX,1082,1056
+MistralMedium,1080,1085
+GLM4.7 FP8,1078,
+ERNIE4.5 300B A47B,1077,1054
+Qwen3.535B A3B,1076,
+QwQ32B,1075,1033
+Qwen332B Fast,1073,1054
+KimiK2 0905 Turbo,1070,1073
+Seed2.0 Mini (Medium),1066,
+Qwen3235B A22B Thinking 2507,1065,987
+NVIDIALlama 3.3 Nemotron Super 49B v1.5,1064,947
+Qwen3VL 235B A22B Thinking,1064,1005
+Seed2.0 Lite (Medium),1063,
+Qwen330B A3B,1062,990
+Nemotron3 Nano,1062,977
+DeepSeekV3,1062,1035
+CommandA,1060,1029
+Qwen3Max Thinking,1057,1084
+GPT-4.1nano,1054,1090
+DeepSeekV3.1 Thinking,1053,977
+Apriel1.5 15B Thinker,1052,
+KimiK2 0905,1052,1069
+SolarPro 2 251215,1050,
+Qwen3VL 30B A3B Instruct,1050,1018
+MistralMedium 3,1050,
+Qwen314B,1050,961
+OpenAIo4-mini,1050,1044
+DeepSeekV3.2 Speciale,1048,1027
+GLM4.6V,1045,992
+DeepSeek-R10528,1044,980
+Gemini2.0 Flash,1040,1014
+Seed1.6 250615,1036,1007
+Gemini2.0 Flash Lite,1034,1033
+OpenAIo4-mini-high,1031,999
+DeepSeek-R1,1030,941
+OpenAIo3,1029,1022
+Qwen330B A3B Thinking 2507,1025,954
+OpenAIo1,1023,1061
+Qwen2.5 32B Instruct,1023,975
+GPT-5Nano,1022,995
+Qwen3Next 80B A3B Thinking,1021,1027
+Llama4 Scout,1017,966
+Ministral14B 3.0,1014,983
+OpenAIo1-pro,1013,1047
+Cogitov2.1 671B,1013,1026
+Llama4 Maverick,1012,974
+ERNIE4.5 21B A3B,1011,981
+Qwen38B,1008,943
+MistralSmall 3.1,1007,931
+Qwen3VL 30B A3B Thinking,1007,975
+DevstralSmall 2507,1006,
+DeepSeekProver v2,1004,939
+PixtralLarge,1003,966
+Qwen34B,1001,880
+DeepSeekR1T2 Chimera,1000,874
+KimiK2 0711,997,983
+Llama3.1 8B Turbo,996,952
+MistralSmall 3.2 24B,996,974
+DevstralMedium,996,955
+OpenAIo3-mini-low,992,991
+MiMoV2 Flash,986,
+OpenAIo3-mini,986,1003
+MistralSmall 3.1 24B Instruct,984,995
+InceptionMercury,977,878
+Qwen2.5 72B,977,968
+GLM4.7 Flash,977,862
+SwitchpointRouter,976,959
+AmazonNova Pro 1.0,975,903
+Gemma3n E4B,973,892
+Llama3.1 70B Instruct,973,
+OLMo3 7B Think,969,770
+Grok3 Mini Fast,969,945
+Jamba1.6 Large,968,932
+Jamba1.7 Large,967,929
+Grok3 Mini,966,929
+GLM4.6V Flash,966,912
+Llama3 70B,964,
+Baichuan-M2-32B,963,779
+Gemma3 27B,963,834
+MistralSmall 3.2 24B Instruct,962,886
+ERNIE4.5 VL 424B A47B,960,961
+Llama3.3 70B,960,942
+Llama3.2 11B Instruct,959,885
+MagistralSmall 2506,956,910
+GLM4.5 Flash,956,840
+MistralSmall 3 24B Instruct,955,882
+DevstralSmall,954,916
+INTELLECT-3,952,
+GPT-4omini,949,908
+Seed1.6 Flash 250715,948,933
+Gemma3 27B IT,947,868
+MistralSmall 24B Instruct,946,857
+OLMo3.1 32B Think,946,
+Qwen2.5 7B Turbo,945,860
+Qwen2.5 14B Instruct,943,867
+Llama3 8B,942,910
+GPT-3.5Turbo,940,909
+Llama3.3 Swallow 70B Instruct,937,922
+Gemma3 12B,936,869
+Qwen2.5 VL 32B Instruct,933,1030
+Krutrim2,931,827
+OpenAIo3-mini-high,930,1000
+Qwen2.5 7B,930,840
+Llama3.3 70B Instruct Turbo,930,861
+C4AIAya Expanse 32B,929,827
+SolarPro 3,927,
+MoonshotV1 128k,927,880
+Jamba1.5 Large,924,844
+SkyT1 32B Preview,924,833
+Rnj-1Instruct,920,906
+GPT-3.5Turbo 16k,918,842
+CommandR 7B,917,849
+OpenMistral Nemo,913,915
+CommandR,912,777
+MagistralMedium 2509,908,881
+OLMo3 7B Instruct,908,
+Mixtral8x7B,908,874
+Llama3.1 8B,907,
+ERNIE4.5 21B A3B Thinking,907,825
+KrutrimSpectre V2,906,865
+MoonshotV1 Auto,906,890
+CommandR+,903,742
+Hermes2 Pro Llama 3 8B,902,858
+Ministral8B,901,824
+Gemma3 4B,901,745
+MoonshotV1 32k,899,820
+GLM4 32B,899,873
+MoonshotV1 8k,899,873
+MistralNemo,898,877
+GPT-3.5Turbo Instruct,890,784
+WizardLM-28x22B,889,806
+Hermes4 70B,886,
+AmazonNova Micro 1.0,883,
+Mixtral8x22B Instruct,883,726
+GPT-4Turbo,883,
+Hermes4 405B FP8,881,817
+Gemma2 27B,881,822
+DeepSeek-R1Distill Llama 70B,880,847
+Mixtral8x22B,877,855
+Llama3.3 70B Instruct,877,
+Ministral3B,877,785
+Mixtral8x7B Instruct,867,856
+Phi4,866,796
+Gemma3 1B,865,803
+SolarMini 250422,857,881
+Hermes4 405B Reasoning FP8,848,754
+Apriel1.6 15B Thinker,848,
+Ministral3B 2512,845,857
+OpenMistral 7B,841,770
+MistralSmall,841,781
+Mixtral-8x7BInstruct v0.1,839,833
+Qwen2.5 VL 72B Instruct,835,742
+MagistralSmall 2509,831,811
+Inflection3 Productivity,830,733
+LFM22.6B,827,841
+Inflection3 Pi,824,710
+C4AIAya Expanse 8B,824,
+Hermes3 405B Instruct,815,712
+MiniMaxM2-her,808,
+MistralLarge,807,783
+DeepHermes3 Mistral 24B Preview,806,708
+DeepSeek-R1Distill Qwen 32B,800,715
+LFM28B A1B,794,810
+Pixtral12B,790,739
+MoonshotV1 128k Vision,788,
+Gemma2 9B,765,
+MythoMaxL2 13B,757,605
+Goliath120B,756,786
+MiniMaxM1,747,683
+Phi4 Mini Instruct,733,608
+HunyuanA13B Instruct,727,576
+Phi4 Reasoning,671,581
+Qwen2.5 VL 3B Instruct,648,536
+UI-TARS1.5 7B,604,604
+NemotronNano 12B v2,588,
+LFM2.51.2B Thinking,575,
+Phi4 Mini Reasoning,571,445
+GPT-5.3Codex (High),,1355
+GPT-5Codex (High),,1257
+GPT-5.2Codex (High),,1242
+GPT-5.1Codex (High),,1235
+GPT-5.2Codex (Medium),,1227
+GPT-5Codex (Medium),,1227
+GPT-5.1Codex (Medium),,1212
+GPT-5.1Codex Max,,1204
+GPT-5Codex (Low),,1172
+GPT-4.1,,1131
+GPT-5.2Codex (Low),,1126
+GPT-5.1Codex Mini (High),,1115
+Qwen3Coder 480B A35B Instruct,,1106
+GPT-5.1Codex Mini (Medium),,1058
+Qwen3Coder Plus,,1008
+GrokCode Fast 1,,991
+Codestral,,928
+InceptionMercury Coder Small Beta,,915
+MercuryCoder,,790
+CodeLlama7B Instruct Solidity,,450

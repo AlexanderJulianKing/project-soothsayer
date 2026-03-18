@@ -1,0 +1,305 @@
+Model,Creator,OmniscienceIndex,OmniscienceAccuracy,OmniscienceHallucinationRate,isReasoning
+Gemini 3.1 Pro Preview,Google,32.933,0.5525,0.4987,True
+Gemini 3 Pro Preview (high),Google,15.8,0.559,0.9093,True
+"Claude Opus 4.6 (Adaptive Reasoning, Max Effort)",Anthropic,13.5,0.4638,0.6133,True
+Grok 4.20 Beta 0309 (Reasoning),xAI,13.367,0.2892,0.2188,True
+Claude Opus 4.5 (Reasoning),Anthropic,13.267,0.4572,0.5978,True
+"Claude Sonnet 4.6 (Adaptive Reasoning, Max Effort)",Anthropic,12.367,0.4003,0.4614,True
+Gemini 3 Flash Preview (Reasoning),Google,11.567,0.54,0.9225,True
+GPT-5.3 Codex (xhigh),OpenAI,9.883,0.5178,0.869,True
+GPT-5.4 (xhigh),OpenAI,5.65,0.4998,0.8864,True
+GPT-5.1 (high),OpenAI,5.55,0.3758,0.5132,True
+Grok 4,xAI,3.75,0.4138,0.642,True
+"Claude Opus 4.6 (Non-reasoning, High Effort)",Anthropic,3.467,0.4515,0.76,False
+Gemini 3 Pro Preview (low),Google,2.15,0.4707,0.8486,True
+GLM-5 (Reasoning),Z AI,2,0.2687,0.34,True
+Claude 4.5 Sonnet (Reasoning),Anthropic,0.333,0.3238,0.474,True
+Claude 3.7 Sonnet (Reasoning),Anthropic,0.317,0.2803,0.3851,True
+Claude 4 Sonnet (Reasoning),Anthropic,0.183,0.2233,0.2852,True
+GPT-5.2 (medium),OpenAI,0.017,0.3773,0.6057,True
+GPT-5.2 (xhigh),OpenAI,-1,0.438,0.7972,True
+"Claude Sonnet 4.6 (Non-reasoning, Low Effort)",Anthropic,-1.9,0.3613,0.5955,False
+GPT-5.2 Codex (xhigh),OpenAI,-2.483,0.407,0.7282,True
+"Claude Sonnet 4.6 (Non-reasoning, High Effort)",Anthropic,-2.933,0.3797,0.6593,False
+Gemini 3 Flash Preview (Non-reasoning),Google,-3.617,0.4552,0.9018,False
+Claude Opus 4.5 (Non-reasoning),Anthropic,-3.95,0.4073,0.7539,False
+Claude 4.5 Haiku (Reasoning),Anthropic,-4.217,0.1743,0.2622,True
+GPT-5.1 Codex (high),OpenAI,-6.017,0.392,0.7437,True
+Grok 3 mini Reasoning (high),xAI,-6.05,0.154,0.2535,True
+GPT-5 Codex (high),OpenAI,-6.767,0.3867,0.7408,True
+Claude 4.5 Haiku (Non-reasoning),Anthropic,-7.667,0.1367,0.2471,False
+GPT-5 (high),OpenAI,-8.083,0.4065,0.8211,True
+Kimi K2.5 (Reasoning),Kimi,-8.117,0.3432,0.646,True
+Claude 4.5 Sonnet (Non-reasoning),Anthropic,-9.2,0.2752,0.5066,False
+Claude 3.7 Sonnet (Non-reasoning),Anthropic,-9.233,0.283,0.5235,False
+Claude 4 Sonnet (Non-reasoning),Anthropic,-9.233,0.2243,0.4083,False
+GPT-5 (low),OpenAI,-10.017,0.3743,0.7584,True
+GPT-5 (medium),OpenAI,-10.083,0.3887,0.8007,True
+o1,OpenAI,-10.55,0.3468,0.6925,True
+GPT-4o (Nov '24),OpenAI,-10.75,0.1968,0.3789,False
+GPT-5 mini (medium),OpenAI,-10.783,0.222,0.424,True
+GLM-5 (Non-reasoning),Z AI,-11.233,0.2268,0.4387,False
+GPT-5.2 (Non-reasoning),OpenAI,-13.717,0.2928,0.6081,False
+Kimi K2.5 (Non-reasoning),Kimi,-14,0.229,0.4786,False
+Gemini 2.5 Pro,Google,-14.3,0.39,0.8738,True
+o3,OpenAI,-15.267,0.384,0.8712,True
+Gemini 3.1 Flash-Lite Preview,Google,-15.517,0.364,0.8163,True
+DeepSeek V3.2 Speciale,DeepSeek,-16.483,0.3835,0.8894,True
+GPT-5.1 Codex mini (high),OpenAI,-16.517,0.2272,0.5077,True
+GPT-5 mini (high),OpenAI,-17.183,0.2395,0.5409,True
+Llama 3.1 Instruct 405B,Meta,-17.3,0.2233,0.5103,False
+MiMo-V2-Flash (Feb 2026),Xiaomi,-18.467,0.2017,0.4839,True
+Kimi K2 Thinking,Kimi,-20.483,0.3002,0.7216,True
+DeepSeek V3.2 (Reasoning),DeepSeek,-20.883,0.3347,0.8169,True
+GPT-4o (Aug '24),OpenAI,-21.717,0.2367,0.5945,False
+Qwen3 Coder 480B A35B Instruct,Alibaba,-22.2,0.1472,0.4329,False
+Claude 3.5 Haiku,Anthropic,-23.183,0.1297,0.4154,False
+DeepSeek V3.1 Terminus (Reasoning),DeepSeek,-24.317,0.2793,0.725,True
+GPT-5 nano (medium),OpenAI,-24.883,0.161,0.4885,True
+Cogito v2.1 (Reasoning),Deep Cogito,-24.983,0.302,0.7906,True
+GLM-4.5 (Reasoning),Z AI,-25.45,0.2495,0.6716,True
+Magistral Medium 1.2,Mistral,-26.233,0.2085,0.5949,True
+Magistral Medium 1,Mistral,-26.417,0.2072,0.5945,True
+Kimi K2 0905,Kimi,-26.467,0.2543,0.696,False
+GLM-4.6V (Reasoning),Z AI,-26.483,0.1562,0.4989,True
+DeepSeek R1 0528 (May '25),DeepSeek,-27.083,0.3095,0.8405,True
+Kimi K2,Kimi,-27.517,0.2682,0.7424,False
+GPT-5 nano (high),OpenAI,-27.75,0.1828,0.5633,True
+Gemini 2.5 Flash (Reasoning),Google,-27.85,0.2508,0.7066,True
+DeepSeek V3.1 (Reasoning),DeepSeek,-28.367,0.2882,0.8033,True
+Grok 4 Fast (Reasoning),xAI,-28.4,0.2263,0.6596,True
+Grok 4.1 Fast (Reasoning),xAI,-28.733,0.2533,0.7241,True
+Qwen3.5 397B A17B (Reasoning),Alibaba,-29.783,0.3135,0.8905,True
+DeepSeek V3.2 Exp (Reasoning),DeepSeek,-29.933,0.2825,0.8109,True
+Llama 3.1 Instruct 8B,Meta,-30.333,0.0807,0.4177,False
+Gemma 3 270M,Google,-31.317,0.0087,0.3246,False
+DeepSeek R1 (Jan '25),DeepSeek,-31.317,0.3072,0.8954,True
+Mistral Medium 3,Mistral,-31.467,0.183,0.6091,False
+GLM-4.6 (Non-reasoning),Z AI,-31.6,0.2078,0.6613,False
+Devstral Medium,Mistral,-31.617,0.1905,0.6259,False
+Grok 3,xAI,-32.333,0.2832,0.8461,False
+MiniMax-M2.1,MiniMax,-32.833,0.2047,0.6702,True
+Hermes 4 - Llama-3.1 405B (Non-reasoning),Nous Research,-33,0.2627,0.8038,False
+K2 Think V2,MBZUAI Institute of Foundation Models,-33.917,0.1572,0.5889,True
+GPT-5 (minimal),OpenAI,-33.95,0.2807,0.8621,False
+Mistral Large 2 (Nov '24),Mistral,-34.05,0.2013,0.6784,False
+Qwen3 Max Thinking,Alibaba,-34.417,0.2992,0.918,True
+Doubao Seed Code,ByteDance Seed,-34.433,0.2507,0.794,True
+GLM-4.7 (Reasoning),Z AI,-34.6,0.2927,0.9029,True
+Gemini 2.5 Flash Preview (Sep '25) (Reasoning),Google,-34.717,0.289,0.8947,True
+GPT-5.1 (Non-reasoning),OpenAI,-34.95,0.2907,0.9025,False
+Qwen3.5 0.8B (Reasoning),Alibaba,-35.183,0.0108,0.3666,True
+o4-mini (high),OpenAI,-35.75,0.2463,0.8012,True
+ERNIE 4.5 300B A47B,Baidu,-35.883,0.1868,0.671,False
+Grok Code Fast 1,xAI,-36,0.2382,0.7852,True
+Hermes 4 - Llama-3.1 405B (Reasoning),Nous Research,-36.05,0.3017,0.9482,True
+Qwen3.5 397B A17B (Non-reasoning),Alibaba,-36.083,0.2433,0.7985,False
+GPT-4.1,OpenAI,-36.183,0.2418,0.7962,False
+Nova Premier,Amazon,-36.267,0.1912,0.6847,False
+KAT-Coder-Pro V1,KwaiKAT,-37.433,0.1748,0.6655,False
+DeepSeek V3 0324,DeepSeek,-37.567,0.2217,0.7675,False
+Qwen3 Max Thinking (Preview),Alibaba,-37.833,0.2795,0.913,True
+GLM-4.6V (Non-reasoning),Z AI,-37.867,0.175,0.6711,False
+Gemini 2.5 Flash Preview (Sep '25) (Non-reasoning),Google,-38.117,0.2665,0.883,False
+Mistral Large 3,Mistral,-39.433,0.2412,0.8375,False
+Qwen3.5 122B A10B (Reasoning),Alibaba,-39.583,0.2473,0.8545,True
+MiniMax-M2.5,MiniMax,-39.7,0.262,0.893,True
+Nova Lite,Amazon,-40.417,0.0973,0.5556,False
+Qwen3 Max (Preview),Alibaba,-40.583,0.2428,0.8567,False
+Llama 3.1 Instruct 70B,Meta,-40.85,0.1938,0.7472,False
+Step 3.5 Flash,StepFun,-40.9,0.239,0.8515,True
+Llama 3.1 Nemotron Instruct 70B,NVIDIA,-41.05,0.1645,0.6882,False
+DeepSeek V3.1 (Non-reasoning),DeepSeek,-41.067,0.2313,0.8352,False
+o3-mini (high),OpenAI,-41.333,0.2103,0.7898,True
+DeepSeek V3 (Dec '24),DeepSeek,-41.35,0.2537,0.8939,False
+GLM-4.6 (Reasoning),Z AI,-41.733,0.2732,0.95,True
+Llama 4 Maverick,Meta,-41.767,0.2432,0.8732,False
+DeepSeek V3.1 Terminus (Non-reasoning),DeepSeek,-41.883,0.2345,0.8535,False
+Qwen3.5 27B (Reasoning),Alibaba,-42.017,0.2097,0.7969,True
+Gemini 2.5 Flash (Non-reasoning),Google,-42.017,0.2653,0.9331,False
+NVIDIA Nemotron 3 Super 120B A12B (Reasoning),NVIDIA,-42.067,0.2403,0.8701,True
+Qwen3 235B A22B 2507 Instruct,Alibaba,-42.1,0.1678,0.7076,False
+Gemini 2.0 Flash (Feb '25),Google,-42.55,0.2358,0.8654,False
+Gemini 2.5 Flash-Lite Preview (Sep '25) (Non-reasoning),Google,-42.667,0.1428,0.6644,False
+Grok 4.20 Beta 0309 (Non-reasoning),xAI,-42.683,0.2602,0.9286,False
+NVIDIA Nemotron Nano 9B V2 (Reasoning),NVIDIA,-42.867,0.1127,0.6101,True
+Qwen3 Max,Alibaba,-43.117,0.2443,0.8939,False
+Magistral Small 1,Mistral,-43.367,0.183,0.7548,True
+MiMo-V2-Flash (Reasoning),Xiaomi,-43.45,0.2492,0.9105,True
+GLM-4.5V (Reasoning),Z AI,-43.567,0.2062,0.8085,True
+Olmo 3.1 32B Think,Allen Institute for AI,-44.117,0.136,0.668,True
+ERNIE 5.0 Thinking Preview,Baidu,-44.133,0.2192,0.8459,True
+Qwen3 235B A22B (Reasoning),Alibaba,-44.583,0.184,0.7719,True
+Qwen3 VL 235B A22B (Reasoning),Alibaba,-44.617,0.2077,0.8252,True
+Gemini 2.5 Flash-Lite (Reasoning),Google,-44.633,0.1755,0.7542,True
+Mistral Medium 3.1,Mistral,-45.467,0.1977,0.813,False
+Llama 3.1 Nemotron Ultra 253B v1 (Reasoning),NVIDIA,-45.517,0.199,0.8167,True
+Qwen3 235B A22B 2507 (Reasoning),Alibaba,-45.55,0.2308,0.8923,True
+Llama Nemotron Super 49B v1.5 (Non-reasoning),NVIDIA,-45.633,0.122,0.6587,False
+Nova 2.0 Pro Preview (low),Amazon,-45.767,0.2213,0.872,True
+Llama Nemotron Super 49B v1.5 (Reasoning),NVIDIA,-45.817,0.1693,0.7554,True
+Devstral 2,Mistral,-46.167,0.2102,0.8506,False
+GLM-4.7 (Non-reasoning),Z AI,-46.283,0.2392,0.9227,False
+Qwen3.5 35B A3B (Reasoning),Alibaba,-46.383,0.2045,0.8401,True
+DeepSeek R1 Distill Llama 70B,DeepSeek,-46.45,0.1932,0.8151,True
+DeepSeek V3.2 (Non-reasoning),DeepSeek,-46.733,0.2417,0.9349,False
+Qwen3.5 27B (Non-reasoning),Alibaba,-46.75,0.1573,0.7415,False
+MiniMax-M2,MiniMax,-46.933,0.2202,0.8842,True
+DeepSeek V3.2 Exp (Non-reasoning),DeepSeek,-47.083,0.227,0.9028,False
+Hermes 4 - Llama-3.1 70B (Non-reasoning),Nous Research,-47.367,0.1818,0.8012,False
+MiniMax M1 80k,MiniMax,-47.417,0.2108,0.868,True
+Qwen3.5 2B (Reasoning),Alibaba,-47.483,0.0468,0.5473,True
+Nova Pro,Amazon,-47.583,0.1703,0.7788,False
+Claude 3 Haiku,Anthropic,-47.65,0.1717,0.7825,False
+Ring-1T,InclusionAI,-47.867,0.198,0.8437,True
+Nova 2.0 Pro Preview (medium),Amazon,-48.05,0.2198,0.8977,True
+K2-V2 (low),MBZUAI Institute of Foundation Models,-48.067,0.1608,0.7644,True
+Nova 2.0 Pro Preview (Non-reasoning),Amazon,-48.15,0.1608,0.7654,False
+Command A,Cohere,-48.467,0.1572,0.7615,False
+MiMo-V2-Flash (Non-reasoning),Xiaomi,-48.483,0.1522,0.7513,False
+Nova Micro,Amazon,-48.667,0.0988,0.6497,False
+Qwen3 14B (Reasoning),Alibaba,-49.233,0.1495,0.7547,True
+Llama 3.3 Nemotron Super 49B v1 (Non-reasoning),NVIDIA,-49.683,0.1347,0.7298,False
+Grok 4 Fast (Non-reasoning),xAI,-49.867,0.1592,0.7824,False
+Hermes 4 - Llama-3.1 70B (Reasoning),Nous Research,-49.917,0.2328,0.9542,True
+K2-V2 (medium),MBZUAI Institute of Foundation Models,-49.967,0.1737,0.8148,True
+Nova 2.0 Omni (low),Amazon,-49.983,0.1847,0.8395,True
+gpt-oss-120B (high),OpenAI,-50.05,0.2152,0.9119,True
+GPT-4.1 mini,OpenAI,-50.133,0.175,0.8198,False
+gpt-oss-120B (low),OpenAI,-50.15,0.1572,0.7815,True
+Qwen3 VL 32B (Reasoning),Alibaba,-50.2,0.1675,0.8042,True
+Mistral Small 3.1,Mistral,-50.317,0.15,0.7684,False
+Mistral Small 3.2,Mistral,-50.417,0.1467,0.7627,False
+Qwen3 32B (Reasoning),Alibaba,-50.533,0.1727,0.8195,True
+Qwen3 Next 80B A3B (Reasoning),Alibaba,-50.567,0.1737,0.8221,True
+Qwen3 VL 235B A22B Instruct,Alibaba,-50.667,0.2017,0.8873,False
+Qwen3 Coder 30B A3B Instruct,Alibaba,-50.85,0.1583,0.7923,False
+Seed-OSS-36B-Instruct,ByteDance Seed,-50.85,0.1775,0.834,True
+Grok 4.1 Fast (Non-reasoning),xAI,-50.95,0.1697,0.8179,False
+INTELLECT-3,Prime Intellect,-51.017,0.1923,0.8698,True
+Nova 2.0 Lite (low),Amazon,-51.067,0.1587,0.7956,True
+Olmo 3.1 32B Instruct,Allen Institute for AI,-51.083,0.1133,0.7039,False
+Devstral Small (Jul '25),Mistral,-51.15,0.1467,0.7713,False
+Qwen3 30B A3B (Reasoning),Alibaba,-51.2,0.1613,0.8029,True
+NVIDIA Nemotron 3 Nano 30B A3B (Reasoning),NVIDIA,-51.633,0.1712,0.8295,True
+Llama 3.3 Instruct 70B,Meta,-51.917,0.1793,0.8511,False
+Qwen3 VL 8B Instruct,Alibaba,-52.05,0.2015,0.9042,False
+LFM2 2.6B,Liquid AI,-52.1,0.0523,0.605,False
+Qwen2.5 Instruct 72B,Alibaba,-52.217,0.1758,0.8469,False
+Mercury 2,Inception,-52.283,0.2048,0.9151,True
+Llama 4 Scout,Meta,-52.367,0.1455,0.7831,False
+Qwen3 VL 8B (Reasoning),Alibaba,-52.417,0.2008,0.9072,True
+Qwen3.5 9B (Reasoning),Alibaba,-52.517,0.159,0.8135,True
+HyperCLOVA X SEED Think (32B),Naver,-52.867,0.1463,0.7907,True
+Qwen3 235B A22B (Non-reasoning),Alibaba,-52.967,0.182,0.87,False
+Gemini 2.5 Flash-Lite Preview (Sep '25) (Reasoning),Google,-53.083,0.1803,0.8676,True
+GLM-4.5V (Non-reasoning),Z AI,-53.517,0.179,0.8699,False
+Qwen3.5 122B A10B (Non-reasoning),Alibaba,-53.9,0.186,0.8907,False
+Solar Open 100B (Reasoning),Upstage,-54.1,0.1808,0.8812,True
+GPT-5 mini (minimal),OpenAI,-54.117,0.1818,0.8837,False
+Llama 3.2 Instruct 1B,Meta,-55.217,0.0693,0.6678,False
+Tri-21B-think Preview,Trillion Labs,-55.283,0.0873,0.7014,True
+Ling-1T,InclusionAI,-55.483,0.1985,0.9399,False
+Jamba 1.7 Large,AI21 Labs,-55.55,0.1972,0.9375,False
+Nova 2.0 Lite (medium),Amazon,-55.617,0.1828,0.9043,True
+Apriel-v1.5-15B-Thinker,ServiceNow,-55.783,0.161,0.8568,True
+GPT-4.1 nano,OpenAI,-56.417,0.133,0.8041,False
+Solar Pro 2 (Reasoning),Upstage,-56.567,0.1948,0.9445,True
+K2-V2 (high),MBZUAI Institute of Foundation Models,-56.7,0.1828,0.9176,True
+Phi-4,Microsoft Azure,-56.717,0.1318,0.8051,False
+Devstral Small 2,Mistral,-56.733,0.1533,0.8512,False
+Qwen3.5 4B (Reasoning),Alibaba,-56.767,0.1278,0.7974,True
+Qwen3 30B A3B 2507 (Reasoning),Alibaba,-56.867,0.1623,0.8727,True
+Devstral Small (May '25),Mistral,-56.983,0.1585,0.8655,False
+Gemini 2.5 Flash-Lite (Non-reasoning),Google,-57,0.1532,0.854,False
+NVIDIA Nemotron Nano 9B V2 (Non-reasoning),NVIDIA,-57.1,0.0953,0.7366,False
+Mi:dm K 2.5 Pro,Korea Telecom,-57.267,0.1675,0.8891,True
+Qwen3 VL 30B A3B (Reasoning),Alibaba,-57.317,0.1685,0.892,True
+Nova 2.0 Omni (medium),Amazon,-57.833,0.1788,0.9221,True
+K-EXAONE (Reasoning),LG AI Research,-57.933,0.1648,0.891,True
+Llama 3.3 Nemotron Super 49B v1 (Reasoning),NVIDIA,-58.333,0.169,0.9053,True
+Olmo 3 32B Think,Allen Institute for AI,-58.4,0.1445,0.8515,True
+Apriel-v1.6-15B-Thinker,ServiceNow,-58.533,0.1695,0.9089,True
+Ring-flash-2.0,InclusionAI,-58.667,0.163,0.8957,True
+Step3 VL 10B,StepFun,-59,0.1272,0.8217,True
+LFM2 24B A2B,Liquid AI,-59.067,0.0642,0.6997,False
+Nova 2.0 Lite (Non-reasoning),Amazon,-59.1,0.135,0.8393,False
+Qwen3 Next 80B A3B Instruct,Alibaba,-59.1,0.1763,0.9316,False
+GLM-4.7-Flash (Reasoning),Z AI,-59.333,0.159,0.8946,True
+Qwen3 4B 2507 Instruct,Alibaba,-59.633,0.1032,0.78,False
+gpt-oss-20B (low),OpenAI,-60.133,0.1418,0.866,True
+Qwen3 Coder Next,Alibaba,-60.717,0.1582,0.9091,False
+Qwen3 Omni 30B A3B (Reasoning),Alibaba,-60.717,0.1482,0.8867,True
+EXAONE 4.0 32B (Reasoning),LG AI Research,-60.8,0.136,0.8611,True
+Qwen3 4B 2507 (Reasoning),Alibaba,-60.817,0.1265,0.8411,True
+Granite 4.0 H Small,IBM,-60.917,0.1437,0.8791,False
+Phi-4 Mini Instruct,Microsoft Azure,-61.017,0.0827,0.7553,False
+K-EXAONE (Non-reasoning),LG AI Research,-61.167,0.1218,0.8353,False
+Motif-2-12.7B-Reasoning,Motif Technologies,-61.183,0.1535,0.9041,True
+Solar Pro 2 (Non-reasoning),Upstage,-61.683,0.1557,0.9149,False
+Qwen3.5 35B A3B (Non-reasoning),Alibaba,-62,0.1567,0.9209,False
+Mi:dm K 2.5 Pro Preview,Korea Telecom,-62.017,0.1608,0.9307,True
+Falcon-H1R-7B,TII UAE,-62.083,0.1408,0.8865,True
+GLM-4.7-Flash (Non-reasoning),Z AI,-62.233,0.1198,0.8432,False
+Sarvam M (Reasoning),Sarvam,-62.25,0.1483,0.9051,True
+EXAONE 4.0 32B (Non-reasoning),LG AI Research,-62.3,0.1035,0.8104,False
+GLM-4.5-Air,Z AI,-62.517,0.155,0.9233,True
+Qwen3 VL 32B Instruct,Alibaba,-62.817,0.1487,0.9125,False
+Qwen3 VL 30B A3B Instruct,Alibaba,-63,0.1552,0.9294,False
+Llama 3.2 Instruct 11B (Vision),Meta,-63.083,0.102,0.8161,False
+Tri-21B-Think,Trillion Labs,-63.3,0.1197,0.855,True
+Ling-flash-2.0,InclusionAI,-63.367,0.14,0.8996,False
+gpt-oss-20B (high),OpenAI,-63.917,0.1553,0.9406,True
+GPT-5 nano (minimal),OpenAI,-63.983,0.1103,0.8432,False
+Ministral 3 3B,Mistral,-64.1,0.0757,0.7753,False
+DeepSeek R1 0528 Qwen3 8B,DeepSeek,-64.117,0.12,0.865,True
+NVIDIA Nemotron Nano 12B v2 VL (Reasoning),NVIDIA,-64.417,0.1377,0.9066,True
+Nova 2.0 Omni (Non-reasoning),Amazon,-64.5,0.1287,0.8879,False
+Reka Flash 3,Reka AI,-64.7,0.1337,0.9011,True
+Magistral Small 1.2,Mistral,-64.983,0.1348,0.907,True
+Qwen3 8B (Reasoning),Alibaba,-65.067,0.1278,0.8926,True
+Qwen3 30B A3B (Non-reasoning),Alibaba,-65.067,0.1165,0.8683,False
+Gemma 3 27B Instruct,Google,-65.883,0.1248,0.8954,False
+Qwen3 30B A3B 2507 Instruct,Alibaba,-65.917,0.151,0.9543,False
+Ministral 3 14B,Mistral,-66.817,0.123,0.9021,False
+Qwen3 14B (Non-reasoning),Alibaba,-67.383,0.1273,0.9181,False
+Ministral 3 8B,Mistral,-67.833,0.1118,0.8897,False
+Molmo2-8B,Allen Institute for AI,-69.117,0.1132,0.907,False
+Qwen3 Omni 30B A3B Instruct,Alibaba,-69.183,0.1442,0.9768,False
+NVIDIA Nemotron 3 Nano 30B A3B (Non-reasoning),NVIDIA,-69.217,0.1137,0.9092,False
+Qwen3 VL 4B (Reasoning),Alibaba,-69.35,0.1217,0.9281,True
+LongCat Flash Lite,LongCat,-70.1,0.131,0.9574,False
+Qwen3.5 9B (Non-reasoning),Alibaba,-70.75,0.141,0.9878,False
+LFM2 1.2B,Liquid AI,-71.617,0.0428,0.793,False
+Granite 4.0 350M,IBM,-72.15,0.0317,0.7778,False
+NVIDIA Nemotron Nano 12B v2 VL (Non-reasoning),NVIDIA,-72.75,0.1137,0.949,False
+Granite 4.0 H 1B,IBM,-73.65,0.0533,0.8343,False
+Olmo 3 7B Think,Allen Institute for AI,-73.683,0.1082,0.9475,True
+Jamba Reasoning 3B,AI21 Labs,-73.683,0.066,0.8596,True
+LFM2.5-1.2B-Instruct,Liquid AI,-73.783,0.0598,0.8484,False
+Qwen3 8B (Non-reasoning),Alibaba,-74.1,0.1035,0.942,False
+Jamba 1.7 Mini,AI21 Labs,-74.25,0.114,0.9667,False
+Qwen3.5 4B (Non-reasoning),Alibaba,-74.717,0.1142,0.9723,False
+LFM2 8B A1B,Liquid AI,-75.133,0.0683,0.8798,False
+Qwen3 VL 4B Instruct,Alibaba,-75.817,0.1035,0.9611,False
+Granite 3.3 8B (Non-reasoning),IBM,-76.617,0.0853,0.9309,False
+Gemma 3 12B Instruct,Google,-76.983,0.1022,0.9712,False
+Qwen3 1.7B (Reasoning),Alibaba,-77.2,0.084,0.9345,True
+Gemma 3 1B Instruct,Google,-77.267,0.0358,0.8385,False
+Olmo 3 7B Instruct,Allen Institute for AI,-77.75,0.0733,0.9182,False
+Granite 4.0 Micro,IBM,-77.917,0.0902,0.9555,False
+Ling-mini-2.0,InclusionAI,-78.767,0.087,0.958,False
+Gemma 3n E2B Instruct,Google,-79.583,0.0665,0.9238,False
+Gemma 3n E4B Instruct,Google,-80.4,0.0775,0.9556,False
+Qwen3 0.6B (Reasoning),Alibaba,-81.783,0.0552,0.924,True
+Granite 4.0 1B,IBM,-81.817,0.0605,0.9352,False
+Exaone 4.0 1.2B (Reasoning),LG AI Research,-82.433,0.0618,0.9446,True
+Exaone 4.0 1.2B (Non-reasoning),LG AI Research,-82.583,0.0465,0.9149,False
+Qwen3.5 2B (Non-reasoning),Alibaba,-82.833,0.074,0.9744,False
+Gemma 3 4B Instruct,Google,-83.317,0.078,0.9883,False
+Qwen3 1.7B (Non-reasoning),Alibaba,-83.467,0.066,0.9643,False
+LFM2.5-VL-1.6B,Liquid AI,-83.867,0.052,0.9395,False
+LFM2.5-1.2B-Thinking,Liquid AI,-83.867,0.0662,0.9689,True
+Qwen3 0.6B (Non-reasoning),Alibaba,-85.533,0.0422,0.937,False
+Granite 4.0 H 350M,IBM,-87.25,0.0367,0.9438,False
+Qwen3.5 0.8B (Non-reasoning),Alibaba,-89,0.0483,0.986,False
