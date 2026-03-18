@@ -25,6 +25,9 @@ CLAUDE.md
 arena_predictor/CLAUDE.md
 docs/FINDINGS.md
 docs/MODEL_BANK_TODO.md
+docs/README_feature_selector.md
+docs/llm_benchmarks_methodology.pdf
+docs/llm_benchmarks_methodology.tex
 
 # OS
 .DS_Store
