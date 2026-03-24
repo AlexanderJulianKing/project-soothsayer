@@ -15,6 +15,8 @@ Charts produced:
  11. Capability Archetype Map (PCA scatter by vendor)
  12. Token Productivity (tokens vs performance)
  13. Capability Over Time (release date vs performance)
+ 14. Capability Profiles (radar + bars)
+ 15. Predicted vs Actual Arena ELO (top 50 scatter)
 
 All outputs land in  analysis_output/posthoc_suite/run_YYYYMMDD_HHMMSS/
 """
@@ -1918,6 +1920,97 @@ def plot_capability_profiles(cap_df: pd.DataFrame, df_predictions: pd.DataFrame,
 
 
 # ──────────────────────────────────────────────────────────────────
+# Chart 15: Predicted vs Actual (Top 50)
+# ──────────────────────────────────────────────────────────────────
+
+def plot_predicted_vs_actual(df_predictions, df_oof, df_combined, run_dir, top_n=50):
+    """Chart 15: Scatter of predicted vs actual Arena ELO for the top N models."""
+    print(f"\n--- Chart 15: Predicted vs Actual (Top {top_n}) ---")
+
+    # Prefer OOF predictions (honest); fall back to full-fit
+    if df_oof is not None and not df_oof.empty and len(df_oof) >= 10:
+        df = df_oof.dropna(subset=["actual_score", "oof_predicted_score"]).copy()
+        df = df.rename(columns={"oof_predicted_score": "predicted"})
+        pred_label = "Out-of-Fold Predicted"
+    else:
+        df = df_predictions.dropna(subset=["actual_score"]).copy()
+        df = df.rename(columns={"predicted_score": "predicted"})
+        pred_label = "Predicted"
+
+    # Top N by actual score
+    df = df.nlargest(top_n, "actual_score")
+
+    # Add vendor
+    df_source = build_source_map(df_combined)
+    df = df.merge(df_source, on="model_name", how="left")
+    df["openbench_Source"] = df["openbench_Source"].fillna("Other")
+
+    sources = sorted(df["openbench_Source"].unique().tolist())
+    s2c, s2m = source_styles(sources)
+
+    # Stats
+    residuals = df["actual_score"] - df["predicted"]
+    rmse = np.sqrt((residuals ** 2).mean())
+    ss_res = (residuals ** 2).sum()
+    ss_tot = ((df["actual_score"] - df["actual_score"].mean()) ** 2).sum()
+    r2 = 1 - ss_res / ss_tot
+    corr = np.corrcoef(df["actual_score"], df["predicted"])[0, 1]
+
+    df.to_csv(run_dir / f"predicted_vs_actual_top{top_n}.csv", index=False)
+
+    # ── Plot ──
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # Perfect-prediction line
+    lo = min(df["actual_score"].min(), df["predicted"].min()) - 15
+    hi = max(df["actual_score"].max(), df["predicted"].max()) + 15
+    ax.plot([lo, hi], [lo, hi], ls="--", color="#888888", lw=1.5, zorder=1, label="Perfect prediction")
+
+    # +/- RMSE band around the diagonal
+    ax.fill_between([lo, hi], [lo - rmse, hi - rmse], [lo + rmse, hi + rmse],
+                    color="#888888", alpha=0.08, zorder=0, label=f"\u00b1 1 RMSE ({rmse:.1f})")
+
+    # Scatter by vendor
+    texts = []
+    for src in sources:
+        mask = df["openbench_Source"] == src
+        sub = df[mask]
+        ax.scatter(sub["actual_score"], sub["predicted"],
+                   marker=s2m[src], color=s2c[src], s=70, edgecolors="white",
+                   linewidths=0.5, zorder=3, label=src)
+        for _, row in sub.iterrows():
+            # Shorten name for legibility
+            name = row["model_name"]
+            texts.append(ax.text(row["actual_score"], row["predicted"], name,
+                                 fontsize=5.5, alpha=0.85, zorder=4))
+
+    adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle="-", color="#aaaaaa", lw=0.4))
+
+    # Stats box
+    stats_text = (f"Top {len(df)} models\n"
+                  f"R\u00b2 = {r2:.3f}\n"
+                  f"r  = {corr:.3f}\n"
+                  f"RMSE = {rmse:.1f}")
+    ax.text(0.04, 0.96, stats_text, transform=ax.transAxes, fontsize=11,
+            verticalalignment="top", fontfamily="monospace",
+            bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#cccccc", alpha=0.9))
+
+    ax.set_xlabel("Actual Arena ELO", fontsize=13)
+    ax.set_ylabel(f"{pred_label} Arena ELO", fontsize=13)
+    ax.set_title(f"Predicted vs Actual Arena ELO — Top {len(df)} Models", fontsize=16, fontweight="bold")
+    ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect("equal")
+    ax.grid(True, linestyle=":", linewidth=0.4, alpha=0.5)
+    fig.tight_layout()
+    fname = f"predicted_vs_actual_top{top_n}"
+    fig.savefig(run_dir / f"{fname}.png", dpi=300)
+    plt.close(fig)
+    print(f"  Saved {fname}.png ({len(df)} models, RMSE={rmse:.1f}, R\u00b2={r2:.3f})")
+
+
+# ──────────────────────────────────────────────────────────────────
 
 def main():
     print("=" * 60)
@@ -1981,6 +2074,9 @@ def main():
     cap_df = compute_capability_profiles(df_imputed)
     cap_df.to_csv(run_dir / "capability_profiles.csv", index=False)
     plot_capability_profiles(cap_df, df_predictions, df_combined, run_dir)
+
+    # Chart 15
+    plot_predicted_vs_actual(df_predictions, df_oof, df_combined, run_dir)
 
     # Summary
     outputs = sorted(run_dir.glob("*"))

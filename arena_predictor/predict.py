@@ -1974,6 +1974,7 @@ def _fit_alt_model_on_rows(
     int_scaler_out = None
     interaction_names_out: List[str] = []
     combined_names: List[str] = []
+    pred_std_all = pd.Series(np.nan, index=X_no_alt_all.index, dtype="float64")
 
     min_samples = max(3, ALT_PCA_N_COMPONENTS + 1)  # PCA needs n > n_components
     if n_known < min_samples or len(selected) == 0 or not np.isfinite(fallback):
@@ -3815,6 +3816,8 @@ def fit_and_predict_all_with_alt(
     alt_feature_names = [c for c in X_df.columns if c != alt_col]
     X_no_alt_df = X_df[alt_feature_names].copy()
     alt_numeric = pd.to_numeric(X_df[alt_col], errors="coerce")
+    top_tier_boost = TOP_TIER_BOOST
+    top_tier_threshold = TOP_TIER_THRESHOLD
 
     # 1. Generate OOF predictions for the TRAINING rows
     # These will be used to train the final model
@@ -3891,7 +3894,13 @@ def fit_and_predict_all_with_alt(
             except Exception:
                 calibration_factor = 1.0
 
-        X_train_b, y_train_b, w_train_b = _apply_top_tier_boost(X_train, y_train, w_train)
+        X_train_b, y_train_b, w_train_b = _apply_top_tier_boost(
+            X_train,
+            y_train,
+            w_train,
+            boost=top_tier_boost,
+            threshold=top_tier_threshold,
+        )
         model = spec.build(X_train_b, y_train_b, w_train_b)
         mu = model.predict(X_all_aug)
 
@@ -4128,6 +4137,8 @@ def cross_val_rmse_with_alt(
     poly_include_squares = bool(poly_cfg.get("include_squares", False))
     alt_centric_poly = bool(poly_cfg.get("alt_centric", False))
     alt_centric_k = int(poly_cfg.get("alt_centric_k", 6))
+    top_tier_boost = TOP_TIER_BOOST
+    top_tier_threshold = TOP_TIER_THRESHOLD
 
     def _eval_fold(tr, va):
         # 1. Generate OOF predictions for the TRAINING set of this fold
@@ -4186,7 +4197,14 @@ def cross_val_rmse_with_alt(
                     preset_core=core,
                 )
 
-        model = spec.build(Xtr_sel.values, y[tr], w_tr)
+        Xtr_fit, ytr_fit, wtr_fit = _apply_top_tier_boost(
+            Xtr_sel.values,
+            y[tr],
+            w_tr,
+            boost=top_tier_boost,
+            threshold=top_tier_threshold,
+        )
+        model = spec.build(Xtr_fit, ytr_fit, wtr_fit)
         pred = model.predict(Xva_sel.values)
         if dense_mask is not None:
             dense_va = dense_mask[va]
@@ -4220,18 +4238,27 @@ def cross_val_rmse_with_alt(
     return float(np.mean(rmses)), float(np.std(rmses, ddof=1)), oof_preds, oof_folds
 
 
-def _apply_top_tier_boost(X, y, w=None):
+def _apply_top_tier_boost(
+    X,
+    y,
+    w=None,
+    *,
+    boost: Optional[int] = None,
+    threshold: Optional[float] = None,
+):
     """Duplicate top-tier training rows to counteract regularisation shrinkage.
 
     Returns augmented (X, y, w) with top-tier rows duplicated (BOOST-1) times.
     """
-    if TOP_TIER_BOOST <= 1 or TOP_TIER_THRESHOLD <= 0:
+    boost = TOP_TIER_BOOST if boost is None else int(boost)
+    threshold = TOP_TIER_THRESHOLD if threshold is None else float(threshold)
+    if boost <= 1 or threshold <= 0:
         return X, y, w
-    top_mask = y >= TOP_TIER_THRESHOLD
+    top_mask = y >= threshold
     n_top = int(top_mask.sum())
     if n_top == 0:
         return X, y, w
-    n_dupes = TOP_TIER_BOOST - 1
+    n_dupes = boost - 1
     if isinstance(X, pd.DataFrame):
         X_top = pd.concat([X.loc[top_mask]] * n_dupes, ignore_index=True)
         X_aug = pd.concat([X, X_top], ignore_index=True)
@@ -4263,6 +4290,8 @@ def _precompute_single_fold(
     poly_limit: int,
     alt_centric_poly: bool,
     alt_centric_k: int,
+    top_tier_boost: int,
+    top_tier_threshold: float,
 ) -> dict:
     """Compute ALT-augmented train/val data for a single CV fold."""
     X_tr_fold = X_df.iloc[tr]
@@ -4337,7 +4366,13 @@ def _precompute_single_fold(
     Xtr_out, ytr_out, wtr_out = Xtr_sel.values, y[tr], w_tr
 
     # Apply top-tier boost (duplicate high-ELO rows in training)
-    Xtr_out, ytr_out, wtr_out = _apply_top_tier_boost(Xtr_out, ytr_out, wtr_out)
+    Xtr_out, ytr_out, wtr_out = _apply_top_tier_boost(
+        Xtr_out,
+        ytr_out,
+        wtr_out,
+        boost=top_tier_boost,
+        threshold=top_tier_threshold,
+    )
 
     return {
         "Xtr": Xtr_out,
@@ -4361,6 +4396,8 @@ def _precompute_alt_fold_data(
     selector_cfg: Optional[dict] = None,
     poly_cfg: Optional[dict] = None,
     n_jobs: int = 1,
+    top_tier_boost: int = 1,
+    top_tier_threshold: float = 0.0,
 ) -> List[dict]:
     """Pre-compute ALT-augmented train/val data per fold.
 
@@ -4390,6 +4427,7 @@ def _precompute_alt_fold_data(
                 oof_repeats, seed, sample_weight, selector_cfg,
                 poly_enabled, poly_include_squares, poly_limit,
                 alt_centric_poly, alt_centric_k,
+                top_tier_boost, top_tier_threshold,
             )
             for tr, va in splits
         ]
@@ -4400,6 +4438,7 @@ def _precompute_alt_fold_data(
                 oof_repeats, seed, sample_weight, selector_cfg,
                 poly_enabled, poly_include_squares, poly_limit,
                 alt_centric_poly, alt_centric_k,
+                top_tier_boost, top_tier_threshold,
             )
             for tr, va in splits
         )
@@ -4433,6 +4472,8 @@ def choose_best_model_with_alt(
 
     selector_cfg = selector_cfg or {"enabled": False}
     poly_cfg = poly_cfg or {"enabled": False}
+    top_tier_boost = TOP_TIER_BOOST
+    top_tier_threshold = TOP_TIER_THRESHOLD
 
     if alt_col not in X_df.columns:
         # No ALT column: fall back to simple per-spec CV
@@ -4463,6 +4504,8 @@ def choose_best_model_with_alt(
             sample_weight=sample_weight,
             selector_cfg=selector_cfg, poly_cfg=poly_cfg,
             n_jobs=cv_n_jobs,
+            top_tier_boost=top_tier_boost,
+            top_tier_threshold=top_tier_threshold,
         )
 
         def _eval_spec_on_folds(spec: ModelSpec):
@@ -6113,8 +6156,9 @@ def main():
         print(f"Style-only final: kept {len(style_cols)} columns, dropped {dropped}")
 
     # Piecewise style interaction: above threshold, style delta has weaker effect.
-    # Captures the empirical finding that top-tier models have homogeneous formatting
-    # so lmarena ≈ lmsys at the top (style correction is noise there).
+    # style_predicted_delta correlates r=-0.55 with Arena ELO below 1400 but
+    # r=-0.03 above 1400 — style stops predicting human preference at the top tier.
+    # This feature lets the model learn that transition.
     if ALT_TARGET in target_base_features.columns and "style_predicted_delta" in target_base_features.columns:
         alt_vals = target_base_features[ALT_TARGET].values
         delta_vals = target_base_features["style_predicted_delta"].values

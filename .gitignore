@@ -111,6 +111,11 @@ benchmark_combiner/analysis_output/
 # Prediction pipeline outputs
 arena_predictor/analysis_output/
 
+# Explainer HTML (generated, not source)
+soothsayer_explainer.html
+regression_explainer.html
+font_test.html
+
 # Unreleased benchmarks
 soothsayer_zebra/
 tests/test_zebra_puzzle_generator.py
