@@ -24,7 +24,7 @@ import json
 import re
 import itertools
 from collections import defaultdict, deque
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional
 
 import time
 import hashlib
@@ -34,9 +34,6 @@ import pandas as pd  # type: ignore
 
 from zoneinfo import ZoneInfo
 from datetime import datetime
-
-# joblib kept available for future parallel extensions
-from joblib import Parallel, delayed  # noqa: F401
 
 # ==============================================================================
 # LOCAL IMPORTS
@@ -53,12 +50,6 @@ from sklearn.model_selection import KFold, GroupKFold  # type: ignore
 from sklearn.preprocessing import StandardScaler  # type: ignore
 from sklearn.linear_model import Ridge  # type: ignore
 from sklearn.neighbors import NearestNeighbors  # type: ignore
-
-# Optional: trueskill import guard (kept for compatibility)
-try:
-    import trueskill  # type: ignore  # noqa: F401
-except ImportError:
-    pass
 
 # ==============================================================================
 # CONSTANTS
@@ -417,7 +408,8 @@ def prob_above_threshold(mu: np.ndarray, std: np.ndarray, threshold: float,
         from scipy.stats import norm  # type: ignore
         return 1.0 - norm.cdf(z)
     except Exception:
-        return 0.5 * (1.0 - np.erf(z / np.sqrt(2.0)))
+        from math import erf as _erf
+        return np.array([0.5 * (1.0 - _erf(float(zi) / np.sqrt(2.0))) for zi in z])
 
 
 def _detect_suite_missing_fracs(
@@ -1153,13 +1145,14 @@ def main():
     ap.add_argument("--cv_repeats_outer", type=int, default=None)
     ap.add_argument("--cv_seed", type=int, default=SEED)
     ap.add_argument("--outer_cv", type=int, default=5)
-    ap.add_argument("--selector_cv", type=int, default=5)
+    ap.add_argument("--selector_cv", type=int, default=5,
+                    help="CV folds for imputer feature selection.")
     ap.add_argument("--cv_splits_path", type=str, default="")
     ap.add_argument("--cv_repeats", type=int, default=1)
     ap.add_argument("--group_cv", action="store_true",
                     help="Use GroupKFold by model provider (diagnostic).")
     # -- KNN config --
-    ap.add_argument("--knn_predict", action="store_true", default=True,
+    ap.add_argument("--knn_predict", action="store_true", default=True,  # always on, kept for CLI compat
                     help="Use adaptive KNN prediction (default: True).")
     ap.add_argument("--knn_dist_mult", type=float, default=2.0)
     ap.add_argument("--knn_max_k", type=int, default=80)
@@ -1173,9 +1166,9 @@ def main():
     ap.add_argument("--tier_quantiles", type=str, default="0.33,0.67")
     ap.add_argument("--exclude_models", type=str, default="",
                     help="Comma-separated model names to exclude from the dataset.")
-    ap.add_argument("--svd_in_alt", dest="svd_in_features", action="store_true", default=True,
-                    help="Add SVD factors from imputer to feature matrix (default: True).")
-    ap.add_argument("--no_svd_in_alt", dest="svd_in_features", action="store_false",
+    ap.add_argument("--svd_in_features", dest="svd_in_features", action="store_true", default=True,
+                    help="Add SVD factors from imputer to feature matrix (default: on).")
+    ap.add_argument("--no_svd_in_features", dest="svd_in_features", action="store_false",
                     help="Exclude SVD factors from feature matrix.")
 
     args = ap.parse_args()
@@ -1506,7 +1499,7 @@ def main():
     preprocess_end = time.time()
     print(f"preprocessing:    {mmss(preprocess_end - impute_end)}")
 
-    target_cv_splits = None
+    n_folds = args.outer_cv if args.outer_cv else 5
     if args.group_cv:
         train_model_names = imputed_df[ID_COL].values[~y_missing_mask]
         group_labels_cv = _extract_model_groups(pd.Series(train_model_names))
@@ -1518,16 +1511,20 @@ def main():
             ])
         print(f"GroupKFold: {len(set(group_labels_cv))} groups")
         target_cv_splits = _build_group_splits(
-            len(train_idx), args.outer_cv, group_labels_cv,
+            len(train_idx), n_folds, group_labels_cv,
             args.cv_repeats_outer, args.cv_seed)
     elif args.cv_splits_path:
         target_cv_splits = get_or_create_splits(
             len(train_idx),
-            args.outer_cv,
+            n_folds,
             args.cv_splits_path,
             repeats=args.cv_repeats_outer,
             seed=args.cv_seed,
         )
+    else:
+        target_cv_splits = _build_repeated_splits(
+            len(train_idx), n_folds,
+            args.cv_repeats_outer, args.cv_seed)
 
     # =========================================================================
     # 8. KNN prediction
