@@ -69,42 +69,33 @@ echo "Dependencies are up to date."
 echo "Executing Python script"
 
 
-# python3 lmsys_predictor5.py \
-#   --csv_path benchmarks/clean_combined_all_benches_transformed.csv \
-#   --passes 200 \
-#   --alpha 0.95 \
-#   --selector_cv 5 \
-#   --alt_selector_cv 5 \
-#   --poly_interactions --poly_include_squares \
-#   --alt_top_k_features 10 \
-#   --max_workers 8 \
-#   --cv_splits_path "$CV_SPLITS_PATH"
-
-
+# KNN prediction mode (default — predicts lmarena, R²=0.927)
 python3 predict.py \
     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
     --imputer_type model_bank \
     --coherence_lambda 1.0 \
     --coherence_shape exp \
     --eb_parent \
-    --poly_interactions \
-    --poly_limit 7 \
-    --no_residual_head \
-    --no_traj_in_alt \
-    --top_tier_boost 2 \
-    --top_tier_threshold 1400 \
-    --cv_repeats_outer 10 \
-    --cv_repeats_inner 5 \
-    --feature_cv_repeats 1 \
-    --alt_cv_repeats 1
+    --knn_predict \
+    --cv_repeats_outer 10
 
-# python3 lmsys_predictor_pipeline.py \
-#   --csv_path benchmarks/clean_combined_all_benches_transformed.csv \
-#   --output_root analysis_output \
-#   --selector_cv 5 \
-#   --imputer_passes 12 \
-#   --imputer_alpha 0.10 \
-#   --eval_imputation          # write imputation quality CSVs too
+# Old two-stage pipeline (deprecated — was predicting lmsys via lmarena imputation):
+# python3 predict.py \
+#     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
+#     --imputer_type model_bank \
+#     --coherence_lambda 1.0 \
+#     --coherence_shape exp \
+#     --eb_parent \
+#     --poly_interactions \
+#     --poly_limit 7 \
+#     --no_residual_head \
+#     --no_traj_in_alt \
+#     --top_tier_boost 2 \
+#     --top_tier_threshold 1400 \
+#     --cv_repeats_outer 10 \
+#     --cv_repeats_inner 5 \
+#     --feature_cv_repeats 1 \
+#     --alt_cv_repeats 1
 
 # The virtual environment is automatically deactivated when the script finishes.
 echo ""

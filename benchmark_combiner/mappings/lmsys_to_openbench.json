@@ -544,5 +544,14 @@
   "nvidia-nemotron-3-super-120b-a12b": "Nemotron 3 Super",
   "gemini-3.1-flash-lite-preview": "Gemini 3.1 Flash Lite Preview (2026-03-03)",
   "qwen3.5-35b-a3b": "Qwen3.5 35B A3B Thinking",
-  "gpt-5.4-high": ""
+  "gpt-5.4-high": "",
+  "gpt-5.3-chat-latest": "",
+  "qwen3.5-max-preview": "",
+  "mercury-2": "Mercury 2",
+  "amazon-nova-experimental-chat-26-02-10": "",
+  "gpt-5.4-nano-high": "",
+  "gpt-5.4-mini-high": "",
+  "minimax-m2.7": "MiniMax M2.7",
+  "mimo-v2-pro": "MiMo-V2-Pro",
+  "grok-4.20-beta-0309-reasoning": "Grok 4.2 beta"
 }

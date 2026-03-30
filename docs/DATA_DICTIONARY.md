@@ -31,8 +31,8 @@ See [Combined Column Descriptions](#combined-column-descriptions) for detailed d
 
 | Source | File Pattern | What It Measures |
 |--------|-------------|-----------------|
-| Chatbot Arena | `lmsys_*.csv` | Human preference ELO from blind A/B voting (prediction target) |
-| LMArena | `lmarena_*.csv` | Length-adjusted Arena scores |
+| LMArena | `lmarena_*.csv` | Style-controlled Arena ELO (**prediction target**) |
+| Chatbot Arena | `lmsys_*.csv` | Raw Arena ELO (excluded from clean CSV — leakage) |
 | LiveBench | `livebench_*.csv` | Multi-category: reasoning, coding, math, language, IF |
 | OpenBench | `openbench_*.csv` | Canonical model namespace + AIME, GPQA, SWE-Bench, MMLU |
 | Artificial Analysis | `artificialanalysis_*.csv` | Quality index, pricing, speed |
@@ -126,8 +126,8 @@ Combined benchmark data from all sources, merged on model name. Models with too 
 #### Arena columns
 | Column | Description |
 |--------|-------------|
-| `lmsys_Score` | Human preference ELO from blind A/B tests (primary prediction target) |
-| `lmarena_Score` | Arena ELO adjusted for human length bias in response selection |
+| `lmarena_Score` | Style-controlled Arena ELO — adjusted for human length/formatting bias (**primary prediction target**) |
+| `lmsys_Score` | Raw Arena ELO from blind A/B tests (excluded from clean CSV as leakage — derived from same Arena voting as lmarena) |
 
 #### Lechmazur columns
 | Column | Description |

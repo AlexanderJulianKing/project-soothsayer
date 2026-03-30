@@ -163,5 +163,6 @@
   "hunter-alpha": "",
   "*gpt-5.4": "GPT-5.4 Thinking",
   "*grok-4.20-beta": "Grok 4.2 beta",
-  "claude-opus-4-6": "Claude Opus 4.6 Thinking"
+  "claude-opus-4-6": "Claude Opus 4.6 Thinking",
+  "gpt-5.4-mini": "GPT-5.4 Mini"
 }

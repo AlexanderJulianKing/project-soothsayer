@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """
-LMSYS Benchmark Score Predictor Pipeline (v7.2.1).
+Arena ELO Predictor Pipeline.
 
-v7.2 Additions:
-    - gp_selector_k_max: Separate feature cap for GP models (mRMR selection)
-    - Per-column tolerance calibration: Calibrate tolerances based on masked evaluation
-    - Periodic recalibration: Optionally recalibrate tolerances every N passes
-v7.2.1 Additions:
-    - Repeated CV via --cv_repeats with per-stage overrides for sweeps
+Predicts lmarena_Score (style-controlled Chatbot Arena ELO) from benchmark data.
+Supports two prediction modes:
+    - --knn_predict: Adaptive KNN + kernel Ridge + jackknife VI (R²=0.927, default)
+    - Legacy: Two-stage ALT pipeline with BayesianRidge/ARD
 
-This is the main orchestrator for predicting LMSYS/Chatbot Arena ELO scores from
-other benchmark data. It coordinates imputation, feature selection, model training,
-and evaluation in a comprehensive end-to-end pipeline.
+Coordinates imputation, feature selection, model training, and evaluation.
 
 Pipeline Overview:
     1. Data Loading: Load transformed benchmark data with missing values
@@ -63,7 +59,7 @@ Key Components:
 Configuration:
     Via argparse CLI arguments:
     --data: Input CSV file path
-    --target: Target column name (default: lmsys_Score)
+    --target: Target column name (default: lmarena_Score)
     --max-features: Maximum features to select
     --n-folds: CV folds
     --use-alt: Enable ALT target imputation
@@ -73,12 +69,8 @@ Configuration:
     --margin: Margin for top_by_margin_prob column (default: 20.0 points)
 
 Example Usage:
-    $ python predict.py --data clean_combined.csv --target LMSYS --max-features 20
-    $ python predict.py --data clean_combined.csv --margin 30  # custom margin
-
-    Or programmatically:
-    >>> from predict import main
-    >>> main(['--data', 'data.csv', '--target', 'LMSYS'])
+    $ python predict.py --knn_predict --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv
+    $ python predict.py --knn_predict --knn_dist_mult 2.5  # wider neighborhood
 
 Dependencies:
     Required: numpy, pandas, scikit-learn, joblib
@@ -139,8 +131,8 @@ from sklearn.neighbors import NearestNeighbors # type: ignore
 SEED = 42
 np.random.seed(SEED)
 
-TARGET = "lmsys_Score"
-ALT_TARGET = "lmarena_Score"
+TARGET = "lmarena_Score"  # style-controlled Arena ELO (was lmsys_Score before 2026-03-29)
+ALT_TARGET = "lmsys_Score"  # raw Arena ELO — now excluded as leakage (derived from same Arena voting)
 ID_COL = "model_name"
 
 
@@ -611,6 +603,7 @@ _LMARENA_STYLE_ONLY_PARTNERS = {
     "style_combined_length", "style_combined_header_count",
     "style_combined_bold_count", "style_combined_list_count",
     "_pw_top_style",
+    "_style_delta_low", "_style_delta_high",
 }
 
 
@@ -1071,6 +1064,13 @@ def _alt_cv_report(
 
 
 ALT_PCA_N_COMPONENTS = 10  # PCA(10)->BR; 10 slightly outperforms 12 in OOF CV (17.79 vs 18.14)
+ALT_COMMITTEE_ENABLED = False  # Set by --alt_committee CLI arg
+TIERED_ALT_ENABLED = False  # Set by --tiered_alt CLI arg
+TIERED_ALT_N_TIERS = 4  # Number of tiers for tiered ALT
+PSEUDO_MISSING_AUG_ENABLED = False  # Set by --pseudo_missing_aug
+PSEUDO_MISSING_WEIGHT = 0.4  # Sample weight for pseudo-imputed copies
+ALT_COMMITTEE_PCA_DIMS = [6, 8, 10, 12]  # PCA dimensions for committee members
+ALT_COMMITTEE_N_BOOTSTRAPS = 2  # Bootstrap subsamples per PCA dim
 
 # Cross-domain interaction ALT model: instead of PCA, use greedy-selected
 # standalone columns + cross-domain interactions (coding×writing, etc.).
@@ -2096,6 +2096,15 @@ def _fit_alt_model_on_rows(
                     np.column_stack([m.predict(X) for m in self.sub_models])
                 ),
             })()
+        elif regressor_type == "gp":
+            from sklearn.gaussian_process import GaussianProcessRegressor
+            from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
+            kernel = ConstantKernel(100.0**2) * RBF(length_scale=np.ones(X_train_combined.shape[1])) + WhiteKernel(noise_level=10.0**2)
+            br = GaussianProcessRegressor(
+                kernel=kernel, alpha=0.0, n_restarts_optimizer=3, random_state=42,
+                normalize_y=True,
+            )
+            br.fit(X_train_combined, y_fit)
         else:  # "bayes" (default)
             br = BayesianRidge(compute_score=False)
             br.fit(X_train_combined, y_fit, **fit_kwargs)
@@ -2134,7 +2143,7 @@ def _fit_alt_model_on_rows(
         X_all_combined = np.hstack(blocks_all)
 
         # Predict — handle models that don't support return_std
-        if hasattr(br, 'predict') and regressor_type == "bayes":
+        if hasattr(br, 'predict') and regressor_type in ("bayes", "gp"):
             pred_mu, pred_std = br.predict(X_all_combined, return_std=True)
         else:
             pred_mu = br.predict(X_all_combined)
@@ -2258,7 +2267,11 @@ def impute_alt_for_all(
         >>> alt_filled = result['filled']  # Use for downstream modeling
     """
     X_no_alt_all = pd.DataFrame(X_no_alt_all).copy()
-    fit = _fit_alt_model_on_rows(X_no_alt_all, pd.Series(alt_series), cfg)
+    if TIERED_ALT_ENABLED:
+        fit = _fit_tiered_alt(X_no_alt_all, pd.Series(alt_series), cfg,
+                              n_tiers=TIERED_ALT_N_TIERS)
+    else:
+        fit = _fit_alt_model_on_rows(X_no_alt_all, pd.Series(alt_series), cfg)
     alt_numeric = pd.to_numeric(pd.Series(alt_series), errors="coerce").reindex(X_no_alt_all.index)
 
     filled = alt_numeric.copy()
@@ -2282,6 +2295,370 @@ def impute_alt_for_all(
         "int_scaler": fit.get("int_scaler"),
         "interaction_names": fit.get("interaction_names", []),
         "combined_feature_names": fit.get("combined_feature_names", []),
+    }
+
+
+def _safe_corr(a, b):
+    """Correlation robust to constant arrays and numpy version quirks."""
+    a = np.asarray(a, dtype=float).ravel()
+    b = np.asarray(b, dtype=float).ravel()
+    if len(a) < 2 or np.std(a) < 1e-12 or np.std(b) < 1e-12:
+        return 0.0
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+def _select_features_corr(Xtr, ytr, k):
+    """Top-K features by absolute correlation."""
+    ytr = np.asarray(ytr, dtype=float).ravel()
+    corrs = np.array([abs(_safe_corr(Xtr[:, j], ytr)) for j in range(Xtr.shape[1])])
+    return np.argsort(corrs)[-k:]
+
+
+def _select_features_mrmr(Xtr, ytr, k):
+    """Minimum redundancy maximum relevance selection."""
+    ytr = np.asarray(ytr, dtype=float).ravel()
+    n_feats = Xtr.shape[1]
+    corrs_y = np.array([abs(_safe_corr(Xtr[:, j], ytr)) for j in range(n_feats)])
+    selected = []
+    remaining = list(range(n_feats))
+    best = remaining[int(np.argmax(corrs_y[remaining]))]
+    selected.append(best); remaining.remove(best)
+    for _ in range(k - 1):
+        if not remaining:
+            break
+        scores = []
+        for j in remaining:
+            redundancy = np.mean([abs(_safe_corr(Xtr[:, j], Xtr[:, s]))
+                                  for s in selected]) if selected else 0
+            scores.append(corrs_y[j] - redundancy)
+        bi = int(np.argmax(scores))
+        selected.append(remaining[bi]); remaining.remove(remaining[bi])
+    return np.array(selected)
+
+
+def _select_features_forward(Xtr, ytr, k, alpha=1.0):
+    """Forward stepwise selection using Ridge LOO error."""
+    from sklearn.linear_model import Ridge as _Rdg
+    n_feats = Xtr.shape[1]
+    selected = []
+    remaining = list(range(n_feats))
+    for _ in range(k):
+        if not remaining:
+            break
+        best_score, best_feat = -np.inf, remaining[0]
+        for j in remaining:
+            trial = selected + [j]
+            sc = StandardScaler()
+            X_s = sc.fit_transform(Xtr[:, trial])
+            m = _Rdg(alpha=alpha); m.fit(X_s, ytr)
+            pred = m.predict(X_s)
+            best_score_j = -float(np.mean((pred - ytr) ** 2))  # in-sample MSE (fast proxy)
+            if best_score_j > best_score:
+                best_score = best_score_j; best_feat = j
+        selected.append(best_feat); remaining.remove(best_feat)
+    return np.array(selected)
+
+
+def _fit_tier_model_simple(
+    X_all: np.ndarray,
+    y_known: np.ndarray,
+    known_idx: np.ndarray,
+    all_mask: np.ndarray,
+    select_method: str = "corr",
+    select_k: int = 5,
+    model_type: str = "ridge",
+    ridge_alpha: float = 1.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Fit a simple per-tier model: select features + fit model.
+
+    Returns (predictions_for_all, std_for_all) arrays of shape (n_all_in_tier,).
+    """
+    Xtr = X_all[known_idx]
+    ytr = y_known
+
+    k = min(select_k, Xtr.shape[1], len(ytr) - 2)
+    if k < 1:
+        fallback = float(np.mean(ytr))
+        return np.full(all_mask.sum(), fallback), np.full(all_mask.sum(), np.nan)
+
+    # Feature selection on training data
+    if select_method == "mrmr":
+        feat_idx = _select_features_mrmr(Xtr, ytr, k)
+    elif select_method == "forward":
+        feat_idx = _select_features_forward(Xtr, ytr, k, alpha=ridge_alpha)
+    else:  # "corr"
+        feat_idx = _select_features_corr(Xtr, ytr, k)
+
+    sc = StandardScaler()
+    Xtr_s = sc.fit_transform(Xtr[:, feat_idx])
+    X_all_tier = X_all[all_mask]
+    Xte_s = sc.transform(X_all_tier[:, feat_idx])
+
+    if model_type == "br":
+        m = BayesianRidge(compute_score=False)
+        m.fit(Xtr_s, ytr)
+        pred, std = m.predict(Xte_s, return_std=True)
+    else:  # "ridge"
+        from sklearn.linear_model import Ridge as _Rdg2
+        m = _Rdg2(alpha=ridge_alpha)
+        m.fit(Xtr_s, ytr)
+        pred = m.predict(Xte_s)
+        std = np.full_like(pred, np.nan)
+
+    return pred, std
+
+
+TIERED_ALT_SELECT_METHOD = "corr"  # corr, mrmr, forward
+TIERED_ALT_SELECT_K = 5
+TIERED_ALT_MODEL_TYPE = "ridge"  # ridge, br
+TIERED_ALT_RIDGE_ALPHA = 1.0
+
+
+def _fit_tiered_alt(
+    X_no_alt_all: pd.DataFrame,
+    alt_series: pd.Series,
+    cfg: dict,
+    train_idx: Optional[np.ndarray] = None,
+    n_tiers: int = 4,
+    interaction_pairs: Optional[List[Tuple[str, str]]] = None,
+    sample_weight: Optional[np.ndarray] = None,
+) -> Dict[str, Union[pd.Series, List[str], float]]:
+    """Two-pass tiered ALT imputation.
+
+    Pass 1: Global PCA+BayesianRidge predicts lmarena for tier assignment.
+            Uses 5-fold CV for known models (leakage-free tier assignment).
+    Pass 2: Per-tier simple model (feature selection + Ridge/BR) refines prediction.
+            Feature selection method and model type controlled by globals.
+    """
+    X_df = pd.DataFrame(X_no_alt_all).copy()
+    alt_numeric = pd.to_numeric(pd.Series(alt_series), errors="coerce").reindex(X_df.index)
+
+    n_total = len(X_df)
+    if train_idx is None:
+        train_idx = np.arange(n_total)
+    train_idx = np.asarray(train_idx, dtype=int)
+
+    train_mask = pd.Series(False, index=X_df.index)
+    if len(train_idx):
+        train_mask.iloc[train_idx] = True
+    known_mask = alt_numeric.notna()
+    train_known_mask = train_mask & known_mask
+    known_indices = np.where(train_known_mask.values)[0]
+    n_known = int(train_known_mask.sum())
+    fallback = float(np.nanmean(alt_numeric.loc[train_known_mask])) if n_known else 0.0
+
+    min_per_tier = 8
+    if n_known < n_tiers * min_per_tier:
+        return _fit_alt_model_on_rows(X_df, alt_numeric, cfg, train_idx,
+                                       sample_weight=sample_weight,
+                                       interaction_pairs=interaction_pairs)
+
+    # --- Pass 1: Global model for tier assignment ---
+    global_fit = _fit_alt_model_on_rows(
+        X_df, alt_numeric, cfg, train_idx,
+        sample_weight=sample_weight,
+        interaction_pairs=interaction_pairs,
+    )
+    global_pred_all = global_fit["pred_all"].values
+
+    # OOF predictions for leakage-free tier assignment of known models
+    from sklearn.model_selection import KFold as _KF_tier
+    oof_preds_known = np.full(n_total, np.nan)
+    kf = _KF_tier(n_splits=5, shuffle=True, random_state=42)
+    for fold_tr, fold_va in kf.split(np.arange(len(known_indices))):
+        fold_train_global = known_indices[fold_tr]
+        fold_fit = _fit_alt_model_on_rows(
+            X_df, alt_numeric, cfg, fold_train_global,
+            interaction_pairs=interaction_pairs,
+        )
+        for vi in fold_va:
+            gi = known_indices[vi]
+            oof_preds_known[gi] = fold_fit["pred_all"].iloc[gi]
+
+    tier_scores = np.where(train_known_mask.values, oof_preds_known, global_pred_all)
+
+    # --- Pass 2: Tier assignment + per-tier models ---
+    known_tier_scores = tier_scores[known_indices]
+    sorted_scores = np.sort(known_tier_scores)[::-1]
+    boundaries = []
+    tier_size = n_known // n_tiers
+    for t in range(1, n_tiers):
+        boundaries.append(sorted_scores[min(t * tier_size, n_known - 1)])
+
+    def assign_tier(score):
+        for t, b in enumerate(boundaries):
+            if score >= b:
+                return t
+        return n_tiers - 1
+
+    all_tiers = np.array([assign_tier(s) for s in tier_scores])
+
+    # Raw feature matrix (no PCA — tier models use raw features)
+    svd_cols = [c for c in X_df.columns if c.startswith("_svd_f")]
+    raw_cols = [c for c in X_df.columns if c not in svd_cols]
+    X_raw = X_df[raw_cols].values
+
+    final_pred = np.full(n_total, fallback)
+    final_std = np.full(n_total, np.nan)
+    tier_info = []
+
+    sel_method = TIERED_ALT_SELECT_METHOD
+    sel_k = TIERED_ALT_SELECT_K
+    mdl_type = TIERED_ALT_MODEL_TYPE
+    alpha = TIERED_ALT_RIDGE_ALPHA
+
+    for t in range(n_tiers):
+        tier_known_idx = known_indices[all_tiers[known_indices] == t]
+        tier_all_mask = all_tiers == t
+        n_tier_known = len(tier_known_idx)
+
+        if n_tier_known < min_per_tier:
+            final_pred[tier_all_mask] = global_pred_all[tier_all_mask]
+            tier_info.append(f"t{t}:n={n_tier_known}(global)")
+            continue
+
+        tier_y = alt_numeric.iloc[tier_known_idx].values
+        pred, std = _fit_tier_model_simple(
+            X_raw, tier_y, tier_known_idx, tier_all_mask,
+            select_method=sel_method, select_k=sel_k,
+            model_type=mdl_type, ridge_alpha=alpha,
+        )
+        final_pred[tier_all_mask] = pred
+        final_std[tier_all_mask] = std
+
+        tier_range = alt_numeric.iloc[tier_known_idx]
+        tier_info.append(
+            f"t{t}:n={n_tier_known},[{tier_range.min():.0f}-{tier_range.max():.0f}]"
+        )
+
+    print(f"  Tiered ALT ({n_tiers}t, {sel_method}-{sel_k}, {mdl_type}): {', '.join(tier_info)}")
+
+    pred_all = pd.Series(final_pred, index=X_df.index, dtype="float64")
+    pred_std_all = pd.Series(final_std, index=X_df.index, dtype="float64")
+
+    return {
+        "pred_all": pred_all,
+        "pred_std_all": pred_std_all,
+        "selected_features": global_fit["selected_features"],
+        "fallback_value": fallback,
+        "n_known": n_known,
+        "fitted_model": None,  # no single model — multiple tier models
+        "calibration_summary": None,
+        "pca_scaler": None,
+        "pca": None,
+        "int_scaler": None,
+        "interaction_names": [],
+        "combined_feature_names": [],
+    }
+
+
+def _fit_alt_committee(
+    X_no_alt_all: pd.DataFrame,
+    alt_series: pd.Series,
+    cfg: dict,
+    train_idx: Optional[np.ndarray] = None,
+    pca_dims: Optional[List[int]] = None,
+    n_bootstraps: int = 2,
+    knn_k: int = 5,
+    interaction_pairs: Optional[List[Tuple[str, str]]] = None,
+) -> Dict[str, Union[pd.Series, np.ndarray]]:
+    """Fit a committee of ALT models and return ensemble statistics.
+
+    Fits len(pca_dims) × n_bootstraps BayesianRidge models, each with a
+    different PCA dimensionality and bootstrap subsample. Returns:
+    - mu_bar: consensus prediction (mean across committee)
+    - u_total: total uncertainty (sqrt of aleatoric + epistemic variance)
+    - d_support: mean distance to k nearest known-lmarena neighbors in PCA space
+    """
+    if pca_dims is None:
+        pca_dims = ALT_COMMITTEE_PCA_DIMS
+
+    X_df = pd.DataFrame(X_no_alt_all).copy()
+    alt_numeric = pd.to_numeric(pd.Series(alt_series), errors="coerce").reindex(X_df.index)
+    known_mask = alt_numeric.notna()
+
+    if train_idx is None:
+        train_idx = np.arange(len(X_df))
+    train_idx = np.asarray(train_idx, dtype=int)
+    train_known_mask = pd.Series(False, index=X_df.index)
+    train_known_mask.iloc[train_idx] = True
+    train_known_mask = train_known_mask & known_mask
+    n_known = int(train_known_mask.sum())
+
+    if n_known < 5:
+        fallback = float(np.nanmean(alt_numeric.loc[train_known_mask])) if n_known else 0.0
+        n_all = len(X_df)
+        return {
+            "mu_bar": pd.Series(fallback, index=X_df.index, dtype="float64"),
+            "u_total": pd.Series(50.0, index=X_df.index, dtype="float64"),
+            "d_support": pd.Series(999.0, index=X_df.index, dtype="float64"),
+            "committee_preds": np.full((1, n_all), fallback),
+        }
+
+    # Collect predictions from each committee member
+    all_preds = []
+    all_stds = []
+    rng = np.random.RandomState(42)
+    known_indices = np.where(train_known_mask.values)[0]
+
+    for n_pca in pca_dims:
+        # Temporarily override global PCA components
+        saved = globals().get("ALT_PCA_N_COMPONENTS", 10)
+        globals()["ALT_PCA_N_COMPONENTS"] = n_pca
+        try:
+            for b in range(n_bootstraps):
+                # Bootstrap subsample of known training rows (80%)
+                n_sample = max(int(0.8 * len(known_indices)), n_pca + 2)
+                boot_idx = rng.choice(known_indices, size=min(n_sample, len(known_indices)), replace=True)
+                fit = _fit_alt_model_on_rows(
+                    X_df, alt_numeric, cfg,
+                    train_idx=boot_idx,
+                    interaction_pairs=interaction_pairs,
+                )
+                pred = fit["pred_all"].values
+                std = fit.get("pred_std_all", pd.Series(np.nan, index=X_df.index)).values
+                all_preds.append(pred)
+                all_stds.append(std)
+        finally:
+            globals()["ALT_PCA_N_COMPONENTS"] = saved
+
+    preds_matrix = np.array(all_preds)  # shape (n_members, n_models)
+    stds_matrix = np.array(all_stds)
+
+    # Consensus prediction
+    mu_bar = np.mean(preds_matrix, axis=0)
+
+    # Total uncertainty: aleatoric (mean of individual variances) + epistemic (variance of means)
+    aleatoric_var = np.nanmean(stds_matrix ** 2, axis=0)
+    epistemic_var = np.var(preds_matrix, axis=0)
+    u_total = np.sqrt(aleatoric_var + epistemic_var)
+
+    # Support distance: mean distance to k nearest known-lmarena neighbors
+    # Use standardized base features (same as what PCA sees)
+    svd_cols = [c for c in X_df.columns if c.startswith("_svd_f")]
+    base_cols = [c for c in X_df.columns if c not in svd_cols]
+    X_base = X_df[base_cols].values
+    from sklearn.preprocessing import StandardScaler as _SS
+    scaler = _SS()
+    X_scaled = scaler.fit_transform(X_base)
+    known_scaled = X_scaled[known_mask.values]
+    from sklearn.neighbors import NearestNeighbors
+    nn = NearestNeighbors(n_neighbors=min(knn_k, len(known_scaled)), metric="euclidean")
+    nn.fit(known_scaled)
+    dists, _ = nn.kneighbors(X_scaled)
+    d_support = np.mean(dists, axis=1)
+
+    n_members = len(all_preds)
+    print(f"  ALT committee: {n_members} members (PCA dims {pca_dims} × {n_bootstraps} bootstraps)")
+    print(f"  mu_bar range: [{mu_bar.min():.0f}, {mu_bar.max():.0f}], "
+          f"u_total range: [{u_total.min():.1f}, {u_total.max():.1f}], "
+          f"d_support range: [{d_support.min():.1f}, {d_support.max():.1f}]")
+
+    return {
+        "mu_bar": pd.Series(mu_bar, index=X_df.index, dtype="float64"),
+        "u_total": pd.Series(u_total, index=X_df.index, dtype="float64"),
+        "d_support": pd.Series(d_support, index=X_df.index, dtype="float64"),
+        "committee_preds": preds_matrix,
     }
 
 
@@ -3629,6 +4006,170 @@ def cross_val_rmse_multi_seed(
 
     return float(np.mean(results)), float(np.std(results, ddof=1))
 
+# ---------------------------------------------------------------------------
+# Adaptive KNN + Kernel Ridge + Jackknife Variance Inflation
+# ---------------------------------------------------------------------------
+
+KNN_DIST_MULT = 2.0   # include neighbors within dist_mult × nearest distance
+KNN_MAX_K = 80
+KNN_MIN_K = 20
+KNN_BW_PCT = 0.3      # kernel bandwidth at this percentile of neighbor distances
+KNN_VI_CLIP = (1.0, 1.5)
+
+
+def predict_adaptive_knn(
+    Xtr: np.ndarray,
+    y_tr: np.ndarray,
+    Xte: np.ndarray,
+    dist_mult: float = KNN_DIST_MULT,
+    max_k: int = KNN_MAX_K,
+    min_k: int = KNN_MIN_K,
+    bw_pct: float = KNN_BW_PCT,
+    vi_clip: tuple = KNN_VI_CLIP,
+) -> Tuple[float, float, int]:
+    """Predict a single test point using adaptive KNN + kernel Ridge + jackknife VI.
+
+    Returns (prediction, std_estimate, k_used).
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    nn = NearestNeighbors(n_neighbors=max_k)
+    nn.fit(Xtr)
+    dists, idx = nn.kneighbors(Xte)
+    d, ix = dists[0], idx[0]
+
+    # Adaptive k: include all within dist_mult × nearest distance
+    max_dist = d[0] * dist_mult
+    k = max(min_k, min(int((d <= max_dist).sum()), max_k))
+
+    y_nb = y_tr[ix[:k]]
+    Xtr_nb = Xtr[ix[:k]]
+
+    # Gaussian kernel weights
+    bw_idx = max(1, int(k * bw_pct))
+    bw = d[bw_idx] if bw_idx < k else d[k - 1]
+    bw = max(bw, 1e-6)
+    w = np.exp(-0.5 * (d[:k] / bw) ** 2)
+
+    # Adaptive alpha = score spread of neighbors
+    alpha = max(10.0, float(np.std(y_nb)))
+
+    # Fit weighted Ridge
+    mdl = Ridge(alpha=alpha)
+    mdl.fit(Xtr_nb, y_nb, sample_weight=w)
+    p = float(mdl.predict(Xte)[0])
+
+    # Jackknife variance inflation
+    mu_nb = float(np.mean(y_nb))
+    jack_preds = np.zeros(k)
+    for j in range(k):
+        mj = np.ones(k, dtype=bool)
+        mj[j] = False
+        mdl_j = Ridge(alpha=alpha)
+        mdl_j.fit(Xtr_nb[mj], y_nb[mj], sample_weight=w[mj])
+        jack_preds[j] = mdl_j.predict(Xtr_nb[j:j + 1])[0]
+
+    yc = y_nb - mu_nb
+    pc = jack_preds - mu_nb
+    denom = float(np.dot(pc, pc))
+    if denom > 1e-8:
+        b = float(np.clip(np.dot(yc, pc) / denom, vi_clip[0], vi_clip[1]))
+    else:
+        b = 1.0
+
+    p_corrected = mu_nb + b * (p - mu_nb)
+
+    # Rough std estimate from jackknife residuals
+    jack_resid = y_nb - jack_preds
+    std_est = float(np.std(jack_resid))
+
+    return p_corrected, std_est, k
+
+
+def fit_and_predict_knn(
+    X_all: np.ndarray,
+    y_all: np.ndarray,
+    train_idx: np.ndarray,
+    pred_idx: np.ndarray,
+    cv_splits: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
+    cv_repeats: int = 10,
+    cv_seed: int = SEED,
+    dist_mult: float = KNN_DIST_MULT,
+    max_k: int = KNN_MAX_K,
+    min_k: int = KNN_MIN_K,
+    bw_pct: float = KNN_BW_PCT,
+) -> Dict[str, np.ndarray]:
+    """Fit adaptive KNN on training data and predict all rows.
+
+    Returns dict with keys: mu, std, lower, upper, oof_preds, oof_folds, ks_used.
+    """
+    n_all = len(y_all)
+    n_train = len(train_idx)
+    y_train = y_all[train_idx]
+
+    # --- OOF predictions via CV splits ---
+    if cv_splits is None:
+        cv_splits = _build_repeated_splits(n_train, 5, cv_repeats, cv_seed)
+
+    oof_preds_sum = np.zeros(n_train)
+    oof_counts = np.zeros(n_train)
+    oof_folds = np.full(n_train, -1, dtype=int)
+
+    for fold_idx, (tr, va) in enumerate(cv_splits):
+        sc = StandardScaler()
+        Xtr = sc.fit_transform(X_all[train_idx[tr]])
+        Xva = sc.transform(X_all[train_idx[va]])
+        ytr = y_train[tr]
+
+        for vi, va_i in enumerate(va):
+            p, _, _ = predict_adaptive_knn(
+                Xtr, ytr, Xva[vi:vi + 1],
+                dist_mult=dist_mult, max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+            )
+            oof_preds_sum[va_i] += p
+            oof_counts[va_i] += 1
+            oof_folds[va_i] = fold_idx % 5
+
+    oof_preds = np.where(oof_counts > 0, oof_preds_sum / oof_counts, np.nan)
+    oof_valid = oof_counts > 0
+    oof_rmse = float(np.sqrt(np.nanmean((oof_preds[oof_valid] - y_train[oof_valid]) ** 2)))
+    print(f"  KNN OOF RMSE: {oof_rmse:.2f} ({int(oof_valid.sum())}/{n_train} valid)")
+
+    # --- Final predictions for all rows ---
+    sc_final = StandardScaler()
+    X_train_sc = sc_final.fit_transform(X_all[train_idx])
+    X_all_sc = sc_final.transform(X_all)
+
+    mu = np.full(n_all, np.nan)
+    std = np.full(n_all, np.nan)
+    ks_used = np.zeros(n_all, dtype=int)
+
+    for i in pred_idx:
+        p, s, k = predict_adaptive_knn(
+            X_train_sc, y_train, X_all_sc[i:i + 1],
+            dist_mult=dist_mult, max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+        )
+        mu[i] = p
+        std[i] = s
+        ks_used[i] = k
+
+    lower = mu - 1.96 * std
+    upper = mu + 1.96 * std
+
+    avg_k = float(np.mean(ks_used[pred_idx]))
+    print(f"  KNN final predictions: {len(pred_idx)} models, avg k={avg_k:.0f}")
+
+    return {
+        "mu": mu,
+        "std": std,
+        "lower": lower,
+        "upper": upper,
+        "oof_preds": oof_preds,
+        "oof_folds": oof_folds,
+        "ks_used": ks_used,
+    }
+
+
 def fit_and_predict_all(
     specs: List[ModelSpec],
     X_train: np.ndarray,
@@ -4304,10 +4845,16 @@ def _precompute_single_fold(
         sample_weight=w_tr,
     )
 
-    alt_fit_full = _fit_alt_model_on_rows(
-        X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, tr,
-        sample_weight=sample_weight,
-    )
+    if TIERED_ALT_ENABLED:
+        alt_fit_full = _fit_tiered_alt(
+            X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, tr,
+            n_tiers=TIERED_ALT_N_TIERS,
+        )
+    else:
+        alt_fit_full = _fit_alt_model_on_rows(
+            X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, tr,
+            sample_weight=sample_weight,
+        )
     alt_pred_all = alt_fit_full["pred_all"]
 
     Xtr_df = X_df.iloc[tr].copy()
@@ -4364,6 +4911,31 @@ def _precompute_single_fold(
             )
 
     Xtr_out, ytr_out, wtr_out = Xtr_sel.values, y[tr], w_tr
+
+    # Pseudo-missing augmentation: add copies of training rows where real
+    # lmarena is replaced with OOF-predicted lmarena, weighted down.
+    # This teaches the model that imputed lmarena should carry less signal.
+    if PSEUDO_MISSING_AUG_ENABLED and alt_col in Xtr_sel.columns:
+        alt_col_idx = list(Xtr_sel.columns).index(alt_col)
+        # oof_preds_tr contains cross-fitted ALT predictions for training rows
+        pseudo_X = Xtr_sel.values.copy()
+        pseudo_X[:, alt_col_idx] = oof_preds_tr.values
+        # Also update any interaction columns involving alt_col
+        for ci, cname in enumerate(Xtr_sel.columns):
+            if "*" in cname:
+                parts = cname.split("*")
+                if alt_col in parts:
+                    partner = parts[0] if parts[1] == alt_col else parts[1]
+                    if partner in Xtr_sel.columns:
+                        pi = list(Xtr_sel.columns).index(partner)
+                        pseudo_X[:, ci] = pseudo_X[:, alt_col_idx] * pseudo_X[:, pi]
+        Xtr_out = np.vstack([Xtr_out, pseudo_X])
+        ytr_out = np.concatenate([ytr_out, y[tr]])
+        pseudo_w = np.full(len(tr), PSEUDO_MISSING_WEIGHT)
+        if wtr_out is not None:
+            wtr_out = np.concatenate([wtr_out, pseudo_w])
+        else:
+            wtr_out = np.concatenate([np.ones(len(tr)), pseudo_w])
 
     # Apply top-tier boost (duplicate high-ELO rows in training)
     Xtr_out, ytr_out, wtr_out = _apply_top_tier_boost(
@@ -4476,7 +5048,7 @@ def choose_best_model_with_alt(
     top_tier_threshold = TOP_TIER_THRESHOLD
 
     if alt_col not in X_df.columns:
-        # No ALT column: fall back to simple per-spec CV
+        # No ALT column: fall back to simple per-spec CV with OOF predictions
         def _eval_spec_simple(spec: ModelSpec):
             m, s = cross_val_rmse_for_model(
                 spec, X_df.values, y,
@@ -4484,9 +5056,18 @@ def choose_best_model_with_alt(
                 splits=splits, cv_repeats=cv_repeats, seed=seed,
                 sample_weight=sample_weight, dense_mask=dense_mask,
             )
+            # Compute OOF predictions for conformal calibration
+            X_vals = X_df.values
+            oof_preds = np.full(len(y), np.nan)
+            oof_folds = np.full(len(y), -1, dtype=int)
+            for fold_idx, (tr, va) in enumerate(splits):
+                w_tr = sample_weight[tr] if sample_weight is not None else None
+                mdl = spec.build(X_vals[tr], y[tr], w_tr)
+                oof_preds[va] = mdl.predict(X_vals[va])
+                oof_folds[va] = fold_idx
             return {"model": spec.name, "rmse_mean": m, "rmse_std": s,
-                    "oof_preds": np.full(len(y), np.nan),
-                    "oof_folds": np.full(len(y), -1, dtype=int)}
+                    "oof_preds": oof_preds,
+                    "oof_folds": oof_folds}
 
         if model_n_jobs == 1:
             rows = [_eval_spec_simple(spec) for spec in specs]
@@ -5318,6 +5899,14 @@ def main():
     ap.add_argument("--greedy_residual_poly", action="store_true",
                     help="Also consider A*B interaction terms as greedy residual candidates. "
                          "Selecting A*B does NOT require selecting A or B separately.")
+    ap.add_argument("--force_features", type=str, default="",
+                    help="Comma-separated feature names to force into the selected set "
+                         "(added after feature selection, before poly expansion).")
+    ap.add_argument("--drop_features", type=str, default="",
+                    help="Comma-separated feature names to drop from the selected set "
+                         "(removed after feature selection + force, before poly expansion). "
+                         "Drops main effects only — interactions involving these features "
+                         "are still created if the feature was selected before dropping.")
     ap.add_argument("--selector_k_grid", default="4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,25,all")
         # interaction options
     ap.add_argument("--poly_interactions", action="store_true",
@@ -5330,8 +5919,56 @@ def main():
                     help="Use ALT-centric interactions (ALT*feature) ranked by residual correlation instead of variance-based poly.")
     ap.add_argument("--alt_centric_k", type=int, default=6,
                     help="Number of ALT*feature interactions to keep when using alt-centric poly.")
-    ap.add_argument("--alt_regressor", choices=["bayes", "lgbm", "ridge", "stack"], default="bayes",
-                help="Regressor for ALT model: bayes (BayesianRidge), lgbm (LightGBM), ridge, stack (BR+LGBM+Ridge).")
+    ap.add_argument("--alt_regressor", choices=["bayes", "lgbm", "ridge", "stack", "gp"], default="bayes",
+                help="Regressor for ALT model: bayes (BayesianRidge), gp (Gaussian Process), lgbm, ridge, stack.")
+    ap.add_argument("--alt_committee", action="store_true",
+                help="Use committee of ALT models (PCA dims {6,8,10,12} × 2 bootstraps) "
+                     "to produce uncertainty estimates (u_total, d_support).")
+    ap.add_argument("--tiered_alt", action="store_true",
+                help="Two-pass tiered ALT: global model assigns tiers, per-tier models refine. "
+                     "Different features matter at different lmarena levels.")
+    ap.add_argument("--tiered_alt_n_tiers", type=int, default=4,
+                help="Number of tiers for tiered ALT (default 4 = quartiles).")
+    ap.add_argument("--tiered_alt_select", choices=["corr", "mrmr", "forward"], default="corr",
+                help="Feature selection method for per-tier models (default corr).")
+    ap.add_argument("--tiered_alt_k", type=int, default=5,
+                help="Number of features to select per tier (default 5).")
+    ap.add_argument("--tiered_alt_model", choices=["ridge", "br"], default="ridge",
+                help="Model type for per-tier models: ridge or br (default ridge).")
+    ap.add_argument("--tiered_alt_alpha", type=float, default=1.0,
+                help="Ridge alpha for per-tier models (default 1.0).")
+    ap.add_argument("--direct_target", action="store_true",
+                help="Skip lmarena entirely. Predict Arena ELO directly from benchmarks + style. "
+                     "No ALT imputation, no two-stage pipeline.")
+    ap.add_argument("--knn_predict", action="store_true",
+                help="Use adaptive KNN + kernel Ridge + jackknife VI for prediction. "
+                     "Bypasses the two-stage ALT pipeline. Best for lmarena target (R²=0.927).")
+    ap.add_argument("--knn_dist_mult", type=float, default=2.0,
+                help="Distance multiplier for adaptive k cutoff (default 2.0).")
+    ap.add_argument("--knn_max_k", type=int, default=80,
+                help="Maximum k for adaptive KNN (default 80).")
+    ap.add_argument("--knn_min_k", type=int, default=20,
+                help="Minimum k for adaptive KNN (default 20).")
+    ap.add_argument("--knn_bw_pct", type=float, default=0.3,
+                help="Bandwidth percentile for Gaussian kernel (default 0.3).")
+    ap.add_argument("--tiered_target", action="store_true",
+                help="Fit per-tier target models for Arena ELO prediction. "
+                     "Uses OOF predictions for tier assignment (no leakage).")
+    ap.add_argument("--tiered_target_n_tiers", type=int, default=4,
+                help="Number of tiers for tiered target model (default 4).")
+    ap.add_argument("--tiered_target_select", choices=["corr", "mrmr", "forward"], default="corr",
+                help="Feature selection for per-tier target models (default corr).")
+    ap.add_argument("--tiered_target_k", type=int, default=5,
+                help="Features per tier for target model (default 5).")
+    ap.add_argument("--tiered_target_model", choices=["ridge", "br"], default="ridge",
+                help="Model type for per-tier target (default ridge).")
+    ap.add_argument("--tiered_target_alpha", type=float, default=1.0,
+                help="Ridge alpha for per-tier target models (default 1.0).")
+    ap.add_argument("--pseudo_missing_aug", action="store_true",
+                help="Augment training with pseudo-imputed copies of known-lmarena rows. "
+                     "Teaches the model that imputed lmarena carries less weight.")
+    ap.add_argument("--pseudo_missing_weight", type=float, default=0.4,
+                help="Sample weight for pseudo-missing augmented rows (default 0.4).")
     ap.add_argument("--alt_feature_selector", choices=["none", "lgbm", "xgb"], default="lgbm",
                 help="Tree-based selector for the ALT model (per-fold).")
     ap.add_argument("--alt_top_k_features", default="auto",
@@ -5406,6 +6043,53 @@ def main():
                          "Counteracts regularisation shrinkage for extreme models.")
     ap.add_argument("--top_tier_threshold", type=float, default=1450.0,
                     help="ELO threshold for top-tier boost (default 1450).")
+    ap.add_argument("--conformal_alt_feature", action="store_true",
+                help="Add calibrated ALT conformal interval width as a feature.")
+    ap.add_argument("--loo_residual_profile", action="store_true",
+                help="Add LOO-predicted expected ALT imputation error as a feature. "
+                     "Works best with --alt_committee for d_support/u_total meta features.")
+    ap.add_argument("--adversarial_k", type=int, default=0,
+                help="Number of Monte Carlo samples for adversarial imputation (0=disabled). "
+                     "Samples lmarena from ALT uncertainty, re-predicts, averages. "
+                     "Requires ALT pred_std or --alt_committee.")
+    ap.add_argument("--alt_log_barrier", action="store_true",
+                help="(C) Sigmoid-bound ALT predictions to prevent extrapolation beyond observed range.")
+    ap.add_argument("--alt_barrier_margin", type=float, default=30.0,
+                help="Margin above max observed lmarena for log-barrier ceiling (default 30).")
+    ap.add_argument("--alt_convex_hull", action="store_true",
+                help="(D) Represent missing models as NNLS mixture of known models. "
+                     "Predictions bounded by convex hull of known scores.")
+    ap.add_argument("--alt_rank_transform", action="store_true",
+                help="(E) Map ALT predictions to percentile rank then back via empirical CDF. "
+                     "Predictions bounded to [min_known, max_known].")
+    ap.add_argument("--alt_pairwise", action="store_true",
+                help="(F) Pairwise ranking ALT: Bradley-Terry on benchmark differences, "
+                     "isotonic regression to map win-rate to score.")
+    ap.add_argument("--alt_delta_pred", action="store_true",
+                help="(G) KNN-based ALT: weighted average of nearest known-lmarena neighbors. "
+                     "Cannot extrapolate beyond convex hull.")
+    ap.add_argument("--dual_model", action="store_true",
+                help="(A) Train backup model without lmarena. Use backup for imputed models.")
+    ap.add_argument("--optimal_latent", action="store_true",
+                help="(B) Learn downstream-optimal latent z=f(benchmarks) that minimizes Arena error "
+                     "while staying near real lmarena. Use for imputed models.")
+    ap.add_argument("--optimal_latent_lambda", type=float, default=0.5,
+                help="Weight for lmarena anchor in optimal latent (default 0.5).")
+    ap.add_argument("--propagate_alt_variance", action="store_true",
+                help="Inflate conformal intervals for models with uncertain imputed lmarena. "
+                     "Uses analytic sensitivity dy/dlmarena × u_total². Requires --alt_committee.")
+    ap.add_argument("--uncertainty_gated_alt", action="store_true",
+                help="Replace lmarena with uncertainty-gated extrapolation basis: "
+                     "lmarena_in (capped), lmarena_out_confident, lmarena_out_uncertain. "
+                     "Requires --alt_committee.")
+    ap.add_argument("--gate_tau", type=float, default=15.0,
+                help="Uncertainty scale for reliability gate (default 15).")
+    ap.add_argument("--gate_h", type=float, default=5.0,
+                help="Support distance scale for reliability gate (default 5).")
+    ap.add_argument("--style_regime_split", action="store_true",
+                    help="Replace style_predicted_delta with two regime-specific features: "
+                         "_style_delta_low (below threshold) and _style_delta_high (above). "
+                         "Orthogonal by construction — lets ARD assign independent coefficients.")
     ap.add_argument("--style_only_final", action="store_true",
                     help="Restrict final-stage features to lmarena + style columns only. "
                          "Based on lmsys = lmarena + style_adjustment.")
@@ -5472,6 +6156,23 @@ def main():
 
     global ALT_REGRESSOR_NAME
     ALT_REGRESSOR_NAME = getattr(args, 'alt_regressor', 'bayes')
+
+    global ALT_COMMITTEE_ENABLED
+    ALT_COMMITTEE_ENABLED = getattr(args, 'alt_committee', False)
+
+    global TIERED_ALT_ENABLED, TIERED_ALT_N_TIERS
+    global TIERED_ALT_SELECT_METHOD, TIERED_ALT_SELECT_K
+    global TIERED_ALT_MODEL_TYPE, TIERED_ALT_RIDGE_ALPHA
+    TIERED_ALT_ENABLED = getattr(args, 'tiered_alt', False)
+    TIERED_ALT_N_TIERS = getattr(args, 'tiered_alt_n_tiers', 4)
+    TIERED_ALT_SELECT_METHOD = getattr(args, 'tiered_alt_select', 'corr')
+    TIERED_ALT_SELECT_K = getattr(args, 'tiered_alt_k', 5)
+    TIERED_ALT_MODEL_TYPE = getattr(args, 'tiered_alt_model', 'ridge')
+    TIERED_ALT_RIDGE_ALPHA = getattr(args, 'tiered_alt_alpha', 1.0)
+
+    global PSEUDO_MISSING_AUG_ENABLED, PSEUDO_MISSING_WEIGHT
+    PSEUDO_MISSING_AUG_ENABLED = getattr(args, 'pseudo_missing_aug', False)
+    PSEUDO_MISSING_WEIGHT = getattr(args, 'pseudo_missing_weight', 0.4)
 
     global CROSS_DOMAIN_ALT_ENABLED, CROSS_DOMAIN_TOP_K_COLS, CROSS_DOMAIN_ALPHA
     CROSS_DOMAIN_ALT_ENABLED = getattr(args, 'cross_domain_alt', False)
@@ -5826,6 +6527,15 @@ def main():
         "cv_repeats_outer": int(args.cv_repeats_outer),
         "cv_repeats_inner": int(args.cv_repeats_inner),
         "feature_cv_repeats": int(args.feature_cv_repeats),
+        "force_features": getattr(args, "force_features", ""),
+        "drop_features": getattr(args, "drop_features", ""),
+        "alt_committee": getattr(args, "alt_committee", False),
+        "knn_predict": getattr(args, "knn_predict", False),
+        "knn_dist_mult": getattr(args, "knn_dist_mult", 2.0),
+        "knn_max_k": getattr(args, "knn_max_k", 80),
+        "knn_min_k": getattr(args, "knn_min_k", 20),
+        "tiered_alt": getattr(args, "tiered_alt", False),
+        "tiered_alt_n_tiers": getattr(args, "tiered_alt_n_tiers", 4),
         "alt_cv_repeats": int(args.alt_cv_repeats),
         "cv_seed": int(args.cv_seed),
         "selector_cv": int(args.selector_cv),
@@ -5907,6 +6617,15 @@ def main():
     
     alt_result = None
     alt_feature_matrix: Optional[pd.DataFrame] = None
+
+    # Direct target: skip lmarena entirely, predict Arena from benchmarks + style
+    if getattr(args, "direct_target", False):
+        if ALT_TARGET in df.columns:
+            df = df.drop(columns=[ALT_TARGET])
+        if ALT_TARGET in safe_features.columns:
+            safe_features = safe_features.drop(columns=[ALT_TARGET])
+        print("Direct target: skipping lmarena, predicting Arena from benchmarks + style directly")
+
     if ALT_TARGET in df.columns:
         print(f"ALT regressor: {ALT_REGRESSOR_NAME}")
 
@@ -6094,7 +6813,219 @@ def main():
         alt_result["poly_limit"] = int(args.poly_limit) if args.poly_limit else 0
         alt_result["poly_include_squares"] = bool(args.poly_include_squares)
         alt_filled = alt_result["filled"]
+
+        # --- ALT post-processing transforms (C, D, E, F, G) ---
+        alt_known = pd.to_numeric(df[ALT_TARGET], errors="coerce")
+        alt_known_mask = alt_known.notna()
+        alt_missing_mask = ~alt_known_mask
+
+        # (C) Log-barrier transform: compress extrapolation via sigmoid bounding
+        if getattr(args, "alt_log_barrier", False) and alt_missing_mask.any():
+            known_vals = alt_known.dropna().values
+            floor_val = float(np.min(known_vals)) - 50.0
+            ceil_val = float(np.max(known_vals)) + float(getattr(args, "alt_barrier_margin", 30.0))
+            raw_pred = alt_filled.values.copy()
+            # Sigmoid squash for imputed models only
+            imputed_pred = raw_pred[alt_missing_mask.values]
+            squashed = floor_val + (ceil_val - floor_val) / (1.0 + np.exp(-(imputed_pred - (floor_val + ceil_val)/2) / ((ceil_val - floor_val)/6)))
+            alt_filled = alt_filled.copy()
+            alt_filled.iloc[alt_missing_mask.values] = squashed
+            print(f"Log-barrier ALT: floor={floor_val:.0f}, ceil={ceil_val:.0f}, "
+                  f"max_raw={raw_pred[alt_missing_mask.values].max():.0f} -> max_squashed={squashed.max():.0f}")
+
+        # (D) Convex-hull predictor: represent model as NNLS mixture of known models
+        if getattr(args, "alt_convex_hull", False) and alt_missing_mask.any():
+            from scipy.optimize import nnls
+            # Use imputed benchmark features (no lmarena) for similarity
+            bench_cols = [c for c in safe_features.columns if c != ALT_TARGET]
+            X_bench = safe_features[bench_cols].values
+            known_idx = np.where(alt_known_mask.values)[0]
+            missing_idx = np.where(alt_missing_mask.values)[0]
+            X_known = X_bench[known_idx]
+            known_scores = alt_known.dropna().values
+            # For each missing model, find NNLS weights over known models
+            hull_preds = []
+            residual_norms = []
+            for i in missing_idx:
+                x_new = X_bench[i]
+                # Solve: min ||X_known.T @ w - x_new||^2, w >= 0
+                w, rnorm = nnls(X_known.T, x_new)
+                w_sum = w.sum()
+                if w_sum > 1e-8:
+                    w = w / w_sum  # normalize to convex combination
+                    pred = float(np.dot(w, known_scores))
+                else:
+                    pred = float(np.mean(known_scores))
+                hull_preds.append(pred)
+                residual_norms.append(rnorm)
+            alt_filled = alt_filled.copy()
+            alt_filled.iloc[missing_idx] = hull_preds
+            print(f"Convex-hull ALT: {len(missing_idx)} models, "
+                  f"pred range=[{min(hull_preds):.0f}, {max(hull_preds):.0f}]")
+
+        # (E) Rank-transform: predict percentile rank, map back via empirical CDF
+        if getattr(args, "alt_rank_transform", False) and alt_missing_mask.any():
+            known_scores = np.sort(alt_known.dropna().values)
+            raw_pred = alt_filled.values.copy()
+            imputed_pred = raw_pred[alt_missing_mask.values]
+            # Map raw prediction to rank among known scores, then back to score
+            # This clips to [min_known, max_known] naturally
+            rank_preds = []
+            for p in imputed_pred:
+                # Find interpolated position in known distribution
+                rank_frac = np.searchsorted(known_scores, p) / len(known_scores)
+                rank_frac = np.clip(rank_frac, 0.5/len(known_scores), 1.0 - 0.5/len(known_scores))
+                # Map back: linear interpolation in known scores
+                idx_float = rank_frac * (len(known_scores) - 1)
+                idx_lo = int(np.floor(idx_float))
+                idx_hi = min(idx_lo + 1, len(known_scores) - 1)
+                frac = idx_float - idx_lo
+                mapped = known_scores[idx_lo] * (1 - frac) + known_scores[idx_hi] * frac
+                rank_preds.append(mapped)
+            alt_filled = alt_filled.copy()
+            missing_idx = np.where(alt_missing_mask.values)[0]
+            alt_filled.iloc[missing_idx] = rank_preds
+            print(f"Rank-transform ALT: pred range=[{min(rank_preds):.0f}, {max(rank_preds):.0f}], "
+                  f"max_known={known_scores[-1]:.0f}")
+
+        # (F) Pairwise ranking: Bradley-Terry on benchmark differences
+        if getattr(args, "alt_pairwise", False) and alt_missing_mask.any():
+            known_idx = np.where(alt_known_mask.values)[0]
+            missing_idx = np.where(alt_missing_mask.values)[0]
+            known_scores = alt_known.dropna().values
+            bench_cols = [c for c in safe_features.columns if c != ALT_TARGET]
+            X_bench = safe_features[bench_cols].values
+            # Build pairwise training data: X_i - X_j -> sign(score_i - score_j)
+            from sklearn.linear_model import LogisticRegression
+            pairs_X, pairs_y = [], []
+            rng = np.random.RandomState(42)
+            # Sample pairs (cap at 5000 for speed)
+            n_known = len(known_idx)
+            max_pairs = min(5000, n_known * (n_known - 1) // 2)
+            for _ in range(max_pairs):
+                i, j = rng.choice(n_known, 2, replace=False)
+                diff = X_bench[known_idx[i]] - X_bench[known_idx[j]]
+                label = 1 if known_scores[i] > known_scores[j] else 0
+                pairs_X.append(diff)
+                pairs_y.append(label)
+            pairs_X = np.array(pairs_X)
+            pairs_y = np.array(pairs_y)
+            # Fit logistic regression on differences
+            lr = LogisticRegression(C=0.1, max_iter=1000, random_state=42)
+            lr.fit(pairs_X, pairs_y)
+            # For each missing model, compute win probability vs each known model
+            # Then use win rates to estimate rank, map to score via isotonic
+            from sklearn.isotonic import IsotonicRegression
+            # First: compute win rates for known models (for calibration)
+            known_win_rates = []
+            for i in range(n_known):
+                diffs = X_bench[known_idx[i]] - X_bench[known_idx]
+                probs = lr.predict_proba(diffs)[:, 1]
+                win_rate = float(np.mean(probs))
+                known_win_rates.append(win_rate)
+            # Fit isotonic: win_rate -> score
+            iso = IsotonicRegression(out_of_bounds="clip")
+            iso.fit(known_win_rates, known_scores)
+            # Predict for missing models
+            pw_preds = []
+            for i in missing_idx:
+                diffs = X_bench[i] - X_bench[known_idx]
+                probs = lr.predict_proba(diffs)[:, 1]
+                win_rate = float(np.mean(probs))
+                pred = float(iso.predict([win_rate])[0])
+                pw_preds.append(pred)
+            alt_filled = alt_filled.copy()
+            alt_filled.iloc[missing_idx] = pw_preds
+            print(f"Pairwise ALT: {max_pairs} pairs, "
+                  f"pred range=[{min(pw_preds):.0f}, {max(pw_preds):.0f}]")
+
+        # (G) Delta from predecessor: predict Δ from nearest known model
+        if getattr(args, "alt_delta_pred", False) and alt_missing_mask.any():
+            from sklearn.neighbors import NearestNeighbors
+            bench_cols = [c for c in safe_features.columns if c != ALT_TARGET]
+            X_bench = safe_features[bench_cols].values
+            known_idx = np.where(alt_known_mask.values)[0]
+            missing_idx = np.where(alt_missing_mask.values)[0]
+            known_scores = alt_known.dropna().values
+            # Standardize
+            from sklearn.preprocessing import StandardScaler as _SSd
+            sc = _SSd()
+            X_scaled = sc.fit_transform(X_bench)
+            X_known_sc = X_scaled[known_idx]
+            # For each missing model, find nearest known model
+            nn = NearestNeighbors(n_neighbors=min(5, len(known_idx)), metric="euclidean")
+            nn.fit(X_known_sc)
+            dists, idxs = nn.kneighbors(X_scaled[missing_idx])
+            # Weighted average of nearest known scores (inverse distance weighting)
+            delta_preds = []
+            for i in range(len(missing_idx)):
+                d = dists[i]
+                w = 1.0 / (d + 1e-6)
+                w = w / w.sum()
+                pred = float(np.dot(w, known_scores[idxs[i]]))
+                delta_preds.append(pred)
+            alt_filled = alt_filled.copy()
+            alt_filled.iloc[missing_idx] = delta_preds
+            print(f"Delta-pred ALT: {len(missing_idx)} models, "
+                  f"pred range=[{min(delta_preds):.0f}, {max(delta_preds):.0f}]")
+
+        # ALT committee uncertainty (Exp 1)
+        alt_committee_result = None
+        if ALT_COMMITTEE_ENABLED:
+            print("Fitting ALT committee...")
+            alt_committee_result = _fit_alt_committee(
+                alt_feature_matrix, df[ALT_TARGET], ALT_SELECTOR_CFG,
+                pca_dims=ALT_COMMITTEE_PCA_DIMS,
+                n_bootstraps=ALT_COMMITTEE_N_BOOTSTRAPS,
+            )
+            # Use committee consensus instead of single-model prediction for missing values
+            alt_numeric = pd.to_numeric(df[ALT_TARGET], errors="coerce")
+            missing_mask = alt_numeric.isna()
+            alt_filled = alt_numeric.copy()
+            alt_filled.loc[missing_mask] = alt_committee_result["mu_bar"].loc[missing_mask]
+            alt_filled = alt_filled.astype(float)
+            # Save committee diagnostics
+            committee_diag = pd.DataFrame({
+                "model_name": df[ID_COL].values if ID_COL in df.columns else np.arange(len(alt_filled)),
+                "alt_actual": alt_numeric.values,
+                "alt_committee_mu": alt_committee_result["mu_bar"].values,
+                "alt_committee_u_total": alt_committee_result["u_total"].values,
+                "alt_committee_d_support": alt_committee_result["d_support"].values,
+                "alt_single_pred": alt_result["predicted"].values,
+                "alt_used": alt_filled.values,
+                "is_imputed": missing_mask.values.astype(int),
+            })
+            committee_diag.to_csv(os.path.join(out_dir, "alt_committee_diagnostics.csv"), index=False)
+
         safe_features = safe_features.assign(**{ALT_TARGET: alt_filled.values})
+
+        # Uncertainty-gated extrapolation basis (Exp 2)
+        if getattr(args, "uncertainty_gated_alt", False) and alt_committee_result is not None:
+            alt_vals = alt_filled.values
+            u_total = alt_committee_result["u_total"].values
+            d_support = alt_committee_result["d_support"].values
+            tau = getattr(args, "gate_tau", 15.0)
+            h = getattr(args, "gate_h", 5.0)
+            # Cutoff: 95th percentile of known lmarena
+            alt_known = pd.to_numeric(df[ALT_TARGET], errors="coerce")
+            cutoff = float(np.nanpercentile(alt_known.dropna(), 95))
+            # Reliability weight: high when confident AND locally supported
+            r = 1.0 / (1.0 + (u_total ** 2) / (tau ** 2) + (d_support ** 2) / (h ** 2))
+            # For models with real lmarena, r=1 (fully reliable)
+            real_mask = alt_known.notna().values
+            r[real_mask] = 1.0
+            lmarena_in = np.minimum(alt_vals, cutoff)
+            lmarena_excess = np.maximum(alt_vals - cutoff, 0)
+            lmarena_out_confident = lmarena_excess * r
+            lmarena_out_uncertain = lmarena_excess * (1 - r)
+            safe_features[ALT_TARGET] = lmarena_in
+            safe_features["_alt_out_confident"] = lmarena_out_confident
+            safe_features["_alt_out_uncertain"] = lmarena_out_uncertain
+            # Also add to lmarena style partners so interactions are allowed
+            _LMARENA_STYLE_ONLY_PARTNERS.add("_alt_out_confident")
+            _LMARENA_STYLE_ONLY_PARTNERS.add("_alt_out_uncertain")
+            print(f"Uncertainty-gated ALT: cutoff={cutoff:.0f}, "
+                  f"mean(r)={r.mean():.2f}, n_extrapolated={int((lmarena_excess > 0).sum())}")
 
         # Propagate SVD factors into safe_features so the inner ALT refit
         # (inside target CV) has the same feature set as the outer ALT.
@@ -6155,6 +7086,61 @@ def main():
         target_base_features = target_base_features[style_cols]
         print(f"Style-only final: kept {len(style_cols)} columns, dropped {dropped}")
 
+    # --- ALT uncertainty features (conformal, LOO profile, adversarial) ---
+    if ALT_TARGET in target_base_features.columns:
+        alt_pred_std = alt_result.get("pred_std", pd.Series(dtype=float))
+        alt_known = pd.to_numeric(df[ALT_TARGET], errors="coerce")
+        alt_known_mask = alt_known.notna()
+
+        # (A) Conformal ALT: calibrate ALT pred_std using split conformal
+        if getattr(args, "conformal_alt_feature", False) and alt_pred_std.notna().any():
+            alt_predicted = alt_result["predicted"]
+            alt_residuals = (alt_known[alt_known_mask] - alt_predicted[alt_known_mask]).abs().values
+            # Calibration: q_hat = quantile of |residual| / pred_std
+            cal_std = alt_pred_std[alt_known_mask].values
+            cal_std = np.maximum(cal_std, 1e-6)
+            normed_resid = alt_residuals / cal_std
+            q90 = float(np.percentile(normed_resid, 90))
+            conformal_width = q90 * alt_pred_std.values
+            # Zero for known models, real width for imputed
+            conformal_width[alt_known_mask.values] = 0.0
+            target_base_features["_alt_conformal_width"] = conformal_width
+            _LMARENA_STYLE_ONLY_PARTNERS.add("_alt_conformal_width")
+            print(f"Conformal ALT feature: q90={q90:.1f}, max_width={conformal_width.max():.1f}")
+
+        # (B) LOO residual profile: predict expected ALT imputation error
+        if getattr(args, "loo_residual_profile", False):
+            from sklearn.model_selection import LeaveOneOut
+            from sklearn.neighbors import KNeighborsRegressor
+            alt_predicted = alt_result["predicted"]
+            loo_errors = np.abs(alt_known[alt_known_mask].values - alt_predicted[alt_known_mask].values)
+            # Features for meta-model: pred_std, PCA distance, style extremity
+            meta_feats_names = []
+            meta_feats_all = []
+            if alt_pred_std.notna().any():
+                meta_feats_all.append(alt_pred_std.values)
+                meta_feats_names.append("pred_std")
+            if alt_committee_result is not None:
+                meta_feats_all.append(alt_committee_result["d_support"].values)
+                meta_feats_names.append("d_support")
+                meta_feats_all.append(alt_committee_result["u_total"].values)
+                meta_feats_names.append("u_total")
+            if meta_feats_all:
+                meta_X_all = np.column_stack(meta_feats_all)
+                meta_X_known = meta_X_all[alt_known_mask.values]
+                # KNN regressor to predict |error| from meta features
+                knn_meta = KNeighborsRegressor(n_neighbors=min(7, len(loo_errors) - 1))
+                knn_meta.fit(meta_X_known, loo_errors)
+                expected_error = knn_meta.predict(meta_X_all)
+                expected_error[alt_known_mask.values] = 0.0
+                target_base_features["_alt_expected_error"] = expected_error
+                _LMARENA_STYLE_ONLY_PARTNERS.add("_alt_expected_error")
+                print(f"LOO residual profile: mean_expected_error={expected_error[~alt_known_mask.values].mean():.1f}")
+
+        # (C) Adversarial imputation: sample K lmarena values, measure prediction spread
+        # This is computed after the target model is fit (needs model coefficients)
+        # Flag is checked later in the pipeline
+
     # Piecewise style interaction: above threshold, style delta has weaker effect.
     # style_predicted_delta correlates r=-0.55 with Arena ELO below 1400 but
     # r=-0.03 above 1400 — style stops predicting human preference at the top tier.
@@ -6165,6 +7151,18 @@ def main():
         pw_threshold = TOP_TIER_THRESHOLD if TOP_TIER_THRESHOLD > 0 else 1400.0
         target_base_features["_pw_top_style"] = np.maximum(alt_vals - pw_threshold, 0) * delta_vals
         print(f"Piecewise style feature: _pw_top_style (threshold={pw_threshold})")
+
+        # Regime-split: replace single style_predicted_delta with two orthogonal
+        # features that let ARD assign independent coefficients above/below threshold.
+        if getattr(args, "style_regime_split", False):
+            is_above = alt_vals > pw_threshold
+            target_base_features["_style_delta_low"] = delta_vals * (~is_above)
+            target_base_features["_style_delta_high"] = delta_vals * is_above
+            target_base_features.drop(columns=["style_predicted_delta"], inplace=True)
+            n_low = int((~is_above).sum())
+            n_high = int(is_above.sum())
+            print(f"Style regime split: _style_delta_low (n={n_low}) + _style_delta_high (n={n_high}), "
+                  f"dropped style_predicted_delta")
 
     # Add PCA components of benchmark columns as target model features
     pca_in_target = getattr(args, 'pca_in_target', 0)
@@ -6277,7 +7275,7 @@ def main():
     pred_idx = np.where(y_missing_mask)[0]
 
     if len(train_idx) < 3:
-        raise ValueError("Not enough rows with observed lmsys_Score to train models.")
+        raise ValueError("Not enough rows with observed {} to train models.".format(TARGET))
 
     # Note: `X_train`, `y_train`, etc. are defined right before fit_and_predict_all
 
@@ -6446,6 +7444,22 @@ def main():
     else:
         selected_cols = list(safe_features.columns)
 
+    # Force specific features back in (after selection, before poly)
+    force_features_str = getattr(args, "force_features", "")
+    if force_features_str:
+        forced = [f.strip() for f in force_features_str.split(",") if f.strip()]
+        added = []
+        for f in forced:
+            if f not in safe_features.columns and f in target_base_features.columns:
+                safe_features[f] = target_base_features[f]
+                added.append(f)
+            elif f in safe_features.columns:
+                pass  # already selected
+            else:
+                print(f"  WARNING: forced feature '{f}' not found in target_base_features")
+        if added:
+            print(f"Forced {len(added)} feature(s) into selected set: {added}")
+
     if poly_cfg.get("enabled", False):
         if poly_cfg.get("alt_centric", False) and ALT_TARGET in safe_features.columns:
             safe_features = expand_alt_centric_interactions(
@@ -6459,35 +7473,114 @@ def main():
                 limit=poly_cfg["limit"],
             )
 
+    # Drop specific main-effect features (after poly expansion, so interactions
+    # involving them are still created — drops only the standalone term)
+    drop_features_str = getattr(args, "drop_features", "")
+    if drop_features_str:
+        to_drop = [f.strip() for f in drop_features_str.split(",") if f.strip()]
+        dropped = [f for f in to_drop if f in safe_features.columns]
+        if dropped:
+            safe_features = safe_features.drop(columns=dropped)
+            print(f"Dropped {len(dropped)} main-effect feature(s): {dropped}")
+        missing = [f for f in to_drop if f not in dropped]
+        if missing:
+            print(f"  WARNING: drop_features not found (already absent): {missing}")
+
     X_for_pred = safe_features.copy()
     used_feature_names = list(X_for_pred.columns)
 
-    predictions_by_model = fit_and_predict_all_with_alt(
-        specs,
-        X_for_pred,
-        y_all,
-        train_idx,
-        pred_idx,
-        ALT_TARGET,
-        cv_n_jobs=args.cv_n_jobs,
-        model_n_jobs=args.model_n_jobs,
-        selector_cfg=TARGET_SELECTOR_CFG,
-        poly_cfg=poly_cfg,
-        cv_base_features=target_base_features,
-        cv_splits=target_cv_splits,
-        cv_repeats=args.cv_repeats_outer,
-        cv_seed=args.cv_seed,
-        oof_repeats=args.cv_repeats_inner,
-        sample_weight=sample_weights_all,
-    )
-    eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
-    train_end = time.time()
-    print(f"train:     {mmss(train_end - preprocess_end)}")
+    # --- KNN prediction path (adaptive KNN + kernel Ridge + jackknife VI) ---
+    knn_mode = getattr(args, "knn_predict", False)
+    if knn_mode:
+        print("Using adaptive KNN prediction pipeline")
+        # Use full feature matrix — KNN needs all features including SVD/traj
+        # for distance computation and local Ridge fitting
+        _knn_features = target_base_features.copy()
+        # Add SVD factors if available (they're added to safe_features in the ALT block,
+        # but KNN may skip that block)
+        if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
+            svd_factors = imputer.svd_row_factors_
+            for col in svd_factors.columns:
+                if col not in _knn_features.columns:
+                    _knn_features[col] = svd_factors[col].values
+                    _knn_features[f"{col}_sq"] = svd_factors[col].values ** 2
+            import itertools as _it_knn
+            n_int = min(4, len(svd_factors.columns))
+            for ci_idx, cj_idx in _it_knn.combinations(range(n_int), 2):
+                ci = svd_factors.columns[ci_idx]; cj = svd_factors.columns[cj_idx]
+                key = f"{ci}x{cj}"
+                if key not in _knn_features.columns:
+                    _knn_features[key] = svd_factors[ci].values * svd_factors[cj].values
+        # Add trajectory features if available
+        if imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
+            for col in imputer.trajectory_features_.columns:
+                if col not in _knn_features.columns:
+                    _knn_features[col] = imputer.trajectory_features_[col].values
+        _knn_feature_cols = [c for c in _knn_features.columns
+                            if c != ALT_TARGET and c != TARGET]  # exclude targets
+        _knn_X = _knn_features[_knn_feature_cols].values
+        print(f"  KNN features: {len(_knn_feature_cols)} (including SVD/traj)")
+        # Predict ALL models (train + inference) so training models also get predictions
+        _knn_pred_idx = np.arange(len(y_all))
+        knn_result = fit_and_predict_knn(
+            _knn_X,
+            y_all,
+            train_idx,
+            _knn_pred_idx,
+            cv_splits=target_cv_splits,
+            cv_repeats=args.cv_repeats_outer,
+            cv_seed=args.cv_seed,
+            dist_mult=getattr(args, "knn_dist_mult", KNN_DIST_MULT),
+            max_k=getattr(args, "knn_max_k", KNN_MAX_K),
+            min_k=getattr(args, "knn_min_k", KNN_MIN_K),
+            bw_pct=getattr(args, "knn_bw_pct", KNN_BW_PCT),
+        )
+        mu = knn_result["mu"]
+        std = knn_result["std"]
+        lower = knn_result["lower"]
+        upper = knn_result["upper"]
+        oof_preds = knn_result["oof_preds"]
+        oof_folds = knn_result["oof_folds"]
+        fitted = None
+        predictions_by_model = {"KNN": {"mu": mu, "std": std, "lower": lower, "upper": upper, "fitted": None, "model": None}}
+        best_spec = specs[0] if specs else None
+        eval_df = pd.DataFrame([{"model": "KNN", "rmse_mean": float(np.sqrt(np.nanmean((oof_preds - y_all[train_idx])**2))), "rmse_std": 0.0}])
+        eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
+        train_end = time.time()
+        print(f"train:     {mmss(train_end - preprocess_end)}")
+        cv_winner = "KNN"
+    else:
+        # --- Standard ALT-based prediction path ---
+        predictions_by_model = fit_and_predict_all_with_alt(
+            specs,
+            X_for_pred,
+            y_all,
+            train_idx,
+            pred_idx,
+            ALT_TARGET,
+            cv_n_jobs=args.cv_n_jobs,
+            model_n_jobs=args.model_n_jobs,
+            selector_cfg=TARGET_SELECTOR_CFG,
+            poly_cfg=poly_cfg,
+            cv_base_features=target_base_features,
+            cv_splits=target_cv_splits,
+            cv_repeats=args.cv_repeats_outer,
+            cv_seed=args.cv_seed,
+            oof_repeats=args.cv_repeats_inner,
+            sample_weight=sample_weights_all,
+        )
+        eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
+        train_end = time.time()
+        print(f"train:     {mmss(train_end - preprocess_end)}")
 
     # If a blend or delta model won CV, handle final predictions accordingly
-    cv_winner = eval_df.iloc[0]["model"]
+    if not knn_mode:
+        cv_winner = eval_df.iloc[0]["model"]
     model_names = list(predictions_by_model.keys())
-    if cv_winner.startswith("Blend") and len(predictions_by_model) >= 2:
+    if knn_mode:
+        # mu, std, lower, upper already set from KNN result
+        fitted = None
+    elif cv_winner.startswith("Blend") and len(predictions_by_model) >= 2:
         # Compute weights
         if cv_winner == "BlendWeighted":
             rmses_arr = np.array([eval_df.loc[eval_df["model"] == m, "rmse_mean"].iloc[0]
@@ -6512,6 +7605,224 @@ def main():
         lower = best["lower"]
         upper = best["upper"]
         fitted = best["fitted"]
+
+    # Tiered target model: fit per-tier models on Arena ELO directly
+    if getattr(args, "tiered_target", False):
+        n_target_tiers = getattr(args, "tiered_target_n_tiers", 4)
+        target_select = getattr(args, "tiered_target_select", "corr")
+        target_k = getattr(args, "tiered_target_k", 5)
+        target_model_type = getattr(args, "tiered_target_model", "ridge")
+        target_alpha = getattr(args, "tiered_target_alpha", 1.0)
+
+        # Use lmarena (real or imputed) for tier assignment
+        alt_for_tiers = safe_features[ALT_TARGET].values if ALT_TARGET in safe_features.columns else mu.copy()
+
+        # OOF tier assignment for training models (use oof_preds to avoid leakage)
+        tier_assign = np.full(len(mu), np.nan)
+        tier_assign[train_idx] = oof_preds  # OOF Arena predictions for tier splits
+        # For test models, use the global model's mu
+        test_mask = np.ones(len(mu), dtype=bool)
+        test_mask[train_idx] = False
+        tier_assign[test_mask] = mu[test_mask]
+
+        # Compute tier boundaries from training OOF predictions
+        train_scores = oof_preds[~np.isnan(oof_preds)]
+        sorted_train = np.sort(train_scores)[::-1]
+        tier_size = len(train_scores) // n_target_tiers
+        t_boundaries = []
+        for t in range(1, n_target_tiers):
+            t_boundaries.append(sorted_train[min(t * tier_size, len(sorted_train) - 1)])
+
+        def assign_target_tier(score):
+            for t, b in enumerate(t_boundaries):
+                if score >= b:
+                    return t
+            return n_target_tiers - 1
+
+        all_target_tiers = np.array([assign_target_tier(s) for s in tier_assign])
+
+        # Build raw feature matrix for tier models (all numeric, no SVD/traj junk)
+        tier_feat_cols = [c for c in X_for_pred.columns if not c.startswith("_svd_f")
+                         and not c.startswith("_traj")]
+        X_tier_raw = X_for_pred[tier_feat_cols].values
+
+        mu_tiered = mu.copy()
+        tier_target_info = []
+
+        for t in range(n_target_tiers):
+            tier_train = train_idx[all_target_tiers[train_idx] == t]
+            tier_all_mask = all_target_tiers == t
+            n_t_train = len(tier_train)
+
+            if n_t_train < 10:
+                tier_target_info.append(f"t{t}:n={n_t_train}(global)")
+                continue
+
+            tier_y = y_all[tier_train]
+            tier_k = min(target_k, n_t_train - 2, X_tier_raw.shape[1])
+            if tier_k < 1:
+                tier_target_info.append(f"t{t}:n={n_t_train}(skip)")
+                continue
+
+            # Feature selection within tier training data
+            Xtr_tier = X_tier_raw[tier_train]
+            if target_select == "mrmr":
+                feat_idx = _select_features_mrmr(Xtr_tier, tier_y, tier_k)
+            elif target_select == "forward":
+                feat_idx = _select_features_forward(Xtr_tier, tier_y, tier_k, alpha=target_alpha)
+            else:
+                feat_idx = _select_features_corr(Xtr_tier, tier_y, tier_k)
+
+            sc_t = StandardScaler()
+            Xtr_s = sc_t.fit_transform(Xtr_tier[:, feat_idx])
+            X_all_tier = X_tier_raw[tier_all_mask]
+            Xte_s = sc_t.transform(X_all_tier[:, feat_idx])
+
+            if target_model_type == "br":
+                m_t = BayesianRidge(compute_score=False)
+                m_t.fit(Xtr_s, tier_y)
+                tier_pred = m_t.predict(Xte_s)
+            else:
+                from sklearn.linear_model import Ridge as _Rdg_t
+                m_t = _Rdg_t(alpha=target_alpha)
+                m_t.fit(Xtr_s, tier_y)
+                tier_pred = m_t.predict(Xte_s)
+
+            mu_tiered[tier_all_mask] = tier_pred
+            tier_range = tier_y
+            tier_target_info.append(
+                f"t{t}:n={n_t_train},[{tier_range.min():.0f}-{tier_range.max():.0f}]"
+            )
+
+        mu = mu_tiered
+        lower = mu - 1.96 * std
+        upper = mu + 1.96 * std
+        print(f"  Tiered target ({n_target_tiers}t, {target_select}-{target_k}, {target_model_type}): "
+              f"{', '.join(tier_target_info)}")
+
+    # Adversarial imputation: sample K lmarena values, re-predict, average
+    adversarial_k = getattr(args, "adversarial_k", 0)
+    if adversarial_k > 0 and alt_result is not None:
+        alt_pred_std = alt_result.get("pred_std", pd.Series(dtype=float))
+        # Use committee u_total if available, else pred_std
+        if alt_committee_result is not None:
+            alt_u = alt_committee_result["u_total"].values
+        elif alt_pred_std.notna().any():
+            alt_u = alt_pred_std.values
+        else:
+            alt_u = None
+        if alt_u is not None:
+            alt_known_mask = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna().values
+            imputed_idx = np.where(~alt_known_mask)[0]
+            if len(imputed_idx) > 0:
+                # Find the ALT column index in X_for_pred
+                alt_col_idx = list(X_for_pred.columns).index(ALT_TARGET) if ALT_TARGET in X_for_pred.columns else -1
+                if alt_col_idx >= 0:
+                    rng = np.random.RandomState(42)
+                    sampled_preds = []
+                    X_vals = X_for_pred.values.copy()
+                    base_alt = X_vals[:, alt_col_idx].copy()
+                    # Get the model that produced mu
+                    _pred_model = None
+                    for _mn, _mr in predictions_by_model.items():
+                        _mo = _mr.get("model")
+                        if _mo is not None and hasattr(_mo, "predict"):
+                            _pred_model = _mo
+                            break
+                    if _pred_model is not None:
+                        for k in range(adversarial_k):
+                            X_sample = X_vals.copy()
+                            # Sample lmarena for imputed models only
+                            noise = rng.randn(len(X_vals)) * alt_u
+                            X_sample[:, alt_col_idx] = base_alt + noise
+                            # Keep real lmarena unchanged
+                            X_sample[alt_known_mask, alt_col_idx] = base_alt[alt_known_mask]
+                            # Update interaction columns involving ALT
+                            for ci, cname in enumerate(X_for_pred.columns):
+                                if "*" in cname and ALT_TARGET in cname:
+                                    parts = cname.split("*")
+                                    partner = parts[0] if parts[1] == ALT_TARGET else parts[1]
+                                    if partner in X_for_pred.columns:
+                                        pi = list(X_for_pred.columns).index(partner)
+                                        X_sample[:, ci] = X_sample[:, alt_col_idx] * X_sample[:, pi]
+                            sampled_preds.append(_pred_model.predict(X_sample))
+                        sampled_arr = np.array(sampled_preds)  # (K, n_models)
+                        mu_adversarial = np.mean(sampled_arr, axis=0)
+                        spread = np.std(sampled_arr, axis=0)
+                        # Only override imputed models
+                        mu[imputed_idx] = mu_adversarial[imputed_idx]
+                        # Widen intervals for imputed models based on spread
+                        lower[imputed_idx] = mu[imputed_idx] - 1.96 * np.sqrt(std[imputed_idx]**2 + spread[imputed_idx]**2)
+                        upper[imputed_idx] = mu[imputed_idx] + 1.96 * np.sqrt(std[imputed_idx]**2 + spread[imputed_idx]**2)
+                        print(f"Adversarial imputation: K={adversarial_k}, mean_spread={spread[imputed_idx].mean():.1f}, "
+                              f"max_spread={spread[imputed_idx].max():.1f}")
+
+    # (A) Dual-model: fit a backup model WITHOUT lmarena, use it for imputed models
+    if getattr(args, "dual_model", False):
+        alt_known_mask_a = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna().values
+        imputed_idx_a = np.where(~alt_known_mask_a)[0]
+        if len(imputed_idx_a) > 0:
+            # Build feature set without lmarena and any lmarena interactions
+            no_alt_cols = [c for c in X_for_pred.columns
+                          if ALT_TARGET not in c]
+            if no_alt_cols:
+                X_no_alt = X_for_pred[no_alt_cols].values
+                y_train_a = y_all[train_idx]
+                X_train_no_alt = X_no_alt[train_idx]
+                # Fit ARD on non-lmarena features
+                from sklearn.linear_model import ARDRegression as _ARD_A
+                backup_model = _ARD_A(threshold_lambda=1e4, n_iter=500)
+                backup_model.fit(X_train_no_alt, y_train_a)
+                mu_backup = backup_model.predict(X_no_alt)
+                # For imputed models: use backup predictions
+                mu_full = mu.copy()
+                mu[imputed_idx_a] = mu_backup[imputed_idx_a]
+                lower[imputed_idx_a] = mu[imputed_idx_a] - 1.96 * std[imputed_idx_a]
+                upper[imputed_idx_a] = mu[imputed_idx_a] + 1.96 * std[imputed_idx_a]
+                print(f"Dual-model: {len(no_alt_cols)} features (no lmarena), "
+                      f"{len(imputed_idx_a)} models use backup. "
+                      f"Example shift: {mu_full[imputed_idx_a].mean():.0f} -> {mu[imputed_idx_a].mean():.0f}")
+
+    # (B) Downstream-optimal latent: learn z = f(benchmarks) that minimizes Arena error
+    #     weakly anchored to real lmarena. Replace lmarena in predictions.
+    if getattr(args, "optimal_latent", False):
+        alt_known_mask_b = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna().values
+        imputed_idx_b = np.where(~alt_known_mask_b)[0]
+        if len(imputed_idx_b) > 0:
+            # For training models with known lmarena AND known Arena:
+            # Fit Ridge: benchmarks -> Arena, but regularized toward lmarena
+            bench_cols_b = [c for c in safe_features.columns
+                           if c != ALT_TARGET and not c.startswith("_svd_f")
+                           and not c.startswith("_traj")]
+            X_bench_b = safe_features[bench_cols_b].values
+            from sklearn.preprocessing import StandardScaler as _SSb
+            sc_b = _SSb()
+            X_bench_scaled = sc_b.fit_transform(X_bench_b)
+            # Train: minimize ||Arena - X@w||^2 + lambda * ||X@w - lmarena||^2
+            # This is equivalent to Ridge on augmented target
+            lam_b = float(getattr(args, "optimal_latent_lambda", 0.5))
+            both_known = alt_known_mask_b & (~y_missing_mask)
+            X_tr_b = X_bench_scaled[both_known]
+            y_arena_tr = y_all[both_known]
+            y_lmarena_tr = alt_known.values[both_known]
+            # Augmented target: [y_arena; sqrt(lambda) * y_lmarena]
+            # Augmented X: [X; sqrt(lambda) * X]
+            X_aug = np.vstack([X_tr_b, np.sqrt(lam_b) * X_tr_b])
+            y_aug = np.concatenate([y_arena_tr, np.sqrt(lam_b) * y_lmarena_tr])
+            from sklearn.linear_model import Ridge as _Ridge_B
+            z_model = _Ridge_B(alpha=10.0)
+            z_model.fit(X_aug, y_aug)
+            # Predict z for all models
+            z_all = z_model.predict(X_bench_scaled)
+            # For imputed models, use z as the prediction directly
+            mu[imputed_idx_b] = z_all[imputed_idx_b]
+            lower[imputed_idx_b] = mu[imputed_idx_b] - 1.96 * std[imputed_idx_b]
+            upper[imputed_idx_b] = mu[imputed_idx_b] + 1.96 * std[imputed_idx_b]
+            # Check OOF for known models
+            z_known = z_all[both_known]
+            z_rmse = float(np.sqrt(np.mean((z_known - y_arena_tr)**2)))
+            print(f"Optimal latent: lambda={lam_b}, train RMSE={z_rmse:.1f}, "
+                  f"{len(imputed_idx_b)} models use latent prediction")
 
     # Save OOF predictions from model selection CV (moved up — needed for conformal)
     train_names = imputed_df[ID_COL].values[~y_missing_mask]
@@ -6606,6 +7917,56 @@ def main():
     std = conformal["std"]
     lower = conformal["lower"]
     upper = conformal["upper"]
+
+    # Propagated variance inflation (Exp 3): inflate intervals for models
+    # with uncertain imputed lmarena, using analytic sensitivity dy/dlmarena
+    if getattr(args, "propagate_alt_variance", False) and alt_committee_result is not None:
+        u_alt = alt_committee_result["u_total"].values  # per-model ALT uncertainty
+        # Compute sensitivity: g_x = dy/d(lmarena) from the linear model coefficients
+        # = coeff(lmarena) + sum(coeff(lmarena*partner_j) * partner_j)
+        # Use first model with coef_ (ARDRegression from blend, or standalone)
+        best_model_obj = None
+        for _mn, _mr in predictions_by_model.items():
+            _mo = _mr.get("model")
+            if _mo is not None and hasattr(_mo, "coef_"):
+                best_model_obj = _mo
+                break
+        if best_model_obj is not None:
+            coefs = best_model_obj.coef_
+            feat_names = used_feature_names
+            if hasattr(best_model_obj, '_poly_feature_names'):
+                feat_names = best_model_obj._poly_feature_names
+            elif len(coefs) != len(feat_names):
+                # Interaction-expanded names
+                feat_names = list(X_for_pred.columns) if len(coefs) == X_for_pred.shape[1] else feat_names
+            alt_key = ALT_TARGET
+            # Base lmarena coefficient
+            g_x = np.zeros(len(mu))
+            for i, fname in enumerate(feat_names):
+                if i >= len(coefs):
+                    break
+                if fname == alt_key:
+                    g_x += coefs[i]
+                elif alt_key in fname and "*" in fname:
+                    parts = fname.split("*")
+                    if alt_key in parts:
+                        partner = parts[0] if parts[1] == alt_key else parts[1]
+                        if partner in X_for_pred.columns:
+                            g_x += coefs[i] * X_for_pred[partner].values
+            # Inflate: v_total = v_conformal + g_x² × u_alt²
+            v_conformal = conformal["sigma_hat"] ** 2
+            v_alt_prop = (g_x ** 2) * (u_alt ** 2)
+            sigma_inflated = np.sqrt(v_conformal + v_alt_prop)
+            # Only inflate for imputed models (real lmarena has u_alt ≈ 0)
+            alt_known = pd.to_numeric(df[ALT_TARGET], errors="coerce")
+            imputed_mask = alt_known.isna().values
+            n_inflated = int(imputed_mask.sum())
+            avg_inflation = float(np.mean(sigma_inflated[imputed_mask] / (conformal["sigma_hat"][imputed_mask] + 1e-12))) if n_inflated else 1.0
+            lower = mu - sigma_inflated
+            upper = mu + sigma_inflated
+            std = sigma_inflated / 1.96
+            conformal["sigma_hat"] = sigma_inflated
+            print(f"  Propagated ALT variance: inflated {n_inflated} models, avg inflation={avg_inflation:.2f}x")
 
     # Fit t-distribution df from final calibrated OOF residuals
     # Use the final sigma_hat (not cross-fitted OOF sigma) for stable estimation
@@ -6984,7 +8345,7 @@ def main():
         "group_cv": bool(args.group_cv),
         "notes": [
             "Safety-filled any residual NaNs/Infs in features post-imputation with column medians, then 0 if still NaN.",
-            "num_one_prob compares to current max observed lmsys_Score among training rows.",
+            "num_one_prob compares to current max observed lmarena_Score among training rows.",
             f"top_by_margin_prob = P(score > max_observed + {args.margin}), only for models without actual scores.",
             "predictions_best_model.csv is sorted by predicted_score descending (highest on top).",
         ]

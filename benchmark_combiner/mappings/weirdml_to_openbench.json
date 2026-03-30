@@ -98,5 +98,12 @@
   "gpt-5-nano (low)": "GPT-5 Nano (low)",
   "gpt-5.4 (xhigh)": "GPT-5.4 Thinking",
   "grok-4.20-beta": "Grok 4.2 beta",
-  "gpt-5.4 (no thinking)": ""
+  "gpt-5.4 (no thinking)": "",
+  "gpt-5.4-mini (high)": "GPT-5.4 Mini",
+  "nemotron-3-super-120b-a12b": "Nemotron 3 Super",
+  "gpt-5.4-nano (no thinking)": "GPT-5.4 Nano",
+  "minimax-m2.7": "MiniMax M2.7",
+  "qwen3.5-27b": "Qwen3.5 27B Thinking",
+  "gpt-5.4-mini (no thinking)": "GPT-5.4 Mini",
+  "gpt-5.4-nano (high)": "GPT-5.4 Nano"
 }

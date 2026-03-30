@@ -2,7 +2,7 @@
 
 ## System Design Overview
 
-This pipeline aggregates benchmark data from 20+ sources, performs model name unification, and uses advanced imputation techniques to predict Chatbot Arena ELO ratings for large language models.
+This pipeline aggregates benchmark data from 20+ sources, performs model name unification, and uses adaptive KNN + kernel Ridge regression to predict lmarena scores (style-controlled Chatbot Arena ELO, R²=0.927) for large language models.
 
 The system supports two imputation architectures: the **per-cell model-bank imputer** (`ModelBankImputer`, default) that selects the best predictor subset for each individual missing cell based on what that row actually has observed, with per-cell uncertainty tracking and low-rank coherence projection; and the legacy **per-column specialized imputer** (`SpecializedColumnImputer`) that auto-classifies columns by type and assigns one model per column.
 
@@ -40,12 +40,9 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 │  └── column_imputer.py (ModelBankImputer + SpecializedColumnImputer)        │
 │                                                                              │
 │  Key Components:                                                             │
-│  • Column type classification (categorical, linear, nonlinear,              │
-│    extrapolation_prone) + distribution tags (bounded, floor_inflated)       │
-│  • Two imputer backends: ModelBankImputer (default), SpecializedColumnImputer│
-│  • ModelBankImputer: per-cell predictor selection + σ² tracking             │
-│  • Low-rank coherence projection (ModelBankImputer)                         │
-│  • ALT target imputation via OOF stacking                                   │
+│  • Imputation: ModelBankImputer (per-cell predictor selection + σ² tracking)│
+│  • Prediction: Adaptive KNN + kernel Ridge + jackknife VI (--knn_predict)   │
+│  • Legacy: ALT target imputation via OOF stacking + BayesianRidge/ARD      │
 │                                                                              │
 │  Output: imputed_full.csv, predictions_best_model.csv, quality reports      │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -61,8 +58,8 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  External Benchmark Sources (scraped):                                       │
-│  ├── lmsys_*.csv                (Chatbot Arena ELO ratings)                 │
-│  ├── lmarena_*.csv              (Length-adjusted Arena scores)               │
+│  ├── lmarena_*.csv              (Style-controlled Arena ELO — prediction target) │
+│  ├── lmsys_*.csv                (Raw Arena ELO — excluded as leakage)       │
 │  ├── livebench_*.csv            (LiveBench multi-category scores)           │
 │  ├── openbench_*.csv            (OpenBench suite — canonical namespace)     │
 │  ├── artificialanalysis_*.csv   (AA quality + pricing metrics)              │
@@ -192,23 +189,24 @@ The system supports two imputation architectures: the **per-cell model-bank impu
 
 ### predict.py — Prediction Pipeline Orchestrator
 
-**Purpose:** Impute missing benchmark scores and predict Chatbot Arena ELO from the combined benchmark matrix.
+**Purpose:** Impute missing benchmark scores and predict lmarena_Score (style-controlled Arena ELO) from the combined benchmark matrix.
+
+**Prediction Modes:**
+- **`--knn_predict` (default, recommended):** Adaptive KNN + kernel-weighted Ridge + jackknife variance inflation. R²=0.927. No two-stage pipeline needed.
+- **Legacy ALT pipeline:** Two-stage approach where lmsys_Score (ALT_TARGET) is imputed as a feature for predicting lmarena_Score via BayesianRidge/ARD.
 
 **Key Responsibilities:**
-1. **Feature selection** — Tree-based ranking (LightGBM/XGBoost) with 1-SE rule
-2. **Collinearity pruning** — Remove redundant features via greedy de-correlation
-3. **Imputation orchestration** — Interface with ModelBankImputer (default) or SpecializedColumnImputer
-4. **ALT target handling** — Out-of-fold stacking for alternative targets (lmarena)
-5. **Model comparison** — Compare BayesianRidge and ARDRegression via CV
-6. **Polynomial interactions** — Configurable feature interactions with limit
-7. **Conformal prediction intervals** — Calibrated uncertainty quantification
-8. **Variance contribution analysis** — Per-feature importance via variance decomposition
+1. **Imputation orchestration** — Interface with ModelBankImputer (default) for filling missing benchmark scores
+2. **KNN prediction** — Adaptive neighbor selection, kernel weighting, local Ridge regression, jackknife bias correction
+3. **Feature selection** — Tree-based ranking (LightGBM/XGBoost) with 1-SE rule (used by legacy ALT pipeline)
+4. **Conformal prediction intervals** — Calibrated uncertainty quantification
+5. **ALT target handling (legacy)** — Out-of-fold stacking for lmsys_Score as a feature
 
 **Key Functions:**
+- `predict_adaptive_knn()` — Single-point prediction via adaptive KNN + kernel Ridge + jackknife VI
+- `fit_and_predict_knn()` — Full KNN pipeline with CV evaluation and final predictions
 - `rank_features_tree()` — LightGBM/XGBoost gain-based ranking
-- `select_features_tree()` — Full selection with pruning
-- `impute_alt_for_all()` — ALT imputation via OOF stacking
-- `cross_val_rmse_with_alt()` — CV with inner-loop ALT imputation
+- `impute_alt_for_all()` — ALT imputation via OOF stacking (legacy path)
 - `compute_uncertainty_calibration_factor()` — Scale uncertainties for proper coverage
 - `calibrate_prediction_intervals()` — Conformal calibration
 
@@ -282,11 +280,24 @@ When selecting the number of features `k`:
 
 This gives a parsimonious model within one standard error of optimal.
 
-### 5. ALT Target OOF Stacking
+### 5. Adaptive KNN + Kernel Ridge + Jackknife VI (--knn_predict)
 
-For alternative targets (e.g., lmarena) that have missing values:
+The primary prediction algorithm (R²=0.927 for lmarena_Score):
+
+1. **Standardize** all ~105 features (benchmarks + SVD factors + trajectory)
+2. **Adaptive k:** Find all training neighbors within `2.0 × distance_to_nearest`. Min 20, max 80. Dense regions (top models) get k≈54, sparse regions (bottom) get k≈37.
+3. **Gaussian kernel weights:** `w = exp(-0.5 × (dist/bw)²)` where bandwidth = distance to 30th-percentile neighbor. Closer neighbors weighted more heavily.
+4. **Ridge regression:** `alpha = max(10, std(neighbor_scores))`. Adaptive regularization — tight neighborhoods get lower alpha (more flexible).
+5. **Jackknife variance inflation:** Leave each of the k neighbors out, refit Ridge on k-1, predict the left-out one. Estimate compression slope `b = cov(actual, jackknife_pred) / var(jackknife_pred)`. Clip to [1.0, 1.5]. Correct: `prediction = neighborhood_mean + b × (raw_prediction - neighborhood_mean)`. This reverses Ridge's centering bias.
+
+**Why it works:** Different features predict lmarena at different score levels (feature correlations flip sign around ~1400). KNN naturally adapts by training on each model's nearest benchmark-space neighbors, giving locally-relevant coefficients.
+
+### 6. ALT Target OOF Stacking (Legacy)
+
+For the legacy two-stage pipeline where lmsys_Score is used as a feature:
 1. **Problem**: Can't use imputed values as features (would leak information)
 2. **Solution**: Out-of-fold predictions — split data into K folds, train on K-1, predict held-out fold, use OOF predictions as feature
+3. **Note**: This approach was deprecated in 2026-03-29 when the target switched to lmarena_Score. Using lmsys as a feature is now considered leakage.
 
 ---
 
@@ -299,24 +310,18 @@ For alternative targets (e.g., lmarena) that have missing values:
 | `--csv_path` | `../benchmark_combiner/benchmarks/clean_combined_all_benches.csv` | Input data file |
 | `--output_root` | `analysis_output` | Output directory |
 | `--imputer_type` | `model_bank` | Imputer backend: `model_bank` or `specialized` |
-| `--passes` | 14 | Imputation passes (SpecializedColumnImputer) |
-| `--alpha` | 0.9361 | Regularization parameter |
+| `--knn_predict` | off | Use adaptive KNN prediction (recommended for lmarena target) |
+| `--knn_dist_mult` | 2.0 | Adaptive k: include neighbors within this × nearest distance |
+| `--knn_max_k` | 80 | Maximum neighbors for KNN |
+| `--knn_min_k` | 20 | Minimum neighbors for KNN |
+| `--knn_bw_pct` | 0.3 | Kernel bandwidth at this percentile of neighbor distances |
 | `--coherence_lambda` | 1.0 | ModelBankImputer: coherence projection shrinkage (0 = disable) |
 | `--coherence_shape` | `exp` | Coherence shrinkage shape: linear, exp, squared, etc. |
-| `--confidence_threshold` | 0.4 | ModelBankImputer: σ/sd threshold for pass 2 expansion |
 | `--eb_parent` | off | Enable empirical-Bayes parent shrinkage |
-| `--poly_interactions` | off | Enable polynomial feature interactions |
-| `--poly_limit` | 6 | Max polynomial interaction terms |
-| `--top_tier_boost` | 1 (no boost) | Duplicate top-tier training rows N times |
-| `--top_tier_threshold` | 1450 | ELO threshold for top-tier boost |
-| `--style_only_final` | off | Restrict final-stage features to lmarena + style/tone columns |
+| `--cv_repeats_outer` | 10 | CV repeats for OOF evaluation |
 | `--margin` | 20.0 | Margin for top_by_margin_prob column |
-| `--gp_selector_k_max` | 28 | Feature cap for GP models (mRMR selection) |
-| `--selector_cv` | 5 | Feature selection CV folds |
-| `--outer_cv` | None (uses `selector_cv`) | Outer evaluation CV folds |
 | `--feature_selector` | `lgbm` | Feature selector: `none`, `lgbm`, `xgb` |
 | `--max_workers` | 0 (auto) | Parallel workers for imputation |
-| `--exclude_models` | (none) | Comma-separated model names to exclude |
 
 Run `python3 predict.py --help` for the full list of ~80 arguments.
 

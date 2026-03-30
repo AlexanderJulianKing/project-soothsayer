@@ -391,5 +391,16 @@
   "GPT-5.4": "",
   "OLMo3.1 32B Think": "Olmo 3.1 32B (Reasoning)",
   "Gemini3.1 Flash Lite Preview": "",
-  "MiniMaxM2.5 FP8": ""
+  "MiniMaxM2.5 FP8": "",
+  "Grok4.20 Multi Agent Beta": "",
+  "GPT-5.3Codex (Medium)": "",
+  "Qwen3.59B FP8": "",
+  "MiniMaxM2.7": "MiniMax M2.7",
+  "GPT-5.4mini": "GPT-5.4 Mini",
+  "MiniMaxM2.7-highspeed": "",
+  "Seed2.0 Mini (Low)": "",
+  "NemotronNano 12B v2 VL": "",
+  "Grok4.20 Beta Non-reasoning": "",
+  "GPT-5.4nano": "GPT-5.4 Nano",
+  "Grok4.20 Beta Reasoning": "Grok 4.2 beta"
 }

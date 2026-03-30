@@ -58,6 +58,7 @@ MISSING_THRESHOLD = 0.508  # Max missing ratio for model inclusion
 INCLUDE_MISSINGNESS_FLAGS = False  # Set False to skip adding __was_missing indicator columns
 EXCLUDE_MODELS = {
     "Mistral 7B Instruct",  # Arena ELO 1110 — extreme outlier (z=-4.7)
+    "Grok 4.2 beta",  # Inconsistent benchmark scores — likely different versions across sources
 }
 # MISSING_THRESHOLD = 0.35
 # Try to import UMAP, but make it optional
@@ -1269,6 +1270,7 @@ def main(file_path):
             'livebench_tablereformat',    # near-solved: 50% score 98+, SD=3.3, best corr only 0.45
         ],
         'lmsys': [
+            'lmsys_Score',  # dropped: now targeting lmarena (style-controlled) instead of lmsys (raw Arena)
             'lmsys_rank',
             'lmsys_rank_stylectrl',
             'lmsys_95_pct_ci',
@@ -1338,7 +1340,7 @@ def main(file_path):
             'style_combined_list_count',
             'style_combined_list_count',
             'style_lmarena_Score',
-            'style_lmsys_Score',
+            'style_lmsys_Score',  # dropped: targeting lmarena not lmsys
             'style_delta_score'
         ],
         'aiderbench': [

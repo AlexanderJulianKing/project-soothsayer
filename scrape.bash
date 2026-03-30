@@ -28,7 +28,7 @@ python3 ../scrapers/eqbench_grabber.py
 python3 ../scrapers/ugi_leaderboard_grabber.py
 python3 ../scrapers/weirdml_grabber.py
 python3 ../scrapers/yupp_grabber.py
-python3 combine.py
+#python3 combine.py
 
 ELAPSED=$(( SECONDS - START_TIME ))
 CSV_COUNT=$(ls benchmarks/*.csv 2>/dev/null | wc -l | tr -d ' ')

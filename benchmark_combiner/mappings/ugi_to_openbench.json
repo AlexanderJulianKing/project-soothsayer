@@ -302,11 +302,15 @@
   "xai/grok-4.20-beta-0309-non-reasoning": "",
   "Qwen/Qwen3.5-4B (no thinking)": "",
   "Qwen/Qwen3.5-35B-A3B (<think> prefill)": "Qwen3.5 35B A3B Thinking",
-  "xai/grok-4.20-multi-agent-beta-0309 (agent_count=4)": "Grok 4.2 beta",
+  "xai/grok-4.20-multi-agent-beta-0309 (agent_count=4)": "",
   "Qwen/Qwen3.5-2B (no thinking)": "",
-  "Qwen/Qwen3.5-27B (no thinking)": "Qwen3.5 27B Thinking",
+  "Qwen/Qwen3.5-27B (no thinking)": "",
   "Qwen/Qwen3.5-0.8B (no thinking)": "",
   "Qwen/Qwen3.5-27B (<think> prefill)": "Qwen3.5 27B Thinking",
   "Qwen/Qwen3.5-9B (no thinking)": "",
-  "Qwen/Qwen3.5-4B (<think> prefill)": ""
+  "Qwen/Qwen3.5-4B (<think> prefill)": "",
+  "Qwen/Qwen3.5-397B-A17B (<think> prefill)": "Qwen3.5 397B A17B Thinking",
+  "Qwen/Qwen3.5-397B-A17B (no thinking)": "Qwen3.5 397B A17B Nonthinking",
+  "mistralai/Mistral-Small-4-119B-2603 (reasoning=none)": "",
+  "mistralai/Mistral-Small-4-119B-2603 (reasoning=high)": ""
 }

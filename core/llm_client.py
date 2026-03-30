@@ -28,6 +28,7 @@ def get_llm_response(
     reasoning: bool,
     system_prompt: Optional[str] = None,
     include_usage: bool = False,
+    reasoning_effort: Optional[str] = None,
 ) -> Union[str, Tuple[str, Dict[str, Any]]]:
     # print(model, prompt)
     messages = []
@@ -105,7 +106,10 @@ def get_llm_response(
         "stream": False,
     }
 
-    if name in no_reasoning_param_models:
+    if reasoning_effort is not None:
+        # Explicit override from caller — skip all name-based logic
+        payload["reasoning"] = {"effort": reasoning_effort}
+    elif name in no_reasoning_param_models:
         pass  # Don't set reasoning param — these endpoints reject it
     elif name == "Gemini 2.5 Pro Preview (2025-06-05) Limited":
         payload["reasoning"] = {"max_tokens": 8000}
@@ -182,8 +186,11 @@ def get_llm_response(
                 modes += [("no-override", None, None)]
 
                 last_exc = None
+                rate_limited = False
 
                 for tv in transport_variants:
+                    if rate_limited:
+                        break
                     # fresh session when we need to change transport knobs
                     sess = s
                     if tv["connection_close"] or tv["identity"]:
@@ -226,6 +233,16 @@ def get_llm_response(
                                 except ValueError:
                                     err_msg = (r.text or "")[:1000]
                                 last_exc = APIError(f"HTTP {r.status_code} ({mode}): {err_msg}")
+                                if r.status_code == 429:
+                                    # Don't waste retries cycling variants — break to backoff sleep
+                                    retry_after = r.headers.get("Retry-After")
+                                    if retry_after:
+                                        try:
+                                            delay = max(delay, float(retry_after))
+                                        except ValueError:
+                                            pass
+                                    rate_limited = True
+                                    break
                                 continue
 
                             raw = r.content or b""

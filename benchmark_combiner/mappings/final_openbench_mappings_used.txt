@@ -50,6 +50,8 @@ AA: GPT-5.1 Codex (high) → GPT-5.1 Codex
 AA: GPT-5.1 Codex mini (high) → GPT-5.1 Codex Mini
 AA: GPT-5.3 Codex (xhigh) → GPT-5.3 Codex
 AA: GPT-5.4 (xhigh) → GPT-5.4 Thinking
+AA: GPT-5.4 mini (xhigh) → GPT-5.4 Mini
+AA: GPT-5.4 nano (xhigh) → GPT-5.4 Nano
 AA: Gemini 1.5 Flash (Sep '24) → Gemini 1.5 Flash
 AA: Gemini 1.5 Flash-8B → Gemini 1.5 Flash 8B
 AA: Gemini 2.0 Flash (Feb '25) → Gemini 2.0 Flash
@@ -94,6 +96,7 @@ AA: Llama 4 Scout → llama-4-scout
 AA: MiniMax-M2 → MiniMax M2
 AA: MiniMax-M2.1 → MiniMax M2.1
 AA: MiniMax-M2.5 → MiniMax M2.5
+AA: MiniMax-M2.7 → MiniMax M2.7
 AA: Mistral Large 3 → Mistral Large 3 (2025-12-1)
 AA: Mistral Medium 3.1 → Mistral Medium 3.1 (2025-08-12)
 AA: NVIDIA Nemotron 3 Nano 30B A3B (Reasoning) → Nemotron 3 Nano 30B A3B (Reasoning)
@@ -153,6 +156,8 @@ AACritPt: GPT-5 mini (medium) → GPT-5 Mini
 AACritPt: GPT-5.1 Codex (high) → GPT-5.1 Codex
 AACritPt: GPT-5.3 Codex (xhigh) → GPT-5.3 Codex
 AACritPt: GPT-5.4 (xhigh) → GPT-5.4 Thinking
+AACritPt: GPT-5.4 mini (xhigh) → GPT-5.4 Mini
+AACritPt: GPT-5.4 nano (xhigh) → GPT-5.4 Nano
 AACritPt: Gemini 2.5 Flash (Non-reasoning) → Gemini 2.5 Flash Preview Nonthinking
 AACritPt: Gemini 2.5 Flash (Reasoning) → Gemini 2.5 Flash Preview (2025-04-17)
 AACritPt: Gemini 2.5 Flash Preview (Sep '25) (Reasoning) → Gemini 2.5 Flash Preview 09-2025
@@ -170,6 +175,7 @@ AACritPt: Kimi K2.5 (Reasoning) → Kimi K2.5
 AACritPt: MiniMax-M2 → MiniMax M2
 AACritPt: MiniMax-M2.1 → MiniMax M2.1
 AACritPt: MiniMax-M2.5 → MiniMax M2.5
+AACritPt: MiniMax-M2.7 → MiniMax M2.7
 AACritPt: NVIDIA Nemotron 3 Nano 30B A3B (Reasoning) → Nemotron 3 Nano 30B A3B (Reasoning)
 AACritPt: NVIDIA Nemotron 3 Super 120B A12B (Reasoning) → Nemotron 3 Super
 AACritPt: Qwen3 30B A3B 2507 (Reasoning) → Qwen 3 30B A3B Thinking (2025-07-21)
@@ -214,7 +220,7 @@ AAGDPval: GLM-4.5-Air → GLM 4.5 Air
 AAGDPval: GLM-4.6 (Reasoning) → GLM-4.6
 AAGDPval: GLM-4.7 (Reasoning) → GLM-4.7
 AAGDPval: GLM-4.7-Flash (Reasoning) → GLM-4.7 Flash
-AAGDPval: GLM-5 (Reasoning) → GLM-5
+AAGDPval: GLM-5-Turbo → GLM-5
 AAGDPval: GPT-4.1 mini → GPT-4.1 Mini
 AAGDPval: GPT-4.1 nano → GPT-4.1 Nano
 AAGDPval: GPT-4o (Aug '24) → GPT-4o (2024-08-06)
@@ -230,6 +236,8 @@ AAGDPval: GPT-5.1 Codex (high) → GPT-5.1 Codex
 AAGDPval: GPT-5.1 Codex mini (high) → GPT-5.1 Codex Mini
 AAGDPval: GPT-5.3 Codex (xhigh) → GPT-5.3 Codex
 AAGDPval: GPT-5.4 (xhigh) → GPT-5.4 Thinking
+AAGDPval: GPT-5.4 mini (xhigh) → GPT-5.4 Mini
+AAGDPval: GPT-5.4 nano (xhigh) → GPT-5.4 Nano
 AAGDPval: Gemini 2.0 Flash (Feb '25) → Gemini 2.0 Flash
 AAGDPval: Gemini 2.5 Flash (Non-reasoning) → Gemini 2.5 Flash Preview Nonthinking
 AAGDPval: Gemini 2.5 Flash (Reasoning) → Gemini 2.5 Flash Preview (2025-04-17)
@@ -271,6 +279,7 @@ AAGDPval: MiniMax M1 80k → MiniMax M1
 AAGDPval: MiniMax-M2 → MiniMax M2
 AAGDPval: MiniMax-M2.1 → MiniMax M2.1
 AAGDPval: MiniMax-M2.5 → MiniMax M2.5
+AAGDPval: MiniMax-M2.7 → MiniMax M2.7
 AAGDPval: Mistral Large 2 (Nov '24) → Mistral Large (2411)
 AAGDPval: Mistral Large 3 → Mistral Large 3 (2025-12-1)
 AAGDPval: Mistral Medium 3.1 → Mistral Medium 3.1 (2025-08-12)
@@ -346,6 +355,8 @@ AAOmniscience: GPT-5.1 Codex (high) → GPT-5.1 Codex
 AAOmniscience: GPT-5.1 Codex mini (high) → GPT-5.1 Codex Mini
 AAOmniscience: GPT-5.3 Codex (xhigh) → GPT-5.3 Codex
 AAOmniscience: GPT-5.4 (xhigh) → GPT-5.4 Thinking
+AAOmniscience: GPT-5.4 mini (xhigh) → GPT-5.4 Mini
+AAOmniscience: GPT-5.4 nano (xhigh) → GPT-5.4 Nano
 AAOmniscience: Gemini 2.0 Flash (Feb '25) → Gemini 2.0 Flash
 AAOmniscience: Gemini 2.5 Flash (Non-reasoning) → Gemini 2.5 Flash Preview Nonthinking
 AAOmniscience: Gemini 2.5 Flash (Reasoning) → Gemini 2.5 Flash Preview (2025-04-17)
@@ -389,6 +400,7 @@ AAOmniscience: MiniMax M1 80k → MiniMax M1
 AAOmniscience: MiniMax-M2 → MiniMax M2
 AAOmniscience: MiniMax-M2.1 → MiniMax M2.1
 AAOmniscience: MiniMax-M2.5 → MiniMax M2.5
+AAOmniscience: MiniMax-M2.7 → MiniMax M2.7
 AAOmniscience: Mistral Large 2 (Nov '24) → Mistral Large (2411)
 AAOmniscience: Mistral Large 3 → Mistral Large 3 (2025-12-1)
 AAOmniscience: Mistral Medium 3.1 → Mistral Medium 3.1 (2025-08-12)
@@ -699,6 +711,7 @@ LMArena: grok-4-1-fast-reasoning → Grok 4.1 Fast
 LMArena: grok-4-fast-reasoning → Grok 4 Fast
 LMArena: grok-4.1 → Grok 4.1 (Non-Reasoning)
 LMArena: grok-4.1-thinking → Grok 4.1
+LMArena: grok-4.20-beta-0309-reasoning → Grok 4.2 beta
 LMArena: hunyuan-turbos-20250226 → Hunyuan Turbos
 LMArena: intellect-3 → Intellect-3
 LMArena: kimi-k2-0711-preview → Kimi K2
@@ -720,11 +733,14 @@ LMArena: llama-4-maverick-17b-128e-instruct → Llama 4 Maverick 17B 128E Instru
 LMArena: llama-4-scout-17b-16e-instruct → llama-4-scout
 LMArena: longcat-flash-chat → LongCat Flash Chat
 LMArena: mercury → Mercury
+LMArena: mercury-2 → Mercury 2
 LMArena: mimo-v2-flash (thinking) → MiMo-V2-Flash (Reasoning)
+LMArena: mimo-v2-pro → MiMo-V2-Pro
 LMArena: minimax-m1 → MiniMax M1
 LMArena: minimax-m2 → MiniMax M2
 LMArena: minimax-m2.1-preview → MiniMax M2.1
 LMArena: minimax-m2.5 → MiniMax M2.5
+LMArena: minimax-m2.7 → MiniMax M2.7
 LMArena: mistral-7b-instruct → Mistral 7B Instruct
 LMArena: mistral-7b-instruct-v0.2 → Mistral 7B Instruct v0.2
 LMArena: mistral-large-2407 → Mistral Large (2407)
@@ -858,6 +874,7 @@ LMSYS: grok-4-1-fast-reasoning → Grok 4.1 Fast
 LMSYS: grok-4-fast-reasoning → Grok 4 Fast
 LMSYS: grok-4.1 → Grok 4.1 (Non-Reasoning)
 LMSYS: grok-4.1-thinking → Grok 4.1
+LMSYS: grok-4.20-beta-0309-reasoning → Grok 4.2 beta
 LMSYS: hunyuan-turbos-20250226 → Hunyuan Turbos
 LMSYS: intellect-3 → Intellect-3
 LMSYS: kimi-k2-0711-preview → Kimi K2
@@ -879,11 +896,14 @@ LMSYS: llama-4-maverick-17b-128e-instruct → Llama 4 Maverick 17B 128E Instruct
 LMSYS: llama-4-scout-17b-16e-instruct → llama-4-scout
 LMSYS: longcat-flash-chat → LongCat Flash Chat
 LMSYS: mercury → Mercury
+LMSYS: mercury-2 → Mercury 2
 LMSYS: mimo-v2-flash (thinking) → MiMo-V2-Flash (Reasoning)
+LMSYS: mimo-v2-pro → MiMo-V2-Pro
 LMSYS: minimax-m1 → MiniMax M1
 LMSYS: minimax-m2 → MiniMax M2
 LMSYS: minimax-m2.1-preview → MiniMax M2.1
 LMSYS: minimax-m2.5 → MiniMax M2.5
+LMSYS: minimax-m2.7 → MiniMax M2.7
 LMSYS: mistral-7b-instruct → Mistral 7B Instruct
 LMSYS: mistral-7b-instruct-v0.2 → Mistral 7B Instruct v0.2
 LMSYS: mistral-large-2407 → Mistral Large (2407)
@@ -1038,6 +1058,8 @@ LiveBench: GPT-5.1 High → GPT-5.1 (high)
 LiveBench: GPT-5.2 High → GPT-5.2 (high)
 LiveBench: GPT-5.2 No Thinking → GPT-5.2 (Non-reasoning)
 LiveBench: GPT-5.3 Codex xHigh → GPT-5.3 Codex
+LiveBench: GPT-5.4 Mini xHigh → GPT-5.4 Mini
+LiveBench: GPT-5.4 Nano xHigh → GPT-5.4 Nano
 LiveBench: GPT-5.4 Thinking xHigh Effort → GPT-5.4 Thinking
 LiveBench: Gemini 2.5 Flash (Max Thinking) (2025-06-05) → Gemini 2.5 Flash Preview (2025-05-20)
 LiveBench: Gemini 2.5 Flash (Max Thinking) (2025-09-25) → Gemini 2.5 Flash Preview 09-2025
@@ -1050,7 +1072,9 @@ LiveBench: Gemini 3.1 Pro Preview High**5th rank in unseen questions across all 
 LiveBench: Grok 4.20 Beta → Grok 4.2 beta
 LiveBench: Kimi K2 Instruct → Kimi K2
 LiveBench: Kimi K2.5 Thinking → Kimi K2.5
+LiveBench: MiMo V2 Pro → MiMo-V2-Pro
 LiveBench: Minimax M2.5 → MiniMax M2.5
+LiveBench: Minimax M2.7 → MiniMax M2.7
 LiveBench: Qwen 3 235B A22B Instruct 2507 → Qwen 3 235B A22B Nonthinking (2025-07-21)
 LiveBench: Qwen 3 235B A22B Thinking 2507 → Qwen 3 235B A22B Thinking (2025-07-21)
 LiveBench: Qwen 3 30B A3B → Qwen 3 30B A3B Thinking
@@ -1118,8 +1142,8 @@ UGILeaderboard: Qwen/Qwen3-Next-80B-A3B-Instruct → Qwen3 Next 80B A3B Instruct
 UGILeaderboard: Qwen/Qwen3-Next-80B-A3B-Thinking → Qwen3 Next 80B A3B Thinking
 UGILeaderboard: Qwen/Qwen3.5-27B (<think> prefill) → Qwen3.5 27B Thinking
 UGILeaderboard: Qwen/Qwen3.5-35B-A3B (<think> prefill) → Qwen3.5 35B A3B Thinking
-UGILeaderboard: Qwen/Qwen3.5-397B-A17B (reasoning=disabled) → Qwen3.5 397B A17B Nonthinking
-UGILeaderboard: Qwen/Qwen3.5-397B-A17B (reasoning=enabled) → Qwen3.5 397B A17B Thinking
+UGILeaderboard: Qwen/Qwen3.5-397B-A17B (<think> prefill) → Qwen3.5 397B A17B Thinking
+UGILeaderboard: Qwen/Qwen3.5-397B-A17B (no thinking) → Qwen3.5 397B A17B Nonthinking
 UGILeaderboard: Qwen/qwen3-max → Qwen3 Max
 UGILeaderboard: XiaomiMiMo/MiMo-V2-Flash (reasoning=enabled) → MiMo-V2-Flash (Reasoning)
 UGILeaderboard: amazon/nova-2-lite-v1 (reasoning=enabled) → Nova 2 Lite
@@ -1209,7 +1233,7 @@ UGILeaderboard: xai/grok-4-1-fast-non-reasoning → Grok 4.1 Fast (Non-Reasoning
 UGILeaderboard: xai/grok-4-1-fast-reasoning → Grok 4.1 Fast
 UGILeaderboard: xai/grok-4-fast-non-reasoning → Grok 4 Fast (Non-Reasoning)
 UGILeaderboard: xai/grok-4-fast-reasoning → Grok 4 Fast
-UGILeaderboard: xai/grok-4.20-multi-agent-beta-0309 (agent_count=4) → Grok 4.2 beta
+UGILeaderboard: xai/grok-4.20-beta-0309-reasoning → Grok 4.2 beta
 UGILeaderboard: zai-org/GLM-4.5 (reasoning=enabled) → GLM-4.5
 UGILeaderboard: zai-org/GLM-4.5-Air → GLM 4.5 Air
 UGILeaderboard: zai-org/GLM-4.6 (reasoning=enabled) → GLM-4.6
@@ -1265,6 +1289,8 @@ WeirdML: gpt-5.2 (no thinking) → GPT-5.2 (Non-reasoning)
 WeirdML: gpt-5.2 (xhigh) → GPT-5.2 (xhigh)
 WeirdML: gpt-5.3-codex (xhigh) → GPT-5.3 Codex
 WeirdML: gpt-5.4 (xhigh) → GPT-5.4 Thinking
+WeirdML: gpt-5.4-mini (high) → GPT-5.4 Mini
+WeirdML: gpt-5.4-nano (high) → GPT-5.4 Nano
 WeirdML: gpt-oss-120b (high) → GPT OSS 120B
 WeirdML: gpt-oss-20b (high) → GPT OSS 20B
 WeirdML: grok-2-1212 → Grok 2
@@ -1283,7 +1309,9 @@ WeirdML: llama-3.1-70b-instruct → Llama 3.1 70B Instruct Turbo
 WeirdML: llama-3.1-8b-instruct → Llama 3.1 8B Instruct Turbo
 WeirdML: llama-3.3-70b-instruct → Llama 3.3 70B Instruct Turbo
 WeirdML: llama-4-maverick → Llama 4 Maverick 17B 128E Instruct
+WeirdML: minimax-m2.7 → MiniMax M2.7
 WeirdML: mistral-medium-3.1 → Mistral Medium 3.1 (2025-08-12)
+WeirdML: nemotron-3-super-120b-a12b → Nemotron 3 Super
 WeirdML: o1 (high) → o1 High
 WeirdML: o1-mini → o1-Mini
 WeirdML: o1-preview → o1-Preview
@@ -1296,6 +1324,7 @@ WeirdML: qwen3-235b-a22b-07-25 → Qwen 3 235B A22B Nonthinking (2025-07-21)
 WeirdML: qwen3-235b-a22b-thinking-2507 → Qwen 3 235B A22B Thinking (2025-07-21)
 WeirdML: qwen3-30b-a3b (thinking) → Qwen 3 30B A3B Thinking
 WeirdML: qwen3-coder → Qwen 3 Coder 480B A35B Instruct
+WeirdML: qwen3.5-27b → Qwen3.5 27B Thinking
 Yupp: AmazonNova 2 Lite → Nova 2 Lite
 Yupp: AmazonNova Micro 1.0 → Nova Micro
 Yupp: AmazonNova Pro 1.0 → Nova Pro
@@ -1350,6 +1379,8 @@ Yupp: GPT-5.1Codex Mini (High) → GPT-5.1 Codex Mini
 Yupp: GPT-5.2(Extra High) → GPT-5.2 (xhigh)
 Yupp: GPT-5.2(High) → GPT-5.2 (high)
 Yupp: GPT-5.3Codex (High) → GPT-5.3 Codex
+Yupp: GPT-5.4mini → GPT-5.4 Mini
+Yupp: GPT-5.4nano → GPT-5.4 Nano
 Yupp: GPT-5Chat → GPT-5 Chat
 Yupp: GPT-5Codex (High) → GPT-5 Codex
 Yupp: GPT-5Mini Minimal → GPT-5 Mini (minimal)
@@ -1380,6 +1411,7 @@ Yupp: Grok4 Fast Reasoning → Grok 4 Fast
 Yupp: Grok4 → Grok 4
 Yupp: Grok4.1 Fast Non-Reasoning → Grok 4.1 Fast (Non-Reasoning)
 Yupp: Grok4.1 Fast Reasoning → Grok 4.1 Fast
+Yupp: Grok4.20 Beta Reasoning → Grok 4.2 beta
 Yupp: GrokCode Fast 1 → Grok 4 Code Fast 1
 Yupp: KimiK2 0711 → Kimi K2
 Yupp: KimiK2 0905 → Kimi K2 0905
@@ -1394,6 +1426,7 @@ Yupp: MiMoV2 Flash → MiMo-V2-Flash (Reasoning)
 Yupp: MiniMaxM2 → MiniMax M2
 Yupp: MiniMaxM2.1 → MiniMax M2.1
 Yupp: MiniMaxM2.5 → MiniMax M2.5
+Yupp: MiniMaxM2.7 → MiniMax M2.7
 Yupp: MistralLarge 3 → Mistral Large 3 (2025-12-1)
 Yupp: MistralLarge → Mistral Large
 Yupp: MistralMedium 3 → Mistral Medium 3

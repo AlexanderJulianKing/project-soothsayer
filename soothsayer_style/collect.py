@@ -36,7 +36,7 @@ LEGACY_OUTPUT_FILE = os.path.join(SCRIPT_DIR, 'model_outputs.csv')
 N_RUNS = 3
 MAX_PARALLEL_WORKERS = 40
 MAX_PER_MODEL = 5          # concurrent requests per model
-RATE_LIMIT_RETRIES = 3     # collect-level retries on 429 (on top of llm_client's 5)
+RATE_LIMIT_RETRIES = 5     # collect-level retries on 429 (on top of llm_client's 5)
 SAVE_BATCH_SIZE = 10
 
 FIELDNAMES = [
@@ -191,7 +191,13 @@ def _get_gate(model_name: str) -> threading.Semaphore:
 def _on_rate_limit(model_name: str):
     with _throttle_lock:
         cur = _model_delays.get(model_name, 0.0)
-        _model_delays[model_name] = min(max(cur * 2, 2.0), 60.0)
+        _model_delays[model_name] = min(max(cur * 2, 4.0), 120.0)
+        # Dynamically reduce concurrency for this model
+        if model_name in _model_semaphores:
+            sem = _model_semaphores[model_name]
+            # Try to acquire without blocking to reduce effective concurrency
+            if sem._value > 1:
+                sem.acquire(blocking=False)
 
 
 def _on_success(model_name: str):
@@ -269,6 +275,38 @@ def process_single_question(task: Dict[str, Any]) -> Dict[str, Any]:
                         continue
                 # Non-429 error or final attempt — give up
                 break
+
+    # Last resort: if reasoning model failed, retry once with medium effort
+    if reasoning:
+        print(
+            f"FALLBACK [{model_name} Q{question_id} R{run_number}] "
+            f"retrying with reasoning_effort=medium"
+        )
+        with gate:
+            try:
+                result = get_llm_response(
+                    question_text, model_id, model_name, reasoning,
+                    include_usage=True, reasoning_effort="medium",
+                )
+                if isinstance(result, tuple):
+                    answer, usage = result
+                else:
+                    answer = result
+
+                if answer and str(answer).strip():
+                    _on_success(model_name)
+                    return {
+                        'question_id': question_id,
+                        'question_text': question_text,
+                        'model_name': model_name,
+                        'model_id': model_id,
+                        'run_number': str(run_number),
+                        'response': str(answer),
+                        'response_length': len(str(answer)),
+                        'status': 'ok',
+                    }
+            except APIError as e:
+                last_err = e
 
     err_msg = f"Error: {last_err}"
     print(f"ERROR [{model_name} Q{question_id} R{run_number}]: {last_err}")
