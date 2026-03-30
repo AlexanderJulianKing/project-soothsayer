@@ -27,20 +27,19 @@ All runs: `--poly_interactions --poly_limit 7 --no_residual_head --cv_repeats_ou
 
 ### Best Production Config (updated 2026-03-29)
 
-**Target changed from lmsys_Score to lmarena_Score** — lmsys is leakage (derived from same Arena voting process). lmarena (style-controlled) is much more predictable from benchmarks (R²=0.927 vs 0.908).
+**Target changed from lmsys_Score to lmarena_Score** — lmsys is leakage (derived from same Arena voting process). lmarena (style-controlled) is much more predictable from benchmarks (R²=0.924 vs ~0.90).
 
 ```bash
-# KNN prediction (new default, best results):
+# KNN prediction with sublinear power cutoff (production default):
 python3 predict.py \
     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
     --imputer_type model_bank \
     --coherence_lambda 1.0 --coherence_shape exp \
     --eb_parent \
-    --knn_predict \
     --cv_repeats_outer 10
 ```
 
-**Results:** RMSE 15.27 (LOO), 15.84 (10×5-fold), R²=0.927, Spearman=0.958
+**Results:** RMSE 15.63 (LOO), 16.03 (10×5-fold), R²=0.924, Spearman=0.962. Walk-forward RMSE: 14.86.
 
 <details>
 <summary>Legacy ALT pipeline config (deprecated)</summary>
@@ -744,5 +743,56 @@ Every SVD component helps. Total SVD contribution: 1.21 RMSE.
 4. **Bottom-tier prediction** — RMSE 20.30 for bottom 33 models vs 11-15 for upper tiers. These models are spread in feature space with neighbors spanning 170+ ELO. Fundamentally harder — small/niche models whose Arena performance is driven by factors benchmarks don't capture.
 5. **ChatGPT-4o / Mistral Medium underprediction** — still systematically underpredicted (+36, +37 for lmarena). These models are preferred by humans beyond what any benchmark measures. BullshitBench doesn't help (r=0.25 with Arena).
 6. **New benchmarks for top-tier differentiation** — Top-30 vs Mid-Hi effect sizes are only 0.6-0.96 on existing benchmarks. Need benchmarks measuring: adaptive verbosity, conversational coherence, appropriate confidence calibration.
-7. ~~**Full repeated K-fold verification**~~ — **Done.** KNN pipeline: 15.84 (10×5-fold), 16.26 (LOO from pipeline), 15.27 (LOO from standalone experiments).
+7. ~~**Full repeated K-fold verification**~~ — **Done.** KNN pipeline: 16.03 (10×5-fold), 15.63 (LOO) with power cutoff.
 8. **Pipeline SVD factor count** — Pipeline produces 6 SVD factors (105 features) vs 8 in standalone experiments (108 features). The 3 extra features contribute ~0.6 RMSE. Could configure imputer for 8 factors.
+
+---
+
+## Cycle 11: Sublinear Power Cutoff + Walk-Forward Analysis (2026-03-30)
+
+### Walk-Forward CV Discovery
+
+Built temporal (walk-forward) CV: sort models by release date, train on older, predict each new one. This simulates the actual use case — predicting Arena scores before a model goes live.
+
+Walk-forward RMSE was 16.64 (vs 16.06 random CV with old linear cutoff). The gap exposed problems with frontier model prediction — particularly Claude Opus 4.6 (error -26.6) and other top models.
+
+### Feature Sign Flips
+
+Within the top 15 models (≥1450), features flip sign vs the overall population:
+- `style_q7_list_count`: ρ=-0.74 at top, ρ=+0.16 overall
+- `livebench_code_completion`: ρ=-0.32 at top, ρ=+0.61 overall
+- `style_normalized_list_count`: ρ=-0.62 at top, ρ=+0.02 overall
+
+With k≈58 neighbors (linear cutoff), the local Ridge spans both sides of the flip and averages the coefficients to near zero. Features that predict the #1 model at the top (like `aa_eval_mmlu_pro` ρ=+0.95, `weirdml_avg_acc` ρ=+0.93) get diluted by mid-tier models where those features are irrelevant.
+
+### Power Cutoff: `max_dist = d0^0.7 × 3.0`
+
+Replaced the linear cutoff (`d0 × 2.0`) with a sublinear power function. This naturally gives tighter neighborhoods in dense regions:
+- d=10 (top models): effective mult ≈1.5× → k≈25
+- d=15 (sparse models): effective mult ≈1.35× → k≈20
+
+Swept 2,700 configs across: power exponent (0.5-1.0), coefficient (2.0-4.0), bandwidth (0.10-0.40), Ridge alpha strategy (adaptive/fixed, floor 5-20), and local feature selection (0/15/30).
+
+**Winner:** power_alpha=0.7, power_C=3.0, bw_pct=0.15, adaptive alpha (`max(10, std(neighbors))`), no feature selection. Ranked #1 on combined LOO + WF score out of 2,700 configurations.
+
+### Results
+
+| Metric | Old (dm=2.0, bw=0.3) | New (d^0.7×3, bw=0.15) |
+|--------|----------------------|------------------------|
+| LOO RMSE | 15.39 | 15.63 (+0.24) |
+| LOO R² | 0.926 | 0.924 |
+| LOO Spearman | 0.963 | 0.962 |
+| LOO Top-Q | 25/30 | 25/30 |
+| WF RMSE | 16.64 | 14.86 (-1.78) |
+| WF R² | 0.873 | 0.899 |
+| WF Pearson | 0.937 | 0.949 |
+| Opus 4.6 WF err | -26.6 | -21.9 |
+
+### Key Findings
+
+1. **Interpolation vs extrapolation tradeoff**: tighter neighborhoods help walk-forward (extrapolation to novel frontier models) but slightly hurt LOO (interpolation among known models). The power cutoff gives the best balance.
+2. **Feature selection within neighborhoods** (LocalCorr) helps on raw 85-feature data but hurts on the production 105-feature pipeline. The power cutoff provides implicit feature adaptation — explicit selection is redundant and costs degrees of freedom.
+3. **Learned distance weighting** (feature importance × residual correlation) helps on raw features but is neutral on the production pipeline.
+4. **Fixed alpha=20 vs adaptive alpha**: fixed helps walk-forward slightly but hurts LOO. Adaptive alpha (`max(10, std)`) naturally scales with neighborhood diversity and is the better default.
+5. **Jackknife clip is not the bottleneck**: Opus 4.6's natural b=1.49 (not hitting the 1.5 clip). The error is because it's 26 points above its max neighbor — genuine extrapolation beyond training data.
+6. **Remaining residuals correlate with hard reasoning benchmarks** (AIME ρ=-0.64, LiveCodeBench ρ=-0.55). Models that crush hard benchmarks get overpredicted — humans don't reward hard reasoning proportionally at the frontier.

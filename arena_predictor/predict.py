@@ -3,12 +3,12 @@
 Arena ELO Predictor — KNN Pipeline.
 
 Predicts lmarena_Score (style-controlled Chatbot Arena ELO) from benchmark data
-using adaptive KNN + kernel Ridge + jackknife variance inflation (R²=0.927).
+using adaptive KNN (sublinear power cutoff) + kernel Ridge + jackknife VI (R²=0.924).
 
 Pipeline:
     1. Load benchmark CSV, identify numeric columns
     2. Low-variance filtering
-    3. Impute missing values (ModelBankImputer default, SpecializedColumnImputer option)
+    3. Impute missing values (ModelBankImputer default)
     4. Build feature matrix (imputed cols + SVD factors + trajectory features)
     5. Adaptive KNN prediction with OOF cross-validation
     6. Grouped conformal calibration of prediction intervals
@@ -69,11 +69,17 @@ DENSE_THRESHOLD = 0.508  # original threshold for dense-only CV evaluation
 COMPLETENESS_WEIGHT_POWER = 0  # 0 = disabled (all weights 1.0)
 
 # KNN prediction hyperparameters
-KNN_DIST_MULT = 2.0   # include neighbors within dist_mult × nearest distance
+KNN_POWER_ALPHA = 0.7  # exponent for sublinear distance cutoff (1.0 = linear)
+KNN_POWER_C = 3.0      # coefficient for distance cutoff: max_dist = d0^alpha * C
 KNN_MAX_K = 80
 KNN_MIN_K = 20
-KNN_BW_PCT = 0.3      # kernel bandwidth at this percentile of neighbor distances
+KNN_BW_PCT = 0.15      # kernel bandwidth at this percentile of neighbor distances
 KNN_VI_CLIP = (1.0, 1.5)
+
+# Learned distance + local feature selection defaults
+KNN_LOCAL_CORR_K = 0     # 0 = disabled (use all features); >0 = select top-K per neighborhood
+KNN_RESID_WEIGHT = 0.3   # weight for residual-based distance reweighting (0 = plain correlation weighting)
+KNN_LEARNED_DIST = False  # enable feature-weighted distance metric
 
 
 # ==============================================================================
@@ -615,31 +621,105 @@ def compute_grouped_conformal_intervals(
 # KNN PREDICTION
 # ==============================================================================
 
+def _local_corr_select(X_nb: np.ndarray, y_nb: np.ndarray, w: np.ndarray, top_k: int) -> np.ndarray:
+    """Select top_k features by weighted |correlation with y| in the neighborhood."""
+    n_feat = X_nb.shape[1]
+    corrs = np.zeros(n_feat)
+    for j in range(n_feat):
+        col = X_nb[:, j]
+        if np.std(col) < 1e-10:
+            continue
+        wm_x = np.average(col, weights=w)
+        wm_y = np.average(y_nb, weights=w)
+        cov = np.average((col - wm_x) * (y_nb - wm_y), weights=w)
+        std_x = np.sqrt(np.average((col - wm_x) ** 2, weights=w))
+        std_y = np.sqrt(np.average((y_nb - wm_y) ** 2, weights=w))
+        corrs[j] = abs(cov / (std_x * std_y + 1e-10))
+    return np.argsort(-corrs)[:top_k]
+
+
+def compute_learned_dist_weights(
+    X_tr: np.ndarray, y_tr: np.ndarray, resid_weight: float = 0.3,
+) -> np.ndarray:
+    """Compute per-feature distance weights: base importance + residual importance.
+
+    Returns sqrt(weights) suitable for multiplying into feature matrices.
+    """
+    n_feat = X_tr.shape[1]
+    base_imp = np.zeros(n_feat)
+    for j in range(n_feat):
+        col = X_tr[:, j]
+        if np.std(col) < 1e-10:
+            continue
+        base_imp[j] = abs(np.corrcoef(col, y_tr)[0, 1])
+
+    if resid_weight > 0:
+        global_mdl = Ridge(alpha=50)
+        global_mdl.fit(X_tr, y_tr)
+        residuals = y_tr - global_mdl.predict(X_tr)
+        resid_corrs = np.zeros(n_feat)
+        for j in range(n_feat):
+            col = X_tr[:, j]
+            if np.std(col) < 1e-10:
+                continue
+            resid_corrs[j] = abs(np.corrcoef(col, residuals)[0, 1])
+        combined = base_imp + resid_weight * resid_corrs
+    else:
+        combined = base_imp
+
+    combined = combined / (combined.sum() + 1e-10)
+    return np.sqrt(combined)
+
+
 def predict_adaptive_knn(
     Xtr: np.ndarray,
     y_tr: np.ndarray,
     Xte: np.ndarray,
-    dist_mult: float = KNN_DIST_MULT,
+    power_alpha: float = KNN_POWER_ALPHA,
+    power_C: float = KNN_POWER_C,
     max_k: int = KNN_MAX_K,
     min_k: int = KNN_MIN_K,
     bw_pct: float = KNN_BW_PCT,
     vi_clip: tuple = KNN_VI_CLIP,
+    dist_weights: Optional[np.ndarray] = None,
+    local_corr_k: int = 0,
 ) -> Tuple[float, float, int]:
     """Predict a single test point using adaptive KNN + kernel Ridge + jackknife VI.
 
+    Uses a sublinear power cutoff for neighborhood selection:
+        max_dist = d_nearest^power_alpha * power_C
+    This gives tighter neighborhoods in dense regions (top models) while keeping
+    adequate coverage in sparse regions, naturally adapting to feature sign flips.
+
+    Args:
+        power_alpha: exponent for distance cutoff (0.7 default, 1.0 = linear).
+        power_C: coefficient for distance cutoff (3.0 default).
+        dist_weights: per-feature sqrt(weights) for distance computation. If provided,
+            distances are computed in weighted space but regression uses original features.
+        local_corr_k: if >0, select this many features by local correlation before Ridge.
+
     Returns (prediction, std_estimate, k_used).
     """
+    # Find neighbors (optionally in weighted feature space)
+    if dist_weights is not None:
+        Xtr_dist = Xtr * dist_weights
+        Xte_dist = Xte * dist_weights
+    else:
+        Xtr_dist = Xtr
+        Xte_dist = Xte
+
     nn = NearestNeighbors(n_neighbors=max_k)
-    nn.fit(Xtr)
-    dists, idx = nn.kneighbors(Xte)
+    nn.fit(Xtr_dist)
+    dists, idx = nn.kneighbors(Xte_dist)
     d, ix = dists[0], idx[0]
 
-    # Adaptive k: include all within dist_mult × nearest distance
-    max_dist = d[0] * dist_mult
+    # Sublinear power cutoff: tighter neighborhoods for dense regions
+    d0 = max(d[0], 1e-6)
+    max_dist = d0 ** power_alpha * power_C
     k = max(min_k, min(int((d <= max_dist).sum()), max_k))
 
     y_nb = y_tr[ix[:k]]
-    Xtr_nb = Xtr[ix[:k]]
+    Xtr_nb = Xtr[ix[:k]]  # original (unweighted) features for regression
 
     # Gaussian kernel weights
     bw_idx = max(1, int(k * bw_pct))
@@ -647,13 +727,21 @@ def predict_adaptive_knn(
     bw = max(bw, 1e-6)
     w = np.exp(-0.5 * (d[:k] / bw) ** 2)
 
+    # Local feature selection
+    if local_corr_k > 0:
+        sel = _local_corr_select(Xtr_nb, y_nb, w, local_corr_k)
+        Xtr_nb = Xtr_nb[:, sel]
+        Xte_reg = Xte[:, sel]
+    else:
+        Xte_reg = Xte
+
     # Adaptive alpha = score spread of neighbors
     alpha = max(10.0, float(np.std(y_nb)))
 
     # Fit weighted Ridge
     mdl = Ridge(alpha=alpha)
     mdl.fit(Xtr_nb, y_nb, sample_weight=w)
-    p = float(mdl.predict(Xte)[0])
+    p = float(mdl.predict(Xte_reg)[0])
 
     # Jackknife variance inflation
     mu_nb = float(np.mean(y_nb))
@@ -690,18 +778,32 @@ def fit_and_predict_knn(
     cv_splits: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_repeats: int = 10,
     cv_seed: int = SEED,
-    dist_mult: float = KNN_DIST_MULT,
+    power_alpha: float = KNN_POWER_ALPHA,
+    power_C: float = KNN_POWER_C,
     max_k: int = KNN_MAX_K,
     min_k: int = KNN_MIN_K,
     bw_pct: float = KNN_BW_PCT,
+    learned_dist: bool = False,
+    resid_weight: float = 0.3,
+    local_corr_k: int = 0,
 ) -> Dict[str, np.ndarray]:
     """Fit adaptive KNN on training data and predict all rows.
+
+    Args:
+        power_alpha: exponent for sublinear distance cutoff (0.7 default, 1.0 = linear).
+        power_C: coefficient for distance cutoff (3.0 default).
+        learned_dist: if True, weight distance metric by feature importance + residual correlation.
+        resid_weight: weight for residual-based component of distance weighting (0 = correlation only).
+        local_corr_k: if >0, select this many features per neighborhood before Ridge.
 
     Returns dict with keys: mu, std, lower, upper, oof_preds, oof_folds, ks_used.
     """
     n_all = len(y_all)
     n_train = len(train_idx)
     y_train = y_all[train_idx]
+
+    if learned_dist:
+        print(f"  Learned distance: resid_weight={resid_weight}, local_corr_k={local_corr_k}")
 
     # --- OOF predictions via CV splits ---
     if cv_splits is None:
@@ -717,10 +819,15 @@ def fit_and_predict_knn(
         Xva = sc.transform(X_all[train_idx[va]])
         ytr = y_train[tr]
 
+        # Compute distance weights from training fold only (no leakage)
+        dw = compute_learned_dist_weights(Xtr, ytr, resid_weight) if learned_dist else None
+
         for vi, va_i in enumerate(va):
             p, _, _ = predict_adaptive_knn(
                 Xtr, ytr, Xva[vi:vi + 1],
-                dist_mult=dist_mult, max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+                power_alpha=power_alpha, power_C=power_C,
+                max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+                dist_weights=dw, local_corr_k=local_corr_k,
             )
             oof_preds_sum[va_i] += p
             oof_counts[va_i] += 1
@@ -736,6 +843,9 @@ def fit_and_predict_knn(
     X_train_sc = sc_final.fit_transform(X_all[train_idx])
     X_all_sc = sc_final.transform(X_all)
 
+    # Distance weights from full training set
+    dw_final = compute_learned_dist_weights(X_train_sc, y_train, resid_weight) if learned_dist else None
+
     mu = np.full(n_all, np.nan)
     std = np.full(n_all, np.nan)
     ks_used = np.zeros(n_all, dtype=int)
@@ -743,7 +853,9 @@ def fit_and_predict_knn(
     for i in pred_idx:
         p, s, k = predict_adaptive_knn(
             X_train_sc, y_train, X_all_sc[i:i + 1],
-            dist_mult=dist_mult, max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+            power_alpha=power_alpha, power_C=power_C,
+            max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+            dist_weights=dw_final, local_corr_k=local_corr_k,
         )
         mu[i] = p
         std[i] = s
@@ -1154,10 +1266,19 @@ def main():
     # -- KNN config --
     ap.add_argument("--knn_predict", action="store_true", default=True,  # always on, kept for CLI compat
                     help="Use adaptive KNN prediction (default: True).")
-    ap.add_argument("--knn_dist_mult", type=float, default=2.0)
+    ap.add_argument("--knn_power_alpha", type=float, default=0.7,
+                    help="Exponent for sublinear distance cutoff (default 0.7, 1.0=linear).")
+    ap.add_argument("--knn_power_c", type=float, default=3.0,
+                    help="Coefficient for distance cutoff: max_dist = d0^alpha * C (default 3.0).")
     ap.add_argument("--knn_max_k", type=int, default=80)
     ap.add_argument("--knn_min_k", type=int, default=20)
-    ap.add_argument("--knn_bw_pct", type=float, default=0.3)
+    ap.add_argument("--knn_bw_pct", type=float, default=0.15)
+    ap.add_argument("--learned_dist", action="store_true",
+                    help="Weight KNN distance metric by feature importance + residual correlation.")
+    ap.add_argument("--resid_weight", type=float, default=0.3,
+                    help="Residual importance weight for learned distance (default 0.3).")
+    ap.add_argument("--local_corr_k", type=int, default=0,
+                    help="Select top-K features per neighborhood before Ridge (0=disabled).")
     # -- Misc --
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Margin for 'top_by_margin_prob' column (default 20 points).")
@@ -1538,10 +1659,14 @@ def main():
         cv_splits=target_cv_splits,
         cv_repeats=args.cv_repeats_outer,
         cv_seed=args.cv_seed,
-        dist_mult=args.knn_dist_mult,
+        power_alpha=args.knn_power_alpha,
+        power_C=args.knn_power_c,
         max_k=args.knn_max_k,
         min_k=args.knn_min_k,
         bw_pct=args.knn_bw_pct,
+        learned_dist=args.learned_dist,
+        resid_weight=args.resid_weight,
+        local_corr_k=args.local_corr_k,
     )
     mu = knn_result["mu"]
     std = knn_result["std"]
@@ -1694,10 +1819,14 @@ def main():
         "coherence_shape": str(getattr(args, 'coherence_shape', 'exp')),
         "confidence_threshold": float(args.confidence_threshold),
         "knn_predict": True,
-        "knn_dist_mult": float(args.knn_dist_mult),
+        "knn_power_alpha": float(args.knn_power_alpha),
+        "knn_power_c": float(args.knn_power_c),
         "knn_max_k": int(args.knn_max_k),
         "knn_min_k": int(args.knn_min_k),
         "knn_bw_pct": float(args.knn_bw_pct),
+        "learned_dist": bool(args.learned_dist),
+        "resid_weight": float(args.resid_weight),
+        "local_corr_k": int(args.local_corr_k),
         "svd_in_features": bool(args.svd_in_features),
         "used_cache": bool(_cache_hit),
         "cache_key": imp_key,

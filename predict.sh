@@ -69,14 +69,13 @@ echo "Dependencies are up to date."
 echo "Executing Python script"
 
 
-# KNN prediction mode (default — predicts lmarena, R²=0.927)
+# KNN prediction with sublinear power cutoff (default — predicts lmarena, R²=0.924)
 python3 predict.py \
     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
     --imputer_type model_bank \
     --coherence_lambda 1.0 \
     --coherence_shape exp \
     --eb_parent \
-    --knn_predict \
     --cv_repeats_outer 10
 
 # Old two-stage pipeline (deprecated — was predicting lmsys via lmarena imputation):
