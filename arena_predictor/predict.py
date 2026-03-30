@@ -1,81 +1,18 @@
 #!/usr/bin/env python3
 """
-Arena ELO Predictor Pipeline.
+Arena ELO Predictor — KNN Pipeline.
 
-Predicts lmarena_Score (style-controlled Chatbot Arena ELO) from benchmark data.
-Supports two prediction modes:
-    - --knn_predict: Adaptive KNN + kernel Ridge + jackknife VI (R²=0.927, default)
-    - Legacy: Two-stage ALT pipeline with BayesianRidge/ARD
+Predicts lmarena_Score (style-controlled Chatbot Arena ELO) from benchmark data
+using adaptive KNN + kernel Ridge + jackknife variance inflation (R²=0.927).
 
-Coordinates imputation, feature selection, model training, and evaluation.
-
-Pipeline Overview:
-    1. Data Loading: Load transformed benchmark data with missing values
-    2. Imputation: Use SpecializedColumnImputer to fill missing benchmark scores
-    3. Feature Selection: Tree-based ranking (LightGBM/XGBoost) with 1-SE rule
-    4. ALT Target Handling: Optional imputation of alternative targets via OOF stacking
-    5. Model Comparison: Evaluate BayesianRidge and ARDRegression
-    6. Prediction: Generate final predictions with calibrated uncertainty intervals
-    7. Dependency Analysis: Generate column dependency graphs (filtered by importance)
-
-Key Components:
-    Feature Selection:
-        - rank_features_tree(): Rank features by LightGBM/XGBoost gain
-        - choose_k_by_cv_from_rank(): Select k using 1-SE rule
-        - select_features_tree(): Full pipeline with collinearity pruning
-
-    ALT Target Imputation:
-        - impute_alt_for_all(): Out-of-fold stacking for alternative targets
-        - _fit_alt_model_on_rows(): Fit ALT model with spline calibration
-        - _generate_oof_alt_predictions(): Prevent leakage via OOF
-
-    Model Specifications:
-        - ModelSpec: Dataclass defining model configuration
-        - build_model_specs(): Returns BayesianRidge and ARDRegression specs
-
-    Cross-Validation:
-        - cross_val_rmse_for_model(): Standard CV evaluation
-        - cross_val_rmse_with_alt(): CV with inner-loop ALT imputation
-
-    Probability Columns (v6 additions):
-        - num_one_prob: P(score > max_observed_training_score)
-        - top_by_margin_prob: P(score > max_observed + margin), only for models
-          without actual scores. Computed analytically from Bayesian posterior.
-
-    v7 Additions:
-        - ARDRegression for per-feature relevance determination with proper
-          uncertainty quantification (includes observation noise in std)
-
-    v7.1 Additions:
-        - Calibrated uncertainty scaling: Scales model std by a factor computed
-          from CV residuals to achieve proper 95% coverage
-        - Variance contribution analysis: Computes (beta * std(X))^2 / var(pred)
-          for each feature, grouped by base feature for polynomial terms
-        - Dependency graph filtering: Only shows features with >= 1% variance
-          contribution in both target and ALT models
-        - New outputs: best_model_variance_contributions.csv,
-          alt_model_variance_contributions.csv
-
-Configuration:
-    Via argparse CLI arguments:
-    --data: Input CSV file path
-    --target: Target column name (default: lmarena_Score)
-    --max-features: Maximum features to select
-    --n-folds: CV folds
-    --use-alt: Enable ALT target imputation
-    --alt-cols: Alternative target columns
-    --cache-dir: Imputation cache directory
-    --force-reimpute: Ignore cache
-    --margin: Margin for top_by_margin_prob column (default: 20.0 points)
-
-Example Usage:
-    $ python predict.py --knn_predict --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv
-    $ python predict.py --knn_predict --knn_dist_mult 2.5  # wider neighborhood
-
-Dependencies:
-    Required: numpy, pandas, scikit-learn, joblib
-    Optional: lightgbm, xgboost, catboost
-    Local: SpecializedColumnImputer
+Pipeline:
+    1. Load benchmark CSV, identify numeric columns
+    2. Low-variance filtering
+    3. Impute missing values (ModelBankImputer default, SpecializedColumnImputer option)
+    4. Build feature matrix (imputed cols + SVD factors + trajectory features)
+    5. Adaptive KNN prediction with OOF cross-validation
+    6. Grouped conformal calibration of prediction intervals
+    7. Save predictions, OOF, metadata, dependency graph
 """
 from __future__ import annotations
 
@@ -86,23 +23,20 @@ import sys
 import json
 import re
 import itertools
-from collections import Counter, defaultdict, deque
-from dataclasses import dataclass
+from collections import defaultdict, deque
 from typing import Dict, List, Tuple, Optional, Union
-import json
 
 import time
+import hashlib
 
-
-import numpy as np # type: ignore
-import pandas as pd # type: ignore
+import numpy as np  # type: ignore
+import pandas as pd  # type: ignore
 
 from zoneinfo import ZoneInfo
 from datetime import datetime
-import hashlib
 
-from joblib import Parallel, delayed
-
+# joblib kept available for future parallel extensions
+from joblib import Parallel, delayed  # noqa: F401
 
 # ==============================================================================
 # LOCAL IMPORTS
@@ -115,33 +49,45 @@ except Exception as e:
     raise
 
 # ML stack
-from sklearn.model_selection import KFold, GroupKFold # type: ignore
-from sklearn.preprocessing import StandardScaler, PolynomialFeatures, SplineTransformer # type: ignore
-from sklearn.decomposition import PCA # type: ignore
-from sklearn.pipeline import Pipeline # type: ignore
-from sklearn.metrics import mean_squared_error # type: ignore
-from sklearn.linear_model import BayesianRidge, ElasticNetCV, Ridge, RidgeCV, LinearRegression, ARDRegression # type: ignore
-from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor, GradientBoostingRegressor, HistGradientBoostingRegressor # type: ignore
-from sklearn.inspection import permutation_importance # type: ignore
-from sklearn.gaussian_process import GaussianProcessRegressor # type: ignore
-from sklearn.gaussian_process.kernels import DotProduct, RBF, Matern, WhiteKernel, ConstantKernel # type: ignore
-from sklearn.neighbors import NearestNeighbors # type: ignore
+from sklearn.model_selection import KFold, GroupKFold  # type: ignore
+from sklearn.preprocessing import StandardScaler  # type: ignore
+from sklearn.linear_model import Ridge  # type: ignore
+from sklearn.neighbors import NearestNeighbors  # type: ignore
 
+# Optional: trueskill import guard (kept for compatibility)
+try:
+    import trueskill  # type: ignore  # noqa: F401
+except ImportError:
+    pass
+
+# ==============================================================================
+# CONSTANTS
+# ==============================================================================
 
 SEED = 42
 np.random.seed(SEED)
 
-TARGET = "lmarena_Score"  # style-controlled Arena ELO (was lmsys_Score before 2026-03-29)
-ALT_TARGET = "lmsys_Score"  # raw Arena ELO — now excluded as leakage (derived from same Arena voting)
+TARGET = "lmarena_Score"  # style-controlled Arena ELO
+ALT_TARGET = "lmsys_Score"  # raw Arena ELO — excluded as leakage
 ID_COL = "model_name"
-
 
 TARGETS = {TARGET, ALT_TARGET}  # exclude both to avoid leakage
 EXCLUDE = TARGETS | {ID_COL}
 
 DENSE_THRESHOLD = 0.508  # original threshold for dense-only CV evaluation
-COMPLETENESS_WEIGHT_POWER = 0  # 0 = disabled (all weights 1.0); 2 = quadratic weighting
+COMPLETENESS_WEIGHT_POWER = 0  # 0 = disabled (all weights 1.0)
 
+# KNN prediction hyperparameters
+KNN_DIST_MULT = 2.0   # include neighbors within dist_mult × nearest distance
+KNN_MAX_K = 80
+KNN_MIN_K = 20
+KNN_BW_PCT = 0.3      # kernel bandwidth at this percentile of neighbor distances
+KNN_VI_CLIP = (1.0, 1.5)
+
+
+# ==============================================================================
+# UTILITY FUNCTIONS
+# ==============================================================================
 
 def _perturb_imputed_matrix(
     imputed_df: pd.DataFrame,
@@ -181,9 +127,6 @@ PARALLELISM_CFG = {
 }
 
 
-# ---- TREE-BASED FEATURE SELECTION (LightGBM / XGBoost) ----
-
-
 def _cap_job_count(requested: int, cap: Optional[int]) -> int:
     if cap is None:
         return requested
@@ -208,7 +151,7 @@ def _configure_parallelism(args) -> None:
         cv_jobs = _cap_job_count(cv_requested, max_workers)
         model_jobs_cap = max(1, max_workers // cv_jobs) if cv_jobs else 1
 
-    model_requested = max(1, int(args.model_n_jobs))
+    model_requested = max(1, int(getattr(args, "model_n_jobs", 1)))
     model_jobs = _cap_job_count(model_requested, model_jobs_cap) if model_jobs_cap else model_requested
 
     if max_workers is None:
@@ -241,9 +184,7 @@ def _configure_parallelism(args) -> None:
     args.selector_n_jobs = selector_n_jobs
     args.imputer_n_jobs = imputer_jobs
     args.cv_n_jobs = cv_jobs
-    args.model_n_jobs = model_jobs
     args.max_workers = max_workers or 0
-
 
 
 def get_feature_cols(df: pd.DataFrame) -> list[str]:
@@ -291,2747 +232,37 @@ def _coerce_discrete_columns_to_int(df: pd.DataFrame, cols: list[str]) -> None:
         rounded = np.round(s)
         df[col] = pd.to_numeric(rounded, errors="coerce").astype("Int64")
 
-# Try both; use what's available
-try:
-    import lightgbm as lgb# type: ignore
-    _HAS_LGB = True
-except Exception:
-    _HAS_LGB = False
-try:
-    from xgboost import XGBRegressor# type: ignore
-    _HAS_XGB = True
-except Exception:
-    _HAS_XGB = False
-
-
-
-def _rmse(y_true, y_pred) -> float:
-    return np.sqrt(mean_squared_error(y_true, y_pred))
-
-def _neg_rmse(y_true, y_pred) -> float:
-    # Higher is better (less negative) for our selection logic
-    return -_rmse(y_true, y_pred)
-
-def _get_lgb_params():
-    return dict(
-        n_estimators=800,
-        learning_rate=0.05,
-        max_depth=6,
-        num_leaves=63,
-        min_child_samples=20,
-        subsample=1.0,            # No subsampling for deterministic feature importance
-        subsample_freq=1,
-        colsample_bytree=1.0,     # No column sampling for deterministic feature importance
-        reg_alpha=0.1,
-        reg_lambda=0.1,
-        n_jobs=PARALLELISM_CFG["tree_selector_n_jobs"],
-        random_state=42,
-        verbosity=-1
-    )
-
-def _get_xgb_params():
-    return dict(
-        n_estimators=800,
-        learning_rate=0.05,
-        max_depth=6,
-        subsample=1.0,            # No subsampling for deterministic feature importance
-        colsample_bytree=1.0,     # No column sampling for deterministic feature importance
-        min_child_weight=1.0,
-        reg_alpha=0.1,
-        reg_lambda=0.1,
-        tree_method="hist",
-        n_jobs=PARALLELISM_CFG["tree_selector_n_jobs"],
-        random_state=42
-    )
-
-def _fit_lgb(X: pd.DataFrame, y: pd.Series):
-    model = lgb.LGBMRegressor(**_get_lgb_params())
-    model.fit(X, y)
-    return model
-
-def _fit_xgb(X: pd.DataFrame, y: pd.Series):
-    model = XGBRegressor(**_get_xgb_params())
-    model.fit(X, y, verbose=False)
-    return model
-
-def _gain_importance_from_lgb(model) -> pd.Series:
-    booster = model.booster_
-    gains = booster.feature_importance(importance_type="gain")
-    names = booster.feature_name()
-    s = pd.Series(gains, index=names, dtype="float64")
-    return s
-
-def _gain_importance_from_xgb(model, cols: List[str]) -> pd.Series:
-    booster = model.get_booster()
-    fmap = booster.feature_names
-    if fmap is None:
-        # Fallback: map f{idx} -> col
-        gain_dict = booster.get_score(importance_type="gain")
-        out = pd.Series(0.0, index=cols)
-        for k, v in gain_dict.items():
-            # keys like 'f12' -> 12
-            try:
-                i = int(k[1:])
-                out.iloc[i] = v
-            except Exception:
-                pass
-        return out
-    else:
-        gain_dict = booster.get_score(importance_type="gain")
-        # gain_dict keys should already be column names
-        out = pd.Series(0.0, index=cols)
-        for k, v in gain_dict.items():
-            if k in out.index:
-                out.loc[k] = v
-        return out
-
-def rank_features_tree(
-    X: pd.DataFrame,
-    y: pd.Series,
-    model_type: str = "lgbm",
-    cv: int = 5,
-    cv_repeats: int = 1,
-    random_state: int = 42
-) -> pd.DataFrame:
-    """Rank features by tree-based gain importance using cross-validation.
-
-    This function trains gradient boosting models (LightGBM or XGBoost) on
-    multiple CV folds and aggregates the feature importance scores. Using
-    CV-averaged gains is more robust than single-model importance.
-
-    Args:
-        X: Feature matrix as DataFrame.
-        y: Target series.
-        model_type: 'lgbm' for LightGBM or 'xgb' for XGBoost. Falls back to
-            available library if requested one is not installed.
-        cv: Number of cross-validation folds. Defaults to 5.
-        cv_repeats: Number of CV repeats (new seed per repeat). Defaults to 1.
-        random_state: Random seed for reproducibility. Defaults to 42.
-
-    Returns:
-        DataFrame with columns ['feature', 'mean_gain', 'std_gain'] sorted by
-        mean_gain in descending order. Higher gain = more important.
-
-    Raises:
-        ImportError: If neither LightGBM nor XGBoost is installed.
-
-    Algorithm:
-        1. For each CV fold, fit a tree model on training data
-        2. Extract gain-based feature importance from the model
-        3. Align importance scores to feature names
-        4. Compute mean and std across folds
-        5. Return sorted DataFrame
-
-    Example:
-        >>> ranking_df = rank_features_tree(X, y, model_type='lgbm', cv=5)
-        >>> top_features = ranking_df['feature'].head(20).tolist()
-    """
-    assert model_type in {"lgbm", "xgb"}, "model_type must be 'lgbm' or 'xgb'"
-    if model_type == "lgbm" and not _HAS_LGB and _HAS_XGB:
-        model_type = "xgb"
-    if model_type == "xgb" and not _HAS_XGB and _HAS_LGB:
-        model_type = "lgbm"
-    if model_type == "lgbm" and not _HAS_LGB:
-        raise ImportError("LightGBM is not installed.")
-    if model_type == "xgb" and not _HAS_XGB:
-        raise ImportError("XGBoost is not installed.")
-
-    # ensure DataFrame
-    X = pd.DataFrame(X).copy()
-    y = pd.Series(y).copy()
-
-    splits = _build_repeated_splits(len(X), cv, cv_repeats, random_state)
-    if not splits:
-        raise ValueError("cv must be >= 2 for cross-validation.")
-
-    all_gains = []
-    for tr_idx, _ in splits:
-        Xtr, ytr = X.iloc[tr_idx], y.iloc[tr_idx]
-        if model_type == "lgbm":
-            m = _fit_lgb(Xtr, ytr)
-            gains = _gain_importance_from_lgb(m)
-        else:
-            m = _fit_xgb(Xtr, ytr)
-            gains = _gain_importance_from_xgb(m, X.columns.tolist())
-        # align to X columns (fill 0 for unseen)
-        gains = gains.reindex(X.columns, fill_value=0.0)
-        all_gains.append(gains.values)
-
-    G = np.vstack(all_gains)  # cv x features
-    mean_gain = G.mean(axis=0)
-    std_gain = G.std(axis=0)
-
-    df = pd.DataFrame({
-        "feature": X.columns,
-        "mean_gain": mean_gain,
-        "std_gain": std_gain
-    }).sort_values("mean_gain", ascending=False).reset_index(drop=True)
-    return df
-
-def choose_k_by_cv_from_rank(
-    X: pd.DataFrame,
-    y: pd.Series,
-    ranking: List[str],
-    model_type: str = "lgbm",
-    k_grid: List[Union[int, str]] = (10, 20, 50, 100, 200, "all"),
-    cv: int = 5,
-    cv_repeats: int = 1,
-    random_state: int = 42,
-) -> Tuple[List[str], Dict]:
-    """Select optimal number of features using the 1-SE rule on CV performance.
-
-    Given a ranked list of features, this function evaluates different subset
-    sizes via cross-validation and selects the smallest subset whose performance
-    is within one standard error of the best performance (1-SE rule).
-
-    The 1-SE rule provides regularization by preferring simpler models when
-    performance differences are within statistical noise.
-
-    Args:
-        X: Feature matrix as DataFrame.
-        y: Target series.
-        ranking: List of feature names sorted by importance (most important first).
-        model_type: 'lgbm' or 'xgb' for the evaluation model. Defaults to 'lgbm'.
-        k_grid: List of k values to evaluate. Can include integers or 'all'.
-            Defaults to (10, 20, 50, 100, 200, 'all').
-        cv: Number of cross-validation folds. Defaults to 5.
-        cv_repeats: Number of CV repeats (new seed per repeat). Defaults to 1.
-        random_state: Random seed for reproducibility. Defaults to 42.
-
-    Returns:
-        Tuple of (chosen_cols, diagnostics) where:
-        - chosen_cols: List of selected feature names
-        - diagnostics: Dict containing:
-            - k_grid: Evaluated k values
-            - cv_means: Mean CV scores (negative RMSE) for each k
-            - cv_stds: Std of CV scores for each k
-            - best_idx: Index of best performing k
-            - best_mean: Best mean score
-            - best_se: Standard error at best k
-            - chosen_idx: Index of chosen k (smallest within 1-SE)
-            - chosen_K: Number of features selected
-
-    Algorithm:
-        1. For each k in k_grid, evaluate top-k features via CV
-        2. Find k with best mean performance
-        3. Compute 1-SE threshold: best_mean - (best_std / sqrt(n_folds_total))
-        4. Select smallest k whose mean is >= threshold
-    """
-    # clean grid
-    k_grid = [len(ranking) if (k == "all" or (isinstance(k, str) and k.lower() == "all")) else int(k)
-              for k in k_grid]
-    k_grid = sorted(set([k for k in k_grid if k > 0 and k <= len(ranking)]))
-
-    splits = _build_repeated_splits(len(X), cv, cv_repeats, random_state)
-    if not splits:
-        raise ValueError("cv must be >= 2 for cross-validation.")
-    n_folds_total = len(splits)
-
-    def _fit_predict_score(cols: List[str]) -> float:
-        scores = []
-        for tr, va in splits:
-            Xtr, ytr = X.iloc[tr][cols], y.iloc[tr]
-            Xva, yva = X.iloc[va][cols], y.iloc[va]
-            if model_type == "lgbm":
-                m = _fit_lgb(Xtr, ytr)
-            else:
-                m = _fit_xgb(Xtr, ytr)
-            pred = m.predict(Xva)
-            scores.append(_neg_rmse(yva, pred))
-        return float(np.mean(scores)), float(np.std(scores))
-
-    means, stds = [], []
-    for K in k_grid:
-        cols = ranking[:K]
-        m, s = _fit_predict_score(cols)
-        means.append(m); stds.append(s)
-
-    means = np.array(means); stds = np.array(stds)
-    best_idx = int(np.argmax(means))
-    se = stds[best_idx] / np.sqrt(n_folds_total)
-    within = np.where(means >= means[best_idx] - se)[0]
-    # pick smallest K among those within 1-SE
-    chosen_idx = int(within[np.argmin([k_grid[i] for i in within])])
-    chosen_K = int(k_grid[chosen_idx])
-    chosen_cols = ranking[:chosen_K]
-    diags = {
-        "k_grid": k_grid,
-        "cv_means": means.tolist(),
-        "cv_stds": stds.tolist(),
-        "best_idx": int(best_idx),
-        "best_mean": float(means[best_idx]),
-        "best_se": float(se),
-        "chosen_idx": int(chosen_idx),
-        "chosen_K": chosen_K,
-        "cv_repeats": int(_normalize_cv_repeats(cv_repeats)),
-        "n_folds_total": int(n_folds_total),
-    }
-    return chosen_cols, diags
-
-def _ensure_frame_series(X, y):
-    # Make X a DataFrame with stable column names
-    if not isinstance(X, pd.DataFrame):
-        X = pd.DataFrame(X)
-    # Make y a Series aligned to X
-    if not isinstance(y, pd.Series):
-        y = pd.Series(y, index=X.index, name="target")
-    return X, y
-
-
-
-
-# ==============================================================================
-# POLYNOMIAL INTERACTION EXPANSION
-# ==============================================================================
-
-# lmarena_Score should only interact with style features (the lmarena→lmsys
-# difference is purely style-control coefficients on length/headers/bold/lists).
-# Allowing lmarena to interact with capability benchmarks creates a near-circular
-# "predict Arena from Arena × benchmarks" path that overfits for existing models
-# and extrapolates badly for new ones.
-_LMARENA_STYLE_ONLY_PARTNERS = {
-    "style_normalized_length", "style_log_normalized_length",
-    "style_normalized_header_count", "style_normalized_bold_count",
-    "style_normalized_list_count", "style_predicted_delta",
-    "style_cv_length", "style_cv_header_count", "style_cv_bold_count",
-    "style_cv_list_count", "style_min_length", "style_min_bold_count",
-    "style_min_list_count",
-    "style_frac_used_length", "style_frac_used_header_count",
-    "style_frac_used_bold_count", "style_frac_used_list_count",
-    "style_q7_length", "style_q7_header_count", "style_q7_bold_count",
-    "style_q7_list_count",
-    "style_combined_length", "style_combined_header_count",
-    "style_combined_bold_count", "style_combined_list_count",
-    "_pw_top_style",
-    "_style_delta_low", "_style_delta_high",
-}
-
-
-def expand_poly_interactions(
-    X: pd.DataFrame,
-    include_squares: bool = False,
-    limit: int = 0,
-    preset_core: Optional[List[str]] = None,
-    return_core: bool = False,
-    exclude_cols: Optional[List[str]] = None,
-) -> Union[pd.DataFrame, Tuple[pd.DataFrame, List[str]]]:
-    """Generate degree-2 polynomial interaction features.
-
-    Creates pairwise interaction features (A*B) and optionally squared terms (A^2)
-    from input features. When many features exist, interactions can be limited to
-    the highest-variance columns to control dimensionality.
-
-    lmarena_Score interactions are restricted to style features only (see
-    _LMARENA_STYLE_ONLY_PARTNERS) to prevent circular Arena→Arena prediction.
-
-    Args:
-        X: Input feature DataFrame.
-        include_squares: If True, include squared terms (A^2). Defaults to False.
-        limit: If > 0, only generate interactions among the top-variance `limit`
-            columns. Other columns are kept as main effects only. Defaults to 0
-            (no limit).
-        preset_core: If provided, use these columns as the "core" for interactions
-            instead of selecting by variance. Useful for test-time consistency.
-        return_core: If True, return tuple (DataFrame, core_columns) so the same
-            core can be applied to test data. Defaults to False.
-
-    Returns:
-        If return_core=False: DataFrame with original columns plus interactions.
-        If return_core=True: Tuple of (DataFrame, list of core column names).
-
-    Feature Naming:
-        - Interactions: 'A*B' (original names joined by *)
-        - Squares: 'A^2' (original name with ^2 suffix)
-
-    Example:
-        >>> X_train_poly, core = expand_poly_interactions(
-        ...     X_train, include_squares=True, limit=10, return_core=True
-        ... )
-        >>> X_test_poly = expand_poly_interactions(
-        ...     X_test, include_squares=True, limit=10, preset_core=core
-        ... )
-    """
-    if X.empty:
-        return X.copy()
-    cols_all = X.columns.tolist()
-    _excl = set(exclude_cols or [])
-    if preset_core is not None:
-        core = [c for c in preset_core if c in cols_all]
-        if not core:
-            preset_core = None  # fallback to default logic if nothing matched
-    if preset_core is None:
-        eligible = [c for c in cols_all if c not in _excl]
-        if limit and limit < len(eligible):
-            var = X[eligible].var(ddof=0).sort_values(ascending=False)
-            core = var.index[:limit].tolist()
-        else:
-            core = eligible
-
-    poly = PolynomialFeatures(
-        degree=2,
-        include_bias=False,
-        interaction_only=not include_squares,
-    )
-    Z = poly.fit_transform(X[core].values)
-    names = poly.get_feature_names_out(core)
-    # sanitize: "A B" -> "A*B"
-    names = [n.replace(" ", "*") for n in names]
-    Zdf = pd.DataFrame(Z, index=X.index, columns=names)
-
-    # Drop disallowed lmarena interactions (lmarena × non-style)
-    lmarena_key = "lmarena_Score"
-    if lmarena_key in core:
-        drop_cols = []
-        for col_name in Zdf.columns:
-            if "*" not in col_name:
-                continue
-            parts = col_name.split("*")
-            if len(parts) != 2:
-                continue
-            if lmarena_key not in parts:
-                continue
-            partner = parts[0] if parts[1] == lmarena_key else parts[1]
-            if partner not in _LMARENA_STYLE_ONLY_PARTNERS:
-                drop_cols.append(col_name)
-        if drop_cols:
-            Zdf = Zdf.drop(columns=drop_cols)
-
-    if limit and limit < len(cols_all):
-        # keep main effects for the non-core columns (no interactions)
-        rest = [c for c in cols_all if c not in core]
-        Zdf = pd.concat([X[rest], Zdf], axis=1)
-    if return_core:
-        return Zdf, core
-    return Zdf
-
-
-def expand_alt_centric_interactions(
-    X: pd.DataFrame,
-    y: Optional[np.ndarray] = None,
-    alt_col: str = "lmarena_Score",
-    top_k: int = 6,
-    preset_interactions: Optional[List[str]] = None,
-    return_interactions: bool = False,
-) -> Union[pd.DataFrame, Tuple[pd.DataFrame, List[str]]]:
-    """Generate ALT-centric interaction features ranked by residual correlation.
-
-    Instead of generic top-variance poly, creates ALT×feature interactions and
-    ranks them by |correlation| with the residual after an ALT-only linear fit.
-
-    Args:
-        X: Feature DataFrame including alt_col.
-        y: Target array (training only). Required if preset_interactions is None.
-        alt_col: Name of ALT column.
-        top_k: Number of ALT×feature interactions to keep.
-        preset_interactions: Pre-selected interaction column names (for test data).
-        return_interactions: If True, return (DataFrame, interaction_names).
-
-    Returns:
-        DataFrame with original columns + ALT² + top-K ALT×feature interactions.
-    """
-    if alt_col not in X.columns:
-        return (X.copy(), []) if return_interactions else X.copy()
-
-    alt = X[alt_col].values.astype(float)
-    non_alt_cols = [c for c in X.columns if c != alt_col]
-    out = X.copy()
-
-    # Always add ALT²
-    out[f"{alt_col}^2"] = alt ** 2
-
-    if preset_interactions is not None:
-        # Test mode: apply same interactions as selected on training data
-        for iname in preset_interactions:
-            if iname == f"{alt_col}^2":
-                continue  # already added
-            # Parse "ALT*feature" name
-            parts = iname.split("*", 1)
-            if len(parts) == 2 and parts[1] in X.columns:
-                out[iname] = alt * X[parts[1]].values.astype(float)
-        chosen = preset_interactions
-    else:
-        # Training mode: rank ALT×feature by |corr with residual|
-        if y is None:
-            raise ValueError("y required when preset_interactions is None")
-        obs = ~np.isnan(y) & ~np.isnan(alt)
-        if obs.sum() < 5:
-            chosen = []
-        else:
-            # Residual after ALT-only linear fit
-            alt_obs = alt[obs]
-            y_obs = y[obs]
-            slope = np.cov(alt_obs, y_obs)[0, 1] / (np.var(alt_obs) + 1e-12)
-            intercept = np.mean(y_obs) - slope * np.mean(alt_obs)
-            resid = y_obs - (slope * alt_obs + intercept)
-
-            # Rank ALT×feature interactions by |corr with residual|
-            scores = []
-            for col in non_alt_cols:
-                fvals = X[col].values.astype(float)
-                interaction = alt * fvals
-                int_obs = interaction[obs]
-                if np.std(int_obs) < 1e-12:
-                    continue
-                corr = np.corrcoef(int_obs, resid)[0, 1]
-                if np.isnan(corr):
-                    continue
-                scores.append((col, abs(corr), corr))
-
-            scores.sort(key=lambda x: x[1], reverse=True)
-            chosen_cols = [s[0] for s in scores[:top_k]]
-
-            # Create interaction columns
-            chosen = [f"{alt_col}^2"]
-            for col in chosen_cols:
-                iname = f"{alt_col}*{col}"
-                out[iname] = alt * X[col].values.astype(float)
-                chosen.append(iname)
-
-    return (out, chosen) if return_interactions else out
-
-
-
-def _select_target_cols_for_train(X_tr: pd.DataFrame, y_tr: np.ndarray, cfg: dict) -> List[str]:
-    """Select columns for the target model using only TRAIN rows."""
-    if not cfg.get("enabled", False):
-        return list(X_tr.columns)
-    y_numeric = pd.to_numeric(pd.Series(y_tr), errors="coerce").to_numpy()
-    mask = ~np.isnan(y_numeric)
-    if mask.sum() < 3:
-        return list(X_tr.columns)
-
-    sel_cols, _, _ = select_features_tree(
-        X_tr.loc[mask],
-        pd.Series(y_numeric[mask]),
-        model_type=cfg["model_type"],
-        mode=cfg["mode"],
-        k_grid=cfg["k_grid"],
-        cv=cfg["cv"],
-        cv_repeats=cfg.get("cv_repeats", 1),
-        random_state=cfg.get("cv_seed", SEED),
-        drop_collinear=True,
-        r2_threshold=0.95,
-        min_variance=1e-12,
-    )
-    return sel_cols if len(sel_cols) else list(X_tr.columns)
-
-
-def _greedy_residual_select(
-    X_tr: pd.DataFrame,
-    y_tr: np.ndarray,
-    base_cols: List[str],
-    candidate_cols: List[str],
-    max_k: int = 5,
-    min_improvement: float = 0.01,
-    poly: bool = False,
-    poly_top_k: int = 30,
-) -> Tuple[List[str], pd.DataFrame]:
-    """Greedily select features that correlate with the residual.
-
-    Starting from a base set (e.g. ALT + PCA), fits Ridge, computes
-    the residual, and adds the candidate with highest |correlation|
-    to the residual. Repeats up to max_k times.
-
-    When poly=True, candidates also include pairwise interactions (A*B)
-    from the top poly_top_k columns by |correlation| with the target.
-    Each interaction is an independent candidate — selecting A*B does NOT
-    require also selecting A or B.
-
-    Args:
-        X_tr: Training features (all columns available).
-        y_tr: Training targets.
-        base_cols: Initial column names (ALT + PCA components).
-        candidate_cols: Pool of raw columns to select from.
-        max_k: Maximum number of features to add.
-        min_improvement: Stop if best |corr| < this threshold.
-        poly: If True, also consider pairwise interaction candidates.
-        poly_top_k: Number of top columns (by |r| with target) to form
-            interaction pairs from.
-
-    Returns:
-        Tuple of (selected column names, augmented DataFrame with any
-        interaction columns appended).
-    """
-    from sklearn.linear_model import Ridge
-
-    y_valid = pd.to_numeric(pd.Series(y_tr), errors="coerce").to_numpy()
-    mask = ~np.isnan(y_valid)
-    if mask.sum() < 5:
-        return list(base_cols), X_tr
-
-    # Build augmented DataFrame with interaction columns if poly
-    X_aug = X_tr.copy()
-    interaction_candidates = []
-    if poly:
-        # Pre-screen: top poly_top_k columns by |correlation| with target
-        raw_cols = [c for c in candidate_cols
-                    if not c.startswith("_target_pc") and not c.startswith("_svd_f")]
-        cors = []
-        for c in raw_cols:
-            v = X_tr[c].values[mask].astype(float)
-            if np.std(v) < 1e-12:
-                continue
-            r = np.corrcoef(v, y_valid[mask])[0, 1]
-            if np.isfinite(r):
-                cors.append((c, abs(r)))
-        cors.sort(key=lambda x: -x[1])
-        top_cols = [c for c, _ in cors[:poly_top_k]]
-
-        # Generate pairwise interactions
-        for i, ca in enumerate(top_cols):
-            for cb in top_cols[i + 1:]:
-                int_name = f"{ca}*{cb}"
-                X_aug[int_name] = X_tr[ca].values * X_tr[cb].values
-                interaction_candidates.append(int_name)
-
-    all_candidates = list(candidate_cols) + interaction_candidates
-
-    selected = list(base_cols)
-    used = set(selected)
-
-    for step in range(max_k):
-        remaining = [c for c in all_candidates if c not in used]
-        if not remaining:
-            break
-
-        # Fit Ridge on current feature set
-        X_fit = X_aug[selected].values[mask]
-        model = Ridge(alpha=10.0)
-        model.fit(X_fit, y_valid[mask])
-        residual = y_valid[mask] - model.predict(X_fit)
-
-        # Find candidate with highest |correlation| to residual
-        best_col = None
-        best_corr = 0.0
-        for col in remaining:
-            vals = X_aug[col].values[mask].astype(float)
-            if np.std(vals) < 1e-12:
-                continue
-            r = np.corrcoef(vals, residual)[0, 1]
-            if np.isfinite(r) and abs(r) > best_corr:
-                best_corr = abs(r)
-                best_col = col
-
-        if best_col is None or best_corr < min_improvement:
-            break
-
-        selected.append(best_col)
-        used.add(best_col)
-
-    return selected, X_aug
-
-
-def _alt_cv_report(
-    X_no_alt_all: pd.DataFrame,
-    alt_series: pd.Series,
-    cfg: dict,
-    out_dir: str,
-    repeats: int = 1,
-    seed: int = SEED,
-    X_base_for_search: Optional[pd.DataFrame] = None,
-):
-    """
-    Measures ALT imputation quality via **nested** CV: interaction pairs are
-    selected per outer fold (on training rows only) so the reported RMSE is
-    unbiased w.r.t. interaction selection.
-
-    Args:
-        X_no_alt_all: Feature DataFrame for production model (may include poly features).
-        alt_series: ALT target values.
-        cfg: ALT selector config.
-        out_dir: Output directory.
-        repeats: Number of CV repeats for outer folds.
-        seed: Random seed.
-        X_base_for_search: Base feature DataFrame (pre-poly) for inner greedy
-            interaction search. If None, uses X_no_alt_all (which may include
-            poly features — not recommended).
-
-    Writes:
-      - alt_imputation_cv_folds.csv (fold RMSE)
-      - alt_imputation_cv_metrics.json ({rmse, sd, rmse_over_sd})
-      - alt_selected_features_per_fold.csv (comma-joined base features)
-      - alt_selected_features_frequency.csv (counts across folds)
-      - alt_selected_interactions_per_fold.csv (interaction pairs per fold)
-
-    Returns:
-        metrics dict with keys: rmse, sd, rmse_over_sd
-    """
-    y = pd.to_numeric(alt_series, errors="coerce")
-    mask_known = ~y.isna()
-    X = pd.DataFrame(X_no_alt_all).loc[mask_known].reset_index(drop=True)
-    y = y.loc[mask_known].reset_index(drop=True)
-
-    # Base features for inner greedy search (exclude poly features)
-    if X_base_for_search is not None:
-        X_search = pd.DataFrame(X_base_for_search).loc[mask_known].reset_index(drop=True)
-    else:
-        X_search = X
-
-    splits = _build_repeated_splits(len(X), int(cfg["cv"]), int(repeats), int(seed))
-    fold_rows, feat_rows, int_pair_rows = [], [], []
-    oof_actual, oof_pred = np.full(len(y), np.nan), np.full(len(y), np.nan)
-    total_sse = 0.0
-    total_n = 0
-    for k, (tr, va) in enumerate(splits):
-        # --- Nested inner loop: select interaction pairs on train rows only ---
-        # Use base features (pre-poly) to match global greedy search space
-        X_tr_search = X_search.iloc[tr]
-        y_tr = y.iloc[tr]
-        fold_pairs, _ = _greedy_select_alt_interactions(
-            X_tr_search, y_tr,
-            n_pca=ALT_PCA_N_COMPONENTS,
-            n_folds=min(int(cfg["cv"]), len(tr)),
-            n_repeats=1,   # single repeat inside nested CV for speed
-            seed=seed + k,
-            n_runs=1,      # no consensus inside nested CV
-            consensus_min=1,
-            verbose=False,
-            n_jobs=1,      # already inside nested CV, no further forking
-        )
-        int_pair_rows.append({
-            "fold": k,
-            "n_pairs": len(fold_pairs),
-            "pairs": ";".join(f"{a}*{b}" for a, b in fold_pairs),
-        })
-
-        # --- Fit production model with per-fold interaction pairs ---
-        fit = _fit_alt_model_on_rows(X, y, cfg, tr, interaction_pairs=fold_pairs)
-        pred_all = fit["pred_all"]
-        pred_va = pred_all.iloc[va].to_numpy()
-
-        # kNN residual smoothing: build inner OOF residual bank, then correct
-        if ALT_KNN_ALPHA > 0 and len(tr) >= 15:
-            X_tr_slice = X.iloc[tr]
-            y_tr_slice = y.iloc[tr]
-            r_bank = _build_alt_inner_residual_bank(
-                X_tr_slice, y_tr_slice, cfg, seed=SEED + k,
-            )
-            rhat = _apply_alt_knn_correction(X, tr, va, r_bank)
-            pred_va = pred_va + ALT_KNN_ALPHA * rhat
-
-        yva = y.iloc[va].to_numpy()
-
-        feat_rows.append({"fold": k, "features": ",".join(fit["selected_features"])})
-
-        oof_actual[va] = yva
-        oof_pred[va] = pred_va
-
-        fold_rmse = float(_rmse(yva, pred_va))
-        fold_rows.append({"fold": k, "rmse": fold_rmse, "n_val": int(len(va))})
-        total_sse += float(np.sum((yva - pred_va) ** 2))
-        total_n += int(len(va))
-
-    rmse = float(np.sqrt(total_sse / total_n)) if total_n else float("nan")
-    sd = float(np.std(y, ddof=1)) if len(y) > 1 else float("nan")
-
-    # Bootstrap 95% CI on ALT RMSE
-    valid = ~np.isnan(oof_actual)
-    resid_sq = (oof_actual[valid] - oof_pred[valid]) ** 2
-    rng = np.random.RandomState(seed)
-    n_boot = len(resid_sq)
-    boot_rmses = np.array([np.sqrt(np.mean(resid_sq[rng.randint(0, n_boot, size=n_boot)])) for _ in range(2000)])
-    alt_ci_lo, alt_ci_hi = float(np.percentile(boot_rmses, 2.5)), float(np.percentile(boot_rmses, 97.5))
-
-    metrics = {
-        "rmse": rmse, "sd": sd, "rmse_over_sd": (rmse / sd) if sd and sd > 0 else float("nan"),
-        "ci_lo": round(alt_ci_lo, 4), "ci_hi": round(alt_ci_hi, 4),
-    }
-
-    # Save per-row OOF predictions
-    oof_df = pd.DataFrame({"actual": oof_actual[valid], "predicted": oof_pred[valid]})
-    oof_df.to_csv(os.path.join(out_dir, "alt_imputation_cv_oof.csv"), index=False)
-
-    # write outputs
-    pd.DataFrame(fold_rows).to_csv(os.path.join(out_dir, "alt_imputation_cv_folds.csv"), index=False)
-    with open(os.path.join(out_dir, "alt_imputation_cv_metrics.json"), "w") as f:
-        json.dump(metrics, f, indent=2)
-
-    per_fold = pd.DataFrame(feat_rows)
-    per_fold.to_csv(os.path.join(out_dir, "alt_selected_features_per_fold.csv"), index=False)
-
-    # interaction pairs per fold
-    pd.DataFrame(int_pair_rows).to_csv(
-        os.path.join(out_dir, "alt_selected_interactions_per_fold.csv"), index=False)
-
-    # frequency table
-    from collections import Counter
-    counts = Counter([c for row in feat_rows for c in row["features"].split(",") if c])
-    freq_df = pd.DataFrame({"feature": list(counts.keys()), "count": list(counts.values())}) \
-                .sort_values(["count", "feature"], ascending=[False, True])
-    freq_df.to_csv(os.path.join(out_dir, "alt_selected_features_frequency.csv"), index=False)
-
-    return metrics
-
-
-ALT_PCA_N_COMPONENTS = 10  # PCA(10)->BR; 10 slightly outperforms 12 in OOF CV (17.79 vs 18.14)
-ALT_COMMITTEE_ENABLED = False  # Set by --alt_committee CLI arg
-TIERED_ALT_ENABLED = False  # Set by --tiered_alt CLI arg
-TIERED_ALT_N_TIERS = 4  # Number of tiers for tiered ALT
-PSEUDO_MISSING_AUG_ENABLED = False  # Set by --pseudo_missing_aug
-PSEUDO_MISSING_WEIGHT = 0.4  # Sample weight for pseudo-imputed copies
-ALT_COMMITTEE_PCA_DIMS = [6, 8, 10, 12]  # PCA dimensions for committee members
-ALT_COMMITTEE_N_BOOTSTRAPS = 2  # Bootstrap subsamples per PCA dim
-
-# Cross-domain interaction ALT model: instead of PCA, use greedy-selected
-# standalone columns + cross-domain interactions (coding×writing, etc.).
-# Captures nonlinear "good at both X and Y" signal that PCA misses.
-CROSS_DOMAIN_ALT_ENABLED = False  # Set by --cross_domain_alt CLI arg
-CROSS_DOMAIN_FEATURES: Optional[dict] = None  # Set by search at runtime
-CROSS_DOMAIN_TOP_K_COLS = 25  # Pre-screen to top K columns by |r| with ALT
-CROSS_DOMAIN_ALPHA = 10.0  # Ridge alpha for the cross-domain model
-_CROSS_DOMAIN_FULL_FEATURES: Optional[pd.DataFrame] = None  # Full feature set for CD lookup
-
-# Greedy residual correlates: after ALT + PCA predict most of the target
-# variance, greedily select raw columns that correlate with the residual.
-# Fold-internal to prevent leakage (selection uses training targets).
-GREEDY_RESIDUAL_K = 0  # Max additional raw columns to add; 0 = disabled
-GREEDY_RESIDUAL_POLY = False  # Also consider A*B interaction candidates
-
-# Prediction calibration: undo shrinkage compression from regularised models.
-# After fitting, compute k = std(y_train) / std(pred_train_insample) on the
-# training fold, then inflate validation predictions:
-#   calibrated = mean(y_train) + k * (pred - mean(pred_train))
-# This is a James-Stein / Tweedie-style variance inflation that corrects
-# the systematic tail compression caused by ARD/BayesianRidge at small n.
-PRED_CALIBRATION_ENABLED = False
-
-# Top-tier boost: duplicate top-tier training rows to counteract shrinkage.
-# ARDRegression doesn't support sample_weight, so we duplicate rows instead.
-# Boost=2 means each top-tier row appears twice in training.
-TOP_TIER_BOOST = 1       # integer multiplier (1 = no boost)
-TOP_TIER_THRESHOLD = 0.0  # ELO threshold for "top-tier" (set by --top_tier_threshold)
-
-# Style-only final model: restrict final-stage features to lmarena + style columns.
-# Based on the insight that lmsys = lmarena + style_adjustment (contextual BT).
-STYLE_ONLY_FINAL = False
-
-# Continuous ELO weighting: sample_weight = exp((ELO - center) / scale)
-# Smooth gradient instead of binary boost cliff.
-ELO_WEIGHT_ENABLED = False
-ELO_WEIGHT_CENTER = 1300.0
-ELO_WEIGHT_SCALE = 100.0
-
-# Top-tier residual correction: second-stage model on top-N residuals
-TOP_CORRECTION_ENABLED = False
-TOP_CORRECTION_N = 50
-
-# Post-PCA interactions: cross-terms appended AFTER PCA dimensionality reduction.
-# PCA(10) captures linear signal from all base features; these raw (scaled)
-# interaction columns are concatenated with the 10 PCs so BayesianRidge can
-# exploit nonlinear formatting × capability patterns that PCA compresses away.
-# Selected at runtime by _greedy_select_alt_interactions() (with caching).
-ALT_POST_PCA_INTERACTIONS: Optional[List[Tuple[str, str]]] = None  # Set by greedy search at runtime
-
-
-# kNN residual smoothing: corrects base predictions using cross-fitted OOF
-# residuals from nearest neighbors.  Captures local structure the global
-# linear model misses (e.g., model families that cluster in benchmark space).
-ALT_KNN_K = 2        # very local neighborhood (k=2 beats k=3 in OOF CV: 17.82 vs 18.14)
-ALT_KNN_P = 2        # inverse-square distance weighting
-ALT_KNN_ALPHA = 0.3  # conservative shrinkage (only 30% of correction applied)
-
-# Module-level SVD factors for regime model access (set in main())
-_MODULE_SVD_ROW_FACTORS = None
-
-
-def _compute_alt_interaction_features(X_df: pd.DataFrame, scaler=None, fit=False, pairs=None):
-    """Compute post-PCA interaction features from raw benchmark columns.
-
-    Multiplies pairs from the given list (or the global ALT_POST_PCA_INTERACTIONS),
-    skipping any where a constituent column is missing, then optionally fits/applies
-    a StandardScaler so they're on the same scale as PCA components.
-
-    Args:
-        X_df: Raw benchmark DataFrame (pre-PCA, pre-scaling).
-        scaler: A fitted StandardScaler for transform-only mode.
-        fit: If True, fits a new StandardScaler on the interactions.
-        pairs: Explicit list of (col_a, col_b) tuples. If None, reads from
-            global ALT_POST_PCA_INTERACTIONS.
-
-    Returns:
-        (interaction_array, interaction_names, fitted_scaler)
-        interaction_array: np.ndarray of shape (n_samples, n_interactions)
-        interaction_names: list of str names like "colA*colB"
-        fitted_scaler: the StandardScaler (newly fit or passed-through)
-    """
-    interaction_pairs = pairs if pairs is not None else (ALT_POST_PCA_INTERACTIONS or [])
-    computed = []
-    names = []
-    for col_a, col_b in interaction_pairs:
-        if col_a in X_df.columns and col_b in X_df.columns:
-            computed.append(X_df[col_a].values * X_df[col_b].values)
-            names.append(f"{col_a}*{col_b}")
-    if not computed:
-        empty = np.empty((len(X_df), 0))
-        return empty, names, scaler
-    raw = np.column_stack(computed)
-    if fit:
-        scaler = StandardScaler()
-        scaled = scaler.fit_transform(raw)
-    elif scaler is not None:
-        scaled = scaler.transform(raw)
-    else:
-        scaled = raw
-    return scaled, names, scaler
-
-
-def _single_greedy_run(
-    X_df: pd.DataFrame,
-    y_alt: np.ndarray,
-    cols: List[str],
-    n_comp: int,
-    n_folds: int,
-    n_repeats: int,
-    seed: int,
-    prescreen_top_k: int,
-    max_pairs: int,
-    min_improvement: float,
-    verbose: bool = False,
-) -> List[Tuple[str, str]]:
-    """Single greedy forward search with fixed CV splits.
-
-    Returns list of selected (col_a, col_b) pairs.
-    """
-    X = X_df.reset_index(drop=True)
-    y = y_alt
-    n_samples, n_cols = X.shape
-    n_reps = max(1, int(n_repeats))
-
-    # Build repeated K-fold splits — fixed for entire run
-    folds = []
-    for rep in range(n_reps):
-        kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed + rep)
-        folds.extend(list(kf.split(X)))
-    total_folds = len(folds)
-
-    # Pre-compute PCA per fold
-    fold_pca_train = {}
-    fold_pca_val = {}
-    fold_train_idx = {}
-    fold_val_idx = {}
-    for fi, (tr_idx, va_idx) in enumerate(folds):
-        scaler = StandardScaler()
-        pca = PCA(n_components=n_comp)
-        fold_pca_train[fi] = pca.fit_transform(scaler.fit_transform(X.iloc[tr_idx].values))
-        fold_pca_val[fi] = pca.transform(scaler.transform(X.iloc[va_idx].values))
-        fold_train_idx[fi] = tr_idx
-        fold_val_idx[fi] = va_idx
-
-    # PCA-only baseline + residual correlation pre-screen
-    oof_preds_sum = np.zeros(n_samples)
-    oof_counts = np.zeros(n_samples)
-    for fi in range(total_folds):
-        br = BayesianRidge(compute_score=False)
-        br.fit(fold_pca_train[fi], y[fold_train_idx[fi]])
-        preds = br.predict(fold_pca_val[fi])
-        oof_preds_sum[fold_val_idx[fi]] += preds
-        oof_counts[fold_val_idx[fi]] += 1
-
-    oof_preds_baseline = oof_preds_sum / np.maximum(oof_counts, 1)
-    baseline_rmse = float(np.sqrt(mean_squared_error(y, oof_preds_baseline)))
-    residuals = y - oof_preds_baseline
-
-    all_candidates = list(itertools.combinations(range(n_cols), 2))
-    X_vals = X.values
-
-    def _screen_top_k(residuals, excluded_set):
-        """Rank all candidate pairs by |corr| with residuals, return top-K."""
-        scores = []
-        r = residuals - residuals.mean()
-        r_ss = (r ** 2).sum()
-        for i, j in all_candidates:
-            pair = (cols[i], cols[j])
-            if pair in excluded_set:
-                scores.append(0.0)
-                continue
-            product = X_vals[:, i] * X_vals[:, j]
-            std_p = np.std(product)
-            if std_p < 1e-12:
-                scores.append(0.0)
-                continue
-            p = product - product.mean()
-            denom = np.sqrt((p ** 2).sum() * r_ss)
-            corr = np.abs((p * r).sum() / denom) if denom > 1e-12 else 0.0
-            scores.append(corr if np.isfinite(corr) else 0.0)
-        top_idx = np.argsort(scores)[::-1][:prescreen_top_k]
-        return [(cols[all_candidates[idx][0]], cols[all_candidates[idx][1]])
-                for idx in top_idx]
-
-    # Initial screen against PCA-only residuals
-    screened = _screen_top_k(residuals, set())
-
-    # Greedy forward selection with fixed splits
-    selected: List[Tuple[str, str]] = []
-    current_rmse = baseline_rmse
-    current_oof = oof_preds_baseline.copy()
-
-    pair_values = {}
-    for pair in screened:
-        col_a, col_b = pair
-        pair_values[pair] = X[col_a].values * X[col_b].values
-
-    for step in range(1, max_pairs + 1):
-        remaining = [p for p in screened if p not in set(selected)]
-        best_rmse = current_rmse
-        best_pair = None
-        best_oof = None
-
-        for pair in remaining:
-            trial_pairs = selected + [pair]
-            oof_preds_s = np.zeros(n_samples)
-            oof_cnts = np.zeros(n_samples)
-
-            for fi in range(total_folds):
-                tr_idx = fold_train_idx[fi]
-                va_idx = fold_val_idx[fi]
-                int_cols_tr = [pair_values[p][tr_idx] for p in trial_pairs]
-                int_cols_va = [pair_values[p][va_idx] for p in trial_pairs]
-                int_tr = np.column_stack(int_cols_tr)
-                int_va = np.column_stack(int_cols_va)
-                int_scaler = StandardScaler()
-                int_tr_scaled = int_scaler.fit_transform(int_tr)
-                int_va_scaled = int_scaler.transform(int_va)
-                X_tr_combined = np.hstack([fold_pca_train[fi], int_tr_scaled])
-                X_va_combined = np.hstack([fold_pca_val[fi], int_va_scaled])
-                br = BayesianRidge(compute_score=False)
-                br.fit(X_tr_combined, y[tr_idx])
-                preds = br.predict(X_va_combined)
-                oof_preds_s[va_idx] += preds
-                oof_cnts[va_idx] += 1
-
-            oof_avg = oof_preds_s / np.maximum(oof_cnts, 1)
-            trial_rmse = float(np.sqrt(mean_squared_error(y, oof_avg)))
-            if trial_rmse < best_rmse:
-                best_rmse = trial_rmse
-                best_pair = pair
-                best_oof = oof_avg
-
-        improvement = current_rmse - best_rmse
-        if best_pair is None or improvement < min_improvement:
-            break
-
-        selected.append(best_pair)
-        current_rmse = best_rmse
-        current_oof = best_oof
-
-        # Re-screen candidates against updated residuals
-        residuals = y - current_oof
-        screened = _screen_top_k(residuals, set(selected))
-        # Cache any new pair values
-        for pair in screened:
-            if pair not in pair_values:
-                pair_values[pair] = X[pair[0]].values * X[pair[1]].values
-
-    return selected
-
-
-def _greedy_select_alt_interactions(
-    X_df: pd.DataFrame,
-    y_alt: pd.Series,
-    n_pca: int = ALT_PCA_N_COMPONENTS,
-    n_folds: int = 5,
-    n_repeats: int = 5,
-    seed: int = SEED,
-    prescreen_top_k: int = 50,
-    max_pairs: int = 20,
-    min_improvement: float = 0.05,
-    n_runs: int = 5,
-    consensus_min: int = 3,
-    verbose: bool = True,
-    n_jobs: int = -1,
-) -> Tuple[List[Tuple[str, str]], pd.DataFrame]:
-    """Consensus greedy forward search for post-PCA interaction terms.
-
-    Runs ``n_runs`` independent greedy searches, each with different CV splits,
-    then keeps only pairs selected in >= ``consensus_min`` runs.  This prevents
-    any single set of fold boundaries from dominating the selection while
-    maintaining a coherent greedy path within each run.
-
-    Args:
-        X_df: Feature DataFrame for rows with known ALT values (no ALT column).
-        y_alt: Known ALT target values (aligned with X_df).
-        n_pca: Number of PCA components.
-        n_folds: CV folds for OOF evaluation.
-        n_repeats: Number of repeated K-fold shuffles per run.
-        seed: Base random seed.
-        prescreen_top_k: Number of candidates to keep after correlation screen.
-        max_pairs: Maximum interaction pairs per run.
-        min_improvement: Minimum RMSE improvement to continue adding pairs.
-        n_runs: Number of independent greedy runs.
-        consensus_min: Minimum appearances across runs to keep a pair.
-        verbose: Print progress messages.
-
-    Returns:
-        (selected_pairs, search_log_df) where search_log_df has columns:
-        pair_a, pair_b, frequency, avg_step.
-    """
-    X = X_df.reset_index(drop=True)
-    y = pd.to_numeric(y_alt, errors="coerce").reset_index(drop=True).values
-    cols = list(X.columns)
-    n_samples, n_cols = X.shape
-    n_comp = min(n_pca, n_samples - 1, n_cols)
-    n_comp = max(1, n_comp)
-
-    if verbose:
-        n_cand = n_cols * (n_cols - 1) // 2
-        print(f"ALT interactions: pre-screening {n_cand} candidates → top {prescreen_top_k}")
-        print(f"ALT interactions: consensus search ({n_runs} runs, keep pairs in ≥{consensus_min})")
-
-    # Run independent greedy searches in parallel
-    eff_jobs = min(n_runs, os.cpu_count() or 4) if n_jobs == -1 else min(n_runs, max(1, n_jobs))
-    all_runs: List[List[Tuple[str, str]]] = Parallel(
-        n_jobs=eff_jobs, prefer="processes"
-    )(
-        delayed(_single_greedy_run)(
-            X_df, y, cols, n_comp,
-            n_folds, n_repeats, seed + run * 1000,
-            prescreen_top_k, max_pairs, min_improvement,
-        )
-        for run in range(n_runs)
-    )
-    if verbose:
-        for run, selected in enumerate(all_runs):
-            print(f"  run {run + 1}: selected {len(selected)} pairs")
-
-    # Vote: count appearances and track step positions
-    pair_counts: Counter = Counter()
-    pair_steps: dict = defaultdict(list)
-    for selected in all_runs:
-        for step_idx, pair in enumerate(selected):
-            pair_counts[pair] += 1
-            pair_steps[pair].append(step_idx + 1)
-
-    # Keep pairs appearing in >= consensus_min runs, sorted by frequency
-    # then by average step (earlier = more important)
-    consensus = [
-        pair for pair, count in pair_counts.items()
-        if count >= consensus_min
-    ]
-    consensus.sort(key=lambda p: (-pair_counts[p], np.mean(pair_steps[p])))
-
-    if verbose:
-        print(f"ALT interactions: consensus — {len(consensus)} pairs (≥{consensus_min}/{n_runs} runs)")
-        for pair in consensus:
-            freq = pair_counts[pair]
-            avg_step = np.mean(pair_steps[pair])
-            print(f"    {pair[0]}*{pair[1]}  {freq}/{n_runs} runs (avg step {avg_step:.1f})")
-
-    # Build log DataFrame compatible with downstream consumers
-    search_log = []
-    for i, pair in enumerate(consensus):
-        search_log.append({
-            "step": i + 1,
-            "pair_a": pair[0],
-            "pair_b": pair[1],
-            "frequency": pair_counts[pair],
-            "avg_step": round(float(np.mean(pair_steps[pair])), 2),
-            "rmse_after": float("nan"),
-            "improvement": float("nan"),
-        })
-    log_df = pd.DataFrame(search_log) if search_log else pd.DataFrame(
-        columns=["step", "pair_a", "pair_b", "frequency", "avg_step", "rmse_after", "improvement"])
-
-    return consensus, log_df
-
-
-# ---------------------------------------------------------------------------
-# Cross-domain interaction search for ALT prediction
-# ---------------------------------------------------------------------------
-
-def _greedy_cross_domain_search(
-    X_df: pd.DataFrame,
-    y_alt: np.ndarray,
-    top_k_cols: int = 25,
-    alpha: float = 10.0,
-    n_folds: int = 5,
-    n_repeats: int = 3,
-    max_steps: int = 10,
-    min_improvement: float = 0.1,
-    seed: int = 42,
-    verbose: bool = True,
-    min_obs: int = 0,
-    obs_counts: Optional[pd.Series] = None,
-) -> dict:
-    """Greedy forward search for cross-domain interaction features.
-
-    Searches over both standalone columns and pairwise interactions (A*B).
-    When an interaction A*B is selected, A and B are 'consumed' and cannot
-    be added as standalone features later.
-
-    Starts from the best interaction model (A + B + A*B), then greedily
-    adds the best remaining candidate at each step.
-
-    Returns dict with:
-        - start: (col_a, col_b) — the starting interaction pair
-        - additions: list of str (standalone) or (col_a, col_b) (interaction)
-        - all_cols: list of all column names used (for quick membership check)
-    """
-    X = X_df.reset_index(drop=True)
-    y = np.asarray(y_alt, dtype=float)
-    n_samples = len(y)
-
-    # Filter by minimum pre-imputation observations
-    eligible_cols = list(X.columns)
-    if min_obs > 0 and obs_counts is not None:
-        eligible_cols = [c for c in eligible_cols if obs_counts.get(c, 0) >= min_obs]
-        if verbose:
-            print(f"Cross-domain search: {len(eligible_cols)}/{len(X.columns)} cols "
-                  f"with >= {min_obs} observations")
-
-    # Pre-screen: top columns by |correlation| with ALT
-    corrs = []
-    for c in eligible_cols:
-        xc = X[c].values.astype(float)
-        mask = np.isfinite(xc) & np.isfinite(y)
-        if mask.sum() < 5 or np.std(xc[mask]) < 1e-12:
-            corrs.append((c, 0.0))
-            continue
-        r = np.corrcoef(xc[mask], y[mask])[0, 1]
-        corrs.append((c, abs(r) if np.isfinite(r) else 0.0))
-    corrs.sort(key=lambda x: x[1], reverse=True)
-    candidate_cols = [c for c, _ in corrs[:top_k_cols]]
-    if verbose:
-        print(f"Cross-domain search: {len(candidate_cols)} candidate cols "
-              f"(top by |r| from {len(X.columns)}), n={n_samples}")
-
-    col_idx = {c: i for i, c in enumerate(candidate_cols)}
-    X_vals = X[candidate_cols].values
-
-    # Build CV folds
-    folds = []
-    for rep in range(n_repeats):
-        kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed + rep)
-        folds.extend(list(kf.split(X_vals)))
-
-    def _cv_rmse(feature_matrix):
-        oof_sum = np.zeros(n_samples)
-        oof_cnt = np.zeros(n_samples)
-        for tr, va in folds:
-            sc = StandardScaler()
-            Ftr = sc.fit_transform(feature_matrix[tr])
-            Fva = sc.transform(feature_matrix[va])
-            m = Ridge(alpha=alpha)
-            m.fit(Ftr, y[tr])
-            p = m.predict(Fva)
-            oof_sum[va] += p
-            oof_cnt[va] += 1
-        oof = oof_sum / np.maximum(oof_cnt, 1)
-        return float(np.sqrt(mean_squared_error(y, oof)))
-
-    # Step 1: Find best starting interaction model (A + B + A*B)
-    pairs = list(itertools.combinations(range(len(candidate_cols)), 2))
-    best_start_rmse = float("inf")
-    best_start = None
-    for i, j in pairs:
-        feats = np.column_stack([X_vals[:, i], X_vals[:, j],
-                                 X_vals[:, i] * X_vals[:, j]])
-        rmse = _cv_rmse(feats)
-        if rmse < best_start_rmse:
-            best_start_rmse = rmse
-            best_start = (i, j)
-
-    ia, ib = best_start
-    start_pair = (candidate_cols[ia], candidate_cols[ib])
-    current_features = [X_vals[:, ia], X_vals[:, ib],
-                        X_vals[:, ia] * X_vals[:, ib]]
-    current_matrix = np.column_stack(current_features)
-    current_rmse = best_start_rmse
-    consumed = {candidate_cols[ia], candidate_cols[ib]}
-    used_interactions = {(ia, ib)}
-    additions: list = []
-
-    if verbose:
-        print(f"  start: {start_pair[0][:40]} * {start_pair[1][:40]}  "
-              f"RMSE={current_rmse:.2f}")
-
-    # Step 2: Greedy forward selection
-    for step in range(1, max_steps + 1):
-        best_rmse = current_rmse
-        best_name = None
-        best_feature = None
-        best_consumed = set()
-        best_is_interaction = False
-        best_pair_idx = None
-
-        # Option A: standalone column
-        for i, c in enumerate(candidate_cols):
-            if c in consumed:
-                continue
-            trial = np.column_stack([current_matrix, X_vals[:, i]])
-            rmse = _cv_rmse(trial)
-            if rmse < best_rmse:
-                best_rmse = rmse
-                best_name = c
-                best_feature = X_vals[:, i]
-                best_consumed = {c}
-                best_is_interaction = False
-
-        # Option B: interaction (product only, consume both bases)
-        for i, j in pairs:
-            if (i, j) in used_interactions:
-                continue
-            ci, cj = candidate_cols[i], candidate_cols[j]
-            if ci in consumed or cj in consumed:
-                continue
-            product = X_vals[:, i] * X_vals[:, j]
-            trial = np.column_stack([current_matrix, product])
-            rmse = _cv_rmse(trial)
-            if rmse < best_rmse:
-                best_rmse = rmse
-                best_name = f"{ci}*{cj}"
-                best_feature = product
-                best_consumed = {ci, cj}
-                best_is_interaction = True
-                best_pair_idx = (i, j)
-
-        improvement = current_rmse - best_rmse
-        if best_feature is None or improvement < min_improvement:
-            if verbose:
-                print(f"  step {step}: improvement {improvement:.3f} "
-                      f"< {min_improvement}, stopping")
-            break
-
-        current_matrix = np.column_stack([current_matrix, best_feature])
-        consumed.update(best_consumed)
-        if best_is_interaction:
-            used_interactions.add(best_pair_idx)
-            additions.append((candidate_cols[best_pair_idx[0]],
-                              candidate_cols[best_pair_idx[1]]))
-        else:
-            additions.append(best_name)
-        current_rmse = best_rmse
-
-        if verbose:
-            print(f"  step {step}: +{best_name[:60]:60s}  "
-                  f"RMSE={current_rmse:.2f}  (Δ={improvement:.2f})")
-
-    if verbose:
-        print(f"Cross-domain search: {len(additions) + 1} features, "
-              f"final RMSE={current_rmse:.2f}")
-
-    return {
-        "start": start_pair,
-        "additions": additions,
-        "all_cols": list(consumed),
-        "rmse": current_rmse,
-    }
-
-
-def _build_cross_domain_features(
-    X_df: pd.DataFrame,
-    selected: dict,
-) -> Tuple[np.ndarray, List[str]]:
-    """Build feature matrix from cross-domain search results.
-
-    Args:
-        X_df: Feature DataFrame (all rows). If a column from the search
-            is missing (e.g. dropped by target feature selection), falls
-            back to _CROSS_DOMAIN_FULL_FEATURES.
-        selected: Dict from _greedy_cross_domain_search with 'start' and
-            'additions' keys.
-
-    Returns:
-        (feature_matrix, feature_names)
-    """
-    # Use full feature set if available (search may reference cols dropped by
-    # target feature selection)
-    src = _CROSS_DOMAIN_FULL_FEATURES if _CROSS_DOMAIN_FULL_FEATURES is not None else X_df
-    # Align index with X_df
-    src = src.reindex(X_df.index)
-
-    features = []
-    names = []
-
-    # Starting interaction: A + B + A*B
-    a, b = selected["start"]
-    va, vb = src[a].values, src[b].values
-    features.extend([va, vb, va * vb])
-    names.extend([a, b, f"{a}*{b}"])
-
-    # Additions
-    for item in selected["additions"]:
-        if isinstance(item, str):
-            features.append(src[item].values)
-            names.append(item)
-        else:
-            ca, cb = item
-            features.append(src[ca].values * src[cb].values)
-            names.append(f"{ca}*{cb}")
-
-    return np.column_stack(features), names
-
-
-def _build_alt_inner_residual_bank(
-    X_no_alt: pd.DataFrame,
-    y_alt: pd.Series,
-    cfg: dict,
-    n_inner_splits: int = 5,
-    seed: int = SEED,
-) -> np.ndarray:
-    """Build cross-fitted OOF residual bank for kNN smoothing.
-
-    Runs inner CV on the given data (all rows must have known y) and returns
-    OOF residuals — one per row, computed only from held-out predictions.
-    """
-    X = X_no_alt.reset_index(drop=True)
-    y = pd.to_numeric(y_alt, errors="coerce").reset_index(drop=True)
-    n = len(X)
-    r_bank = np.zeros(n)
-    if n < n_inner_splits * 2:
-        return r_bank
-    inner_kf = KFold(n_splits=n_inner_splits, shuffle=True, random_state=seed)
-    for itr, iva in inner_kf.split(X):
-        inner_fit = _fit_alt_model_on_rows(X, y, cfg, itr)
-        r_bank[iva] = y.iloc[iva].to_numpy() - inner_fit["pred_all"].iloc[iva].to_numpy()
-    return r_bank
-
-
-def _apply_alt_knn_correction(
-    X_no_alt: pd.DataFrame,
-    train_idx: np.ndarray,
-    val_idx: np.ndarray,
-    r_bank: np.ndarray,
-    k: int = ALT_KNN_K,
-    p: int = ALT_KNN_P,
-) -> np.ndarray:
-    """Compute kNN residual correction for validation rows.
-
-    Uses PCA-transformed base features (no interactions) for distance to
-    avoid curse of dimensionality.  Interactions are not needed for kNN —
-    we just want distance in benchmark space.
-    Returns correction vector (same length as val_idx) — caller multiplies by alpha.
-    """
-    scaler = StandardScaler()
-    n_comp = min(ALT_PCA_N_COMPONENTS, X_no_alt.shape[1], len(train_idx) - 1)
-    pca = PCA(n_components=max(1, n_comp))
-
-    X_tr_pca = pca.fit_transform(scaler.fit_transform(X_no_alt.iloc[train_idx].values))
-    X_va_pca = pca.transform(scaler.transform(X_no_alt.iloc[val_idx].values))
-
-    n_neighbors = min(k, len(train_idx))
-    nn = NearestNeighbors(n_neighbors=n_neighbors)
-    nn.fit(X_tr_pca)
-    D, I = nn.kneighbors(X_va_pca)
-    W = 1.0 / (D + 1e-6) ** p
-    W = W / W.sum(axis=1, keepdims=True)
-    rhat = (W * r_bank[I]).sum(axis=1)
-    return rhat
-
-
-
-def _summarize_bayes_model(model, feature_names: List[str],
-                           alt_result: Optional[dict] = None) -> Optional[pd.DataFrame]:
-    """Summarize BayesianRidge coefficients projected back to original feature space.
-
-    Handles three cases:
-    1. Post-PCA architecture (alt_result dict with pca/pca_scaler/int_scaler):
-       - For PCA components: project coefficients back via pca.components_.T
-       - For interaction features: report coefficients directly (already interpretable)
-    2. Pipeline with PCA: project back via components_.T
-    3. Pipeline with Scaler only: un-standardize coefficients
-    """
-    # --- Case 1: Post-PCA architecture (plain BayesianRidge + alt_result info) ---
-    if alt_result is not None and not isinstance(model, Pipeline):
-        br = model
-        if not hasattr(br, "coef_"):
-            return None
-        pca_obj = alt_result.get("pca")
-        pca_scaler_obj = alt_result.get("pca_scaler")
-        int_names = alt_result.get("interaction_names", [])
-        if pca_obj is None or pca_scaler_obj is None:
-            return None
-        # Dimensionality guard
-        if pca_obj.components_.shape[1] != len(feature_names):
-            return None
-        coef_all = np.asarray(br.coef_).ravel()
-        n_pca = pca_obj.n_components_
-        combined_feat_names = alt_result.get("combined_feature_names", [])
-
-        # Detect layout: count PC-nonlinear features between PCs and interactions
-        n_pc_nl = sum(1 for n in combined_feat_names if n.startswith("PC") and ("^2" in n or "*PC" in n))
-        coef_pca = coef_all[:n_pca]
-        coef_pc_nl = coef_all[n_pca:n_pca + n_pc_nl]
-        coef_int = coef_all[n_pca + n_pc_nl:]
-
-        # Project PCA coefficients back to original (scaled) feature space
-        coef_scaled = pca_obj.components_.T @ coef_pca  # (n_base_features,)
-        scale = getattr(pca_scaler_obj, "scale_", np.ones(len(feature_names)))
-        scale = np.where(scale == 0, 1.0, scale)
-        coef_orig_base = coef_scaled / scale
-
-        rows = []
-        for i, feat in enumerate(feature_names):
-            rows.append({
-                "feature": feat,
-                "coef_original": coef_orig_base[i],
-                "coef_standardized": coef_scaled[i],
-                "source": "PCA-projected",
-            })
-        # PC nonlinear features (squares, cross-interactions)
-        pc_nl_names_list = [n for n in combined_feat_names if n.startswith("PC") and ("^2" in n or "*PC" in n)]
-        for j, nlname in enumerate(pc_nl_names_list):
-            if j < len(coef_pc_nl):
-                rows.append({
-                    "feature": nlname,
-                    "coef_original": coef_pc_nl[j],
-                    "coef_standardized": coef_pc_nl[j],
-                    "source": "PCA-nonlinear",
-                })
-        # Interaction features: coefficients are on scaled interaction space
-        int_scaler_obj = alt_result.get("int_scaler")
-        for j, iname in enumerate(int_names):
-            if j < len(coef_int):
-                int_scale = 1.0
-                if int_scaler_obj is not None and hasattr(int_scaler_obj, "scale_"):
-                    int_scale = int_scaler_obj.scale_[j] if j < len(int_scaler_obj.scale_) else 1.0
-                    if int_scale == 0:
-                        int_scale = 1.0
-                rows.append({
-                    "feature": iname,
-                    "coef_original": coef_int[j] / int_scale,
-                    "coef_standardized": coef_int[j],
-                    "source": "interaction",
-                })
-        df = pd.DataFrame(rows)
-        df["abs_coef_original"] = df["coef_original"].abs()
-        df["abs_coef_standardized"] = df["coef_standardized"].abs()
-        df = df.sort_values("abs_coef_standardized", ascending=False).reset_index(drop=True)
-        intercept_row = pd.DataFrame({
-            "feature": ["__intercept__ (PCA+interactions)"],
-            "coef_original": [float(br.intercept_)],
-            "coef_standardized": [np.nan],
-            "abs_coef_original": [abs(float(br.intercept_))],
-            "abs_coef_standardized": [np.nan],
-            "source": [""],
-        })
-        return pd.concat([intercept_row, df], ignore_index=True)
-
-    # --- Case 2 & 3: Pipeline-based model (backward compat) ---
-    if not isinstance(model, Pipeline):
-        return None
-    if "br" not in model.named_steps:
-        return None
-
-    br = model.named_steps["br"]
-
-    # PCA pipeline: report PCA-space coefficients + original-space effective weights
-    if "pca" in model.named_steps:
-        pca_step: PCA = model.named_steps["pca"]
-        scaler_step: StandardScaler = model.named_steps["scaler"]
-        coef_pca = np.asarray(br.coef_).ravel()
-        coef_scaled = pca_step.components_.T @ coef_pca
-        scale = getattr(scaler_step, "scale_", np.ones(len(feature_names)))
-        scale = np.where(scale == 0, 1.0, scale)
-        coef_orig = coef_scaled / scale
-        df = pd.DataFrame({
-            "feature": feature_names,
-            "coef_original": coef_orig,
-            "coef_standardized": coef_scaled,
-        })
-        df["abs_coef_original"] = df["coef_original"].abs()
-        df["abs_coef_standardized"] = df["coef_standardized"].abs()
-        df = df.sort_values("abs_coef_standardized", ascending=False).reset_index(drop=True)
-        intercept_row = pd.DataFrame({
-            "feature": ["__intercept__ (via PCA)"],
-            "coef_original": [float(br.intercept_)],
-            "coef_standardized": [np.nan],
-            "abs_coef_original": [abs(float(br.intercept_))],
-            "abs_coef_standardized": [np.nan],
-        })
-        return pd.concat([intercept_row, df], ignore_index=True)
-
-    # Non-PCA pipeline: original behavior
-    if "scaler" not in model.named_steps:
-        return None
-    scaler_step = model.named_steps["scaler"]
-    coef_std = np.asarray(br.coef_).ravel()
-    if coef_std.size != len(feature_names):
-        return None
-    scale = getattr(scaler_step, "scale_", None)
-    mean = getattr(scaler_step, "mean_", None)
-    if scale is None or mean is None:
-        return None
-    scale = np.where(scale == 0, 1.0, scale)
-    coef_orig = coef_std / scale
-    intercept_orig = float(br.intercept_ - np.sum(coef_std * mean / scale))
-    df = pd.DataFrame({
-        "feature": feature_names,
-        "coef_original": coef_orig,
-        "coef_standardized": coef_std,
-    })
-    df["abs_coef_original"] = df["coef_original"].abs()
-    df["abs_coef_standardized"] = df["coef_standardized"].abs()
-    df = df.sort_values("abs_coef_standardized", ascending=False).reset_index(drop=True)
-    intercept_row = pd.DataFrame({
-        "feature": ["__intercept__"],
-        "coef_original": [intercept_orig],
-        "coef_standardized": [np.nan],
-        "abs_coef_original": [abs(intercept_orig)],
-        "abs_coef_standardized": [np.nan],
-    })
-    return pd.concat([intercept_row, df], ignore_index=True)
-
-
-def _fit_alt_model_on_rows(
-    X_no_alt_all: pd.DataFrame,
-    alt_series: pd.Series,
-    cfg: dict,
-    train_idx: Optional[np.ndarray] = None,
-    sample_weight: Optional[np.ndarray] = None,
-    interaction_pairs: Optional[List[Tuple[str, str]]] = None,
-) -> Dict[str, Union[pd.Series, List[str], float, Optional[object]]]:
-    """Fit the ALT model on specified rows and predict for all rows.
-
-    Architecture: PCA(10) on all base features captures linear signal, then
-    post-PCA interaction columns (raw scaled products) are appended.
-    BayesianRidge regresses on the concatenated [PCs | interactions] matrix.
-
-    Args:
-        X_no_alt_all: Feature DataFrame WITHOUT the ALT column.
-        alt_series: Original ALT target values (may contain NaN).
-        cfg: Configuration dict (feature selection settings — not used for
-            PCA path but kept for API compat).
-        train_idx: Indices to use for training. If None, uses all rows.
-        sample_weight: Optional per-row weights.
-        interaction_pairs: Explicit list of (col_a, col_b) interaction pairs.
-            If None, falls back to global ALT_POST_PCA_INTERACTIONS.
-
-    Returns:
-        Dict with keys:
-        - pred_all: Series of predictions for all rows
-        - selected_features: List of base feature names fed to PCA
-        - fallback_value: Mean ALT value (used if model fails)
-        - n_known: Number of training rows with known ALT
-        - fitted_model: Fitted BayesianRidge instance (or None)
-        - calibration_summary: Info about spline calibration (or None)
-        - pca_scaler: Fitted StandardScaler for base features
-        - pca: Fitted PCA transform
-        - int_scaler: Fitted StandardScaler for interaction columns
-        - interaction_names: List of interaction column names
-        - combined_feature_names: List of all feature names [PC1..PCn, int1..intN]
-    """
-    X_no_alt_all = pd.DataFrame(X_no_alt_all).copy()
-    alt_numeric = pd.to_numeric(pd.Series(alt_series), errors="coerce")
-    alt_numeric = alt_numeric.reindex(X_no_alt_all.index)
-
-    n_total = len(X_no_alt_all)
-    if train_idx is None:
-        train_idx = np.arange(n_total)
-    train_idx = np.asarray(train_idx, dtype=int)
-    train_idx = train_idx[(train_idx >= 0) & (train_idx < n_total)]
-
-    train_mask = pd.Series(False, index=X_no_alt_all.index)
-    if len(train_idx):
-        train_mask.iloc[train_idx] = True
-
-    # --- Cross-domain interaction path (bypasses PCA entirely) ---
-    if CROSS_DOMAIN_ALT_ENABLED and CROSS_DOMAIN_FEATURES is not None:
-        known_mask = alt_numeric.notna()
-        train_known_mask = train_mask & known_mask
-        n_known = int(train_known_mask.sum())
-        fallback = float(np.nanmean(alt_numeric.loc[train_known_mask])) if n_known else float("nan")
-
-        if n_known < 5:
-            pred_all = pd.Series(fallback, index=X_no_alt_all.index, dtype="float64")
-        else:
-            feat_matrix, feat_names = _build_cross_domain_features(
-                X_no_alt_all, CROSS_DOMAIN_FEATURES)
-            scaler = StandardScaler()
-            F_train = scaler.fit_transform(feat_matrix[train_known_mask.values])
-            F_all = scaler.transform(feat_matrix)
-            y_fit = alt_numeric.loc[train_known_mask].to_numpy()
-            model = Ridge(alpha=CROSS_DOMAIN_ALPHA)
-            model.fit(F_train, y_fit)
-            pred_all = pd.Series(model.predict(F_all),
-                                 index=X_no_alt_all.index, dtype="float64")
-
-        return {
-            "pred_all": pred_all,
-            "selected_features": CROSS_DOMAIN_FEATURES.get("all_cols", []),
-            "fallback_value": fallback,
-            "n_known": n_known,
-            "fitted_model": model if n_known >= 5 else None,
-            "calibration_summary": None,
-            "pca_scaler": None,
-            "pca": None,
-            "int_scaler": None,
-            "interaction_names": [],
-            "combined_feature_names": feat_names if n_known >= 5 else [],
-        }
-    known_mask = alt_numeric.notna()
-    train_known_mask = train_mask & known_mask
-
-    # Separate SVD factor columns from base features — SVD factors bypass PCA
-    svd_cols = [c for c in X_no_alt_all.columns if c.startswith("_svd_f")]
-    selected = [c for c in X_no_alt_all.columns if c not in svd_cols]
-
-    n_known = int(train_known_mask.sum())
-    fallback = float(np.nanmean(alt_numeric.loc[train_known_mask])) if n_known else float("nan")
-    fitted_model: Optional[object] = None
-    calibration_summary: Optional[dict] = None
-    pca_scaler_out = None
-    pca_out = None
-    int_scaler_out = None
-    interaction_names_out: List[str] = []
-    combined_names: List[str] = []
-    pred_std_all = pd.Series(np.nan, index=X_no_alt_all.index, dtype="float64")
-
-    min_samples = max(3, ALT_PCA_N_COMPONENTS + 1)  # PCA needs n > n_components
-    if n_known < min_samples or len(selected) == 0 or not np.isfinite(fallback):
-        if not np.isfinite(fallback):
-            fallback = float(np.nanmean(alt_numeric.to_numpy()))
-            if not np.isfinite(fallback):
-                fallback = 0.0
-        pred_all = pd.Series(fallback, index=X_no_alt_all.index, dtype="float64")
-    else:
-        X_train_base = X_no_alt_all.loc[train_known_mask, selected].values
-
-        # 1. Fit StandardScaler + PCA on base features only
-        n_pca = min(ALT_PCA_N_COMPONENTS, X_train_base.shape[0] - 1, X_train_base.shape[1])
-        n_pca = max(1, n_pca)
-        pca_scaler = StandardScaler(with_mean=True, with_std=True)
-        pca = PCA(n_components=n_pca)
-        X_train_scaled = pca_scaler.fit_transform(X_train_base)
-        X_train_pca = pca.fit_transform(X_train_scaled)
-
-        # 1b. PC nonlinear features (squares and/or cross-interactions)
-        _PC_SQUARES = True    # PC1², PC2², ... (10 features)
-        _PC_CROSS = False     # PC1×PC2, PC1×PC3, ... (45 features) — hurts at n=111
-        pc_nl_names = []
-        pc_nl_train_cols = []
-        if _PC_SQUARES:
-            for i in range(n_pca):
-                pc_nl_train_cols.append(X_train_pca[:, i] ** 2)
-                pc_nl_names.append(f"PC{i+1}^2")
-        if _PC_CROSS:
-            for i, j in itertools.combinations(range(n_pca), 2):
-                pc_nl_train_cols.append(X_train_pca[:, i] * X_train_pca[:, j])
-                pc_nl_names.append(f"PC{i+1}*PC{j+1}")
-        if pc_nl_train_cols:
-            pc_nl_train_raw = np.column_stack(pc_nl_train_cols)
-            pc_nl_scaler = StandardScaler()
-            pc_nl_train = pc_nl_scaler.fit_transform(pc_nl_train_raw)
-        else:
-            pc_nl_train = np.empty((len(X_train_pca), 0))
-            pc_nl_scaler = None
-
-        # 1c. Direct SVD factors (bypass PCA, get own coefficients)
-        svd_direct_names = []
-        if svd_cols:
-            svd_train_raw = X_no_alt_all.loc[train_known_mask, svd_cols].values
-            svd_direct_scaler = StandardScaler()
-            svd_train_scaled = svd_direct_scaler.fit_transform(svd_train_raw)
-            svd_direct_names = [c for c in svd_cols]
-        else:
-            svd_train_scaled = np.empty((int(train_known_mask.sum()), 0))
-            svd_direct_scaler = None
-
-        # 2. Compute interaction columns from raw (pre-PCA) DataFrame — fit scaler
-        int_train, int_names, int_scaler = _compute_alt_interaction_features(
-            X_no_alt_all.loc[train_known_mask], scaler=None, fit=True,
-            pairs=interaction_pairs,
-        )
-
-        # 3. Concatenate [PCA | PC-nonlinear | SVD-direct | scaled interactions]
-        blocks_train = [X_train_pca]
-        if pc_nl_train.shape[1]:
-            blocks_train.append(pc_nl_train)
-        if svd_train_scaled.shape[1]:
-            blocks_train.append(svd_train_scaled)
-        if int_train.shape[1]:
-            blocks_train.append(int_train)
-        X_train_combined = np.hstack(blocks_train)
-        pc_names = [f"PC{i+1}" for i in range(n_pca)]
-        combined_names = pc_names + pc_nl_names + svd_direct_names + int_names
-
-        # 4. Fit regressor on the combined PCA+interaction matrix
-        y_fit = alt_numeric.loc[train_known_mask].to_numpy()
-        fit_kwargs = {}
-        if sample_weight is not None:
-            w_fit = sample_weight[train_known_mask.values] if hasattr(train_known_mask, 'values') else sample_weight[train_known_mask]
-            fit_kwargs["sample_weight"] = w_fit
-
-        regressor_type = ALT_REGRESSOR_NAME
-
-        if regressor_type == "lgbm":
-            import lightgbm as _lgb
-            br = _lgb.LGBMRegressor(
-                n_estimators=300, learning_rate=0.05, max_depth=3,
-                num_leaves=8, min_child_samples=10, subsample=0.8,
-                colsample_bytree=0.8, reg_alpha=1.0, reg_lambda=1.0,
-                n_jobs=1, random_state=42, verbosity=-1,
-            )
-            br.fit(X_train_combined, y_fit, **fit_kwargs)
-        elif regressor_type == "ridge":
-            br = RidgeCV(alphas=np.logspace(-2, 4, 50), cv=5)
-            br.fit(X_train_combined, y_fit, **({k: v for k, v in fit_kwargs.items() if k == "sample_weight"}))
-        elif regressor_type == "stack":
-            # Stacked ensemble: BayesianRidge + LightGBM + Ridge → Ridge meta-learner
-            from sklearn.model_selection import cross_val_predict as _cvp
-            _br = BayesianRidge(compute_score=False)
-            _br.fit(X_train_combined, y_fit, **fit_kwargs)
-            import lightgbm as _lgb
-            _lgbm = _lgb.LGBMRegressor(
-                n_estimators=300, learning_rate=0.05, max_depth=3,
-                num_leaves=8, min_child_samples=10, subsample=0.8,
-                colsample_bytree=0.8, reg_alpha=1.0, reg_lambda=1.0,
-                n_jobs=1, random_state=42, verbosity=-1,
-            )
-            _lgbm.fit(X_train_combined, y_fit, **fit_kwargs)
-            _ridge = RidgeCV(alphas=np.logspace(-2, 4, 50), cv=5)
-            _ridge.fit(X_train_combined, y_fit, **({k: v for k, v in fit_kwargs.items() if k == "sample_weight"}))
-            # OOF predictions for meta-learner training
-            _kf = KFold(n_splits=5, shuffle=True, random_state=42)
-            oof_br = _cvp(_br.__class__(compute_score=False), X_train_combined, y_fit, cv=_kf)
-            oof_lgbm = _cvp(_lgbm.__class__(**_lgbm.get_params()), X_train_combined, y_fit, cv=_kf)
-            oof_ridge = _cvp(RidgeCV(alphas=np.logspace(-2, 4, 50), cv=5), X_train_combined, y_fit, cv=_kf)
-            meta_X = np.column_stack([oof_br, oof_lgbm, oof_ridge])
-            meta_model = Ridge(alpha=1.0)
-            meta_model.fit(meta_X, y_fit)
-            # Store sub-models for prediction
-            br = type('StackedModel', (), {
-                'sub_models': [_br, _lgbm, _ridge],
-                'meta': meta_model,
-                'predict': lambda self, X, **kw: self.meta.predict(
-                    np.column_stack([m.predict(X) for m in self.sub_models])
-                ),
-            })()
-        elif regressor_type == "gp":
-            from sklearn.gaussian_process import GaussianProcessRegressor
-            from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
-            kernel = ConstantKernel(100.0**2) * RBF(length_scale=np.ones(X_train_combined.shape[1])) + WhiteKernel(noise_level=10.0**2)
-            br = GaussianProcessRegressor(
-                kernel=kernel, alpha=0.0, n_restarts_optimizer=3, random_state=42,
-                normalize_y=True,
-            )
-            br.fit(X_train_combined, y_fit)
-        else:  # "bayes" (default)
-            br = BayesianRidge(compute_score=False)
-            br.fit(X_train_combined, y_fit, **fit_kwargs)
-
-        # 5. Predict for all rows
-        X_all_scaled = pca_scaler.transform(X_no_alt_all[selected].values)
-        X_all_pca = pca.transform(X_all_scaled)
-        # PC nonlinear features for all rows
-        if pc_nl_scaler is not None:
-            pc_nl_all_cols = []
-            if _PC_SQUARES:
-                for i in range(n_pca):
-                    pc_nl_all_cols.append(X_all_pca[:, i] ** 2)
-            if _PC_CROSS:
-                for i, j in itertools.combinations(range(n_pca), 2):
-                    pc_nl_all_cols.append(X_all_pca[:, i] * X_all_pca[:, j])
-            pc_nl_all = pc_nl_scaler.transform(np.column_stack(pc_nl_all_cols))
-        else:
-            pc_nl_all = np.empty((len(X_all_pca), 0))
-        # SVD direct features for all rows
-        if svd_direct_scaler is not None and svd_cols:
-            svd_all_scaled = svd_direct_scaler.transform(X_no_alt_all[svd_cols].values)
-        else:
-            svd_all_scaled = np.empty((len(X_all_pca), 0))
-        int_all, _, _ = _compute_alt_interaction_features(
-            X_no_alt_all, scaler=int_scaler, fit=False,
-            pairs=interaction_pairs,
-        )
-        blocks_all = [X_all_pca]
-        if pc_nl_all.shape[1]:
-            blocks_all.append(pc_nl_all)
-        if svd_all_scaled.shape[1]:
-            blocks_all.append(svd_all_scaled)
-        if int_all.shape[1]:
-            blocks_all.append(int_all)
-        X_all_combined = np.hstack(blocks_all)
-
-        # Predict — handle models that don't support return_std
-        if hasattr(br, 'predict') and regressor_type in ("bayes", "gp"):
-            pred_mu, pred_std = br.predict(X_all_combined, return_std=True)
-        else:
-            pred_mu = br.predict(X_all_combined)
-            pred_std = np.full_like(pred_mu, np.nan)
-        pred_all = pd.Series(pred_mu, index=X_no_alt_all.index, dtype="float64")
-        pred_std_all = pd.Series(pred_std, index=X_no_alt_all.index, dtype="float64")
-
-        # X8: Residual additive head — soft regime model with two Ridge heads
-        # blended by sigmoid gate on SVD factor 1 (capability proxy)
-        if _MODULE_SVD_ROW_FACTORS is not None:
-            stage1_train_pred = br.predict(X_train_combined)
-            residuals = y_fit - stage1_train_pred
-            # Select top-k raw features most correlated with residuals
-            raw_train = X_no_alt_all.loc[train_known_mask, selected].values
-            def _safe_corr(a, b):
-                if len(a) < 2 or np.std(a) == 0 or np.std(b) == 0:
-                    return 0.0
-                try:
-                    return abs(np.corrcoef(a, b)[0, 1])
-                except (AttributeError, ValueError):
-                    return 0.0
-            res_corrs = np.array([_safe_corr(raw_train[:, j], residuals)
-                                  for j in range(raw_train.shape[1])])
-            res_corrs = np.nan_to_num(res_corrs)
-            top_k_res = min(7, len(res_corrs))
-            top_idx_res = np.argsort(res_corrs)[-top_k_res:]
-            raw_top = raw_train[:, top_idx_res]
-            from sklearn.linear_model import Ridge as _Ridge
-            # Soft regime: two Ridge heads blended by sigmoid on SVD factor 1
-            _svd = _MODULE_SVD_ROW_FACTORS
-            svd_f1_all = _svd.iloc[:, 0].reindex(X_no_alt_all.index).values
-            gate_train = svd_f1_all[train_known_mask.values]
-            gate_all = svd_f1_all
-            gate_mean = np.mean(gate_train)
-            gate_std = np.std(gate_train) + 1e-8
-            gate_train_z = 3.0 * (gate_train - gate_mean) / gate_std
-            gate_all_z = 3.0 * (gate_all - gate_mean) / gate_std
-            sig_train = 1.0 / (1.0 + np.exp(-gate_train_z))
-            sig_all = 1.0 / (1.0 + np.exp(-gate_all_z))
-            res_scaler = StandardScaler()
-            raw_top_scaled = res_scaler.fit_transform(raw_top)
-            # High-capability head
-            res_ridge_hi = _Ridge(alpha=1.0)
-            res_ridge_hi.fit(raw_top_scaled, residuals, sample_weight=sig_train)
-            # Low-capability head
-            res_ridge_lo = _Ridge(alpha=1.0)
-            res_ridge_lo.fit(raw_top_scaled, residuals, sample_weight=1.0 - sig_train)
-            raw_all = X_no_alt_all[selected].values[:, top_idx_res]
-            raw_all_scaled = res_scaler.transform(raw_all)
-            corr_hi = res_ridge_hi.predict(raw_all_scaled)
-            corr_lo = res_ridge_lo.predict(raw_all_scaled)
-            res_correction = sig_all * corr_hi + (1.0 - sig_all) * corr_lo
-            pred_all = pd.Series(
-                pred_all.values + res_correction,
-                index=pred_all.index, dtype="float64")
-
-        fitted_model = br
-        pca_scaler_out = pca_scaler
-        pca_out = pca
-        int_scaler_out = int_scaler
-        interaction_names_out = int_names
-
-        # 6. Spline calibration
-        calib = _fit_alt_residual_spline(pred_all.loc[train_known_mask], alt_numeric.loc[train_known_mask])
-        if calib is not None:
-            correction = _apply_alt_residual_spline(calib, pred_all)
-            pred_all = pd.Series(pred_all.values + correction, index=pred_all.index, dtype="float64")
-            calibration_summary = {
-                "type": "spline",
-                "n_points": calib["n_points"],
-                "n_knots": calib["n_knots"],
-            }
-
-    return {
-        "pred_all": pred_all.astype(float),
-        "pred_std_all": pred_std_all.astype(float),
-        "selected_features": selected,
-        "fallback_value": float(fallback),
-        "n_known": n_known,
-        "fitted_model": fitted_model,
-        "calibration_summary": calibration_summary,
-        "pca_scaler": pca_scaler_out,
-        "pca": pca_out,
-        "int_scaler": int_scaler_out,
-        "interaction_names": interaction_names_out,
-        "combined_feature_names": combined_names,
-    }
-
-
-def impute_alt_for_all(
-    X_no_alt_all: pd.DataFrame,
-    alt_series: pd.Series,
-    cfg: dict,
-) -> Dict[str, Union[pd.Series, List[str], float]]:
-    """Impute missing ALT values using a model trained on observed values.
-
-    This is the main entry point for ALT imputation. It trains a model on
-    rows where ALT is observed, then fills in missing values with predictions.
-
-    Unlike _fit_alt_model_on_rows, this function:
-    1. Uses ALL observed ALT values for training (no train_idx restriction)
-    2. Returns a "filled" series that blends observed and imputed values
-
-    Args:
-        X_no_alt_all: Feature DataFrame WITHOUT the ALT column.
-        alt_series: Original ALT target values (with NaN for missing).
-        cfg: Feature selection configuration dict.
-
-    Returns:
-        Dict with keys:
-        - filled: Series with observed values kept, missing values imputed
-        - predicted: Full predictions (even for rows with observed ALT)
-        - selected_features: Features used by the model
-        - fallback_value: Mean ALT (fallback for edge cases)
-        - n_known: Number of rows with observed ALT
-        - fitted_model: Fitted model instance
-        - calibration_summary: Spline calibration info
-
-    Example:
-        >>> result = impute_alt_for_all(X, alt_series, cfg)
-        >>> alt_filled = result['filled']  # Use for downstream modeling
-    """
-    X_no_alt_all = pd.DataFrame(X_no_alt_all).copy()
-    if TIERED_ALT_ENABLED:
-        fit = _fit_tiered_alt(X_no_alt_all, pd.Series(alt_series), cfg,
-                              n_tiers=TIERED_ALT_N_TIERS)
-    else:
-        fit = _fit_alt_model_on_rows(X_no_alt_all, pd.Series(alt_series), cfg)
-    alt_numeric = pd.to_numeric(pd.Series(alt_series), errors="coerce").reindex(X_no_alt_all.index)
-
-    filled = alt_numeric.copy()
-    known_mask = alt_numeric.notna()
-    missing_mask = ~known_mask
-    pred_all = fit["pred_all"]
-    if missing_mask.any():
-        filled.loc[missing_mask] = pred_all.loc[missing_mask]
-
-    return {
-        "filled": filled.astype(float),
-        "predicted": pred_all.astype(float),
-        "pred_std": fit.get("pred_std_all", pd.Series(dtype=float)),
-        "selected_features": fit["selected_features"],
-        "fallback_value": fit["fallback_value"],
-        "n_known": fit["n_known"],
-        "fitted_model": fit["fitted_model"],
-        "calibration_summary": fit["calibration_summary"],
-        "pca_scaler": fit.get("pca_scaler"),
-        "pca": fit.get("pca"),
-        "int_scaler": fit.get("int_scaler"),
-        "interaction_names": fit.get("interaction_names", []),
-        "combined_feature_names": fit.get("combined_feature_names", []),
-    }
-
-
-def _safe_corr(a, b):
-    """Correlation robust to constant arrays and numpy version quirks."""
-    a = np.asarray(a, dtype=float).ravel()
-    b = np.asarray(b, dtype=float).ravel()
-    if len(a) < 2 or np.std(a) < 1e-12 or np.std(b) < 1e-12:
-        return 0.0
-    return float(np.corrcoef(a, b)[0, 1])
-
-
-def _select_features_corr(Xtr, ytr, k):
-    """Top-K features by absolute correlation."""
-    ytr = np.asarray(ytr, dtype=float).ravel()
-    corrs = np.array([abs(_safe_corr(Xtr[:, j], ytr)) for j in range(Xtr.shape[1])])
-    return np.argsort(corrs)[-k:]
-
-
-def _select_features_mrmr(Xtr, ytr, k):
-    """Minimum redundancy maximum relevance selection."""
-    ytr = np.asarray(ytr, dtype=float).ravel()
-    n_feats = Xtr.shape[1]
-    corrs_y = np.array([abs(_safe_corr(Xtr[:, j], ytr)) for j in range(n_feats)])
-    selected = []
-    remaining = list(range(n_feats))
-    best = remaining[int(np.argmax(corrs_y[remaining]))]
-    selected.append(best); remaining.remove(best)
-    for _ in range(k - 1):
-        if not remaining:
-            break
-        scores = []
-        for j in remaining:
-            redundancy = np.mean([abs(_safe_corr(Xtr[:, j], Xtr[:, s]))
-                                  for s in selected]) if selected else 0
-            scores.append(corrs_y[j] - redundancy)
-        bi = int(np.argmax(scores))
-        selected.append(remaining[bi]); remaining.remove(remaining[bi])
-    return np.array(selected)
-
-
-def _select_features_forward(Xtr, ytr, k, alpha=1.0):
-    """Forward stepwise selection using Ridge LOO error."""
-    from sklearn.linear_model import Ridge as _Rdg
-    n_feats = Xtr.shape[1]
-    selected = []
-    remaining = list(range(n_feats))
-    for _ in range(k):
-        if not remaining:
-            break
-        best_score, best_feat = -np.inf, remaining[0]
-        for j in remaining:
-            trial = selected + [j]
-            sc = StandardScaler()
-            X_s = sc.fit_transform(Xtr[:, trial])
-            m = _Rdg(alpha=alpha); m.fit(X_s, ytr)
-            pred = m.predict(X_s)
-            best_score_j = -float(np.mean((pred - ytr) ** 2))  # in-sample MSE (fast proxy)
-            if best_score_j > best_score:
-                best_score = best_score_j; best_feat = j
-        selected.append(best_feat); remaining.remove(best_feat)
-    return np.array(selected)
-
-
-def _fit_tier_model_simple(
-    X_all: np.ndarray,
-    y_known: np.ndarray,
-    known_idx: np.ndarray,
-    all_mask: np.ndarray,
-    select_method: str = "corr",
-    select_k: int = 5,
-    model_type: str = "ridge",
-    ridge_alpha: float = 1.0,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Fit a simple per-tier model: select features + fit model.
-
-    Returns (predictions_for_all, std_for_all) arrays of shape (n_all_in_tier,).
-    """
-    Xtr = X_all[known_idx]
-    ytr = y_known
-
-    k = min(select_k, Xtr.shape[1], len(ytr) - 2)
-    if k < 1:
-        fallback = float(np.mean(ytr))
-        return np.full(all_mask.sum(), fallback), np.full(all_mask.sum(), np.nan)
-
-    # Feature selection on training data
-    if select_method == "mrmr":
-        feat_idx = _select_features_mrmr(Xtr, ytr, k)
-    elif select_method == "forward":
-        feat_idx = _select_features_forward(Xtr, ytr, k, alpha=ridge_alpha)
-    else:  # "corr"
-        feat_idx = _select_features_corr(Xtr, ytr, k)
-
-    sc = StandardScaler()
-    Xtr_s = sc.fit_transform(Xtr[:, feat_idx])
-    X_all_tier = X_all[all_mask]
-    Xte_s = sc.transform(X_all_tier[:, feat_idx])
-
-    if model_type == "br":
-        m = BayesianRidge(compute_score=False)
-        m.fit(Xtr_s, ytr)
-        pred, std = m.predict(Xte_s, return_std=True)
-    else:  # "ridge"
-        from sklearn.linear_model import Ridge as _Rdg2
-        m = _Rdg2(alpha=ridge_alpha)
-        m.fit(Xtr_s, ytr)
-        pred = m.predict(Xte_s)
-        std = np.full_like(pred, np.nan)
-
-    return pred, std
-
-
-TIERED_ALT_SELECT_METHOD = "corr"  # corr, mrmr, forward
-TIERED_ALT_SELECT_K = 5
-TIERED_ALT_MODEL_TYPE = "ridge"  # ridge, br
-TIERED_ALT_RIDGE_ALPHA = 1.0
-
-
-def _fit_tiered_alt(
-    X_no_alt_all: pd.DataFrame,
-    alt_series: pd.Series,
-    cfg: dict,
-    train_idx: Optional[np.ndarray] = None,
-    n_tiers: int = 4,
-    interaction_pairs: Optional[List[Tuple[str, str]]] = None,
-    sample_weight: Optional[np.ndarray] = None,
-) -> Dict[str, Union[pd.Series, List[str], float]]:
-    """Two-pass tiered ALT imputation.
-
-    Pass 1: Global PCA+BayesianRidge predicts lmarena for tier assignment.
-            Uses 5-fold CV for known models (leakage-free tier assignment).
-    Pass 2: Per-tier simple model (feature selection + Ridge/BR) refines prediction.
-            Feature selection method and model type controlled by globals.
-    """
-    X_df = pd.DataFrame(X_no_alt_all).copy()
-    alt_numeric = pd.to_numeric(pd.Series(alt_series), errors="coerce").reindex(X_df.index)
-
-    n_total = len(X_df)
-    if train_idx is None:
-        train_idx = np.arange(n_total)
-    train_idx = np.asarray(train_idx, dtype=int)
-
-    train_mask = pd.Series(False, index=X_df.index)
-    if len(train_idx):
-        train_mask.iloc[train_idx] = True
-    known_mask = alt_numeric.notna()
-    train_known_mask = train_mask & known_mask
-    known_indices = np.where(train_known_mask.values)[0]
-    n_known = int(train_known_mask.sum())
-    fallback = float(np.nanmean(alt_numeric.loc[train_known_mask])) if n_known else 0.0
-
-    min_per_tier = 8
-    if n_known < n_tiers * min_per_tier:
-        return _fit_alt_model_on_rows(X_df, alt_numeric, cfg, train_idx,
-                                       sample_weight=sample_weight,
-                                       interaction_pairs=interaction_pairs)
-
-    # --- Pass 1: Global model for tier assignment ---
-    global_fit = _fit_alt_model_on_rows(
-        X_df, alt_numeric, cfg, train_idx,
-        sample_weight=sample_weight,
-        interaction_pairs=interaction_pairs,
-    )
-    global_pred_all = global_fit["pred_all"].values
-
-    # OOF predictions for leakage-free tier assignment of known models
-    from sklearn.model_selection import KFold as _KF_tier
-    oof_preds_known = np.full(n_total, np.nan)
-    kf = _KF_tier(n_splits=5, shuffle=True, random_state=42)
-    for fold_tr, fold_va in kf.split(np.arange(len(known_indices))):
-        fold_train_global = known_indices[fold_tr]
-        fold_fit = _fit_alt_model_on_rows(
-            X_df, alt_numeric, cfg, fold_train_global,
-            interaction_pairs=interaction_pairs,
-        )
-        for vi in fold_va:
-            gi = known_indices[vi]
-            oof_preds_known[gi] = fold_fit["pred_all"].iloc[gi]
-
-    tier_scores = np.where(train_known_mask.values, oof_preds_known, global_pred_all)
-
-    # --- Pass 2: Tier assignment + per-tier models ---
-    known_tier_scores = tier_scores[known_indices]
-    sorted_scores = np.sort(known_tier_scores)[::-1]
-    boundaries = []
-    tier_size = n_known // n_tiers
-    for t in range(1, n_tiers):
-        boundaries.append(sorted_scores[min(t * tier_size, n_known - 1)])
-
-    def assign_tier(score):
-        for t, b in enumerate(boundaries):
-            if score >= b:
-                return t
-        return n_tiers - 1
-
-    all_tiers = np.array([assign_tier(s) for s in tier_scores])
-
-    # Raw feature matrix (no PCA — tier models use raw features)
-    svd_cols = [c for c in X_df.columns if c.startswith("_svd_f")]
-    raw_cols = [c for c in X_df.columns if c not in svd_cols]
-    X_raw = X_df[raw_cols].values
-
-    final_pred = np.full(n_total, fallback)
-    final_std = np.full(n_total, np.nan)
-    tier_info = []
-
-    sel_method = TIERED_ALT_SELECT_METHOD
-    sel_k = TIERED_ALT_SELECT_K
-    mdl_type = TIERED_ALT_MODEL_TYPE
-    alpha = TIERED_ALT_RIDGE_ALPHA
-
-    for t in range(n_tiers):
-        tier_known_idx = known_indices[all_tiers[known_indices] == t]
-        tier_all_mask = all_tiers == t
-        n_tier_known = len(tier_known_idx)
-
-        if n_tier_known < min_per_tier:
-            final_pred[tier_all_mask] = global_pred_all[tier_all_mask]
-            tier_info.append(f"t{t}:n={n_tier_known}(global)")
-            continue
-
-        tier_y = alt_numeric.iloc[tier_known_idx].values
-        pred, std = _fit_tier_model_simple(
-            X_raw, tier_y, tier_known_idx, tier_all_mask,
-            select_method=sel_method, select_k=sel_k,
-            model_type=mdl_type, ridge_alpha=alpha,
-        )
-        final_pred[tier_all_mask] = pred
-        final_std[tier_all_mask] = std
-
-        tier_range = alt_numeric.iloc[tier_known_idx]
-        tier_info.append(
-            f"t{t}:n={n_tier_known},[{tier_range.min():.0f}-{tier_range.max():.0f}]"
-        )
-
-    print(f"  Tiered ALT ({n_tiers}t, {sel_method}-{sel_k}, {mdl_type}): {', '.join(tier_info)}")
-
-    pred_all = pd.Series(final_pred, index=X_df.index, dtype="float64")
-    pred_std_all = pd.Series(final_std, index=X_df.index, dtype="float64")
-
-    return {
-        "pred_all": pred_all,
-        "pred_std_all": pred_std_all,
-        "selected_features": global_fit["selected_features"],
-        "fallback_value": fallback,
-        "n_known": n_known,
-        "fitted_model": None,  # no single model — multiple tier models
-        "calibration_summary": None,
-        "pca_scaler": None,
-        "pca": None,
-        "int_scaler": None,
-        "interaction_names": [],
-        "combined_feature_names": [],
-    }
-
-
-def _fit_alt_committee(
-    X_no_alt_all: pd.DataFrame,
-    alt_series: pd.Series,
-    cfg: dict,
-    train_idx: Optional[np.ndarray] = None,
-    pca_dims: Optional[List[int]] = None,
-    n_bootstraps: int = 2,
-    knn_k: int = 5,
-    interaction_pairs: Optional[List[Tuple[str, str]]] = None,
-) -> Dict[str, Union[pd.Series, np.ndarray]]:
-    """Fit a committee of ALT models and return ensemble statistics.
-
-    Fits len(pca_dims) × n_bootstraps BayesianRidge models, each with a
-    different PCA dimensionality and bootstrap subsample. Returns:
-    - mu_bar: consensus prediction (mean across committee)
-    - u_total: total uncertainty (sqrt of aleatoric + epistemic variance)
-    - d_support: mean distance to k nearest known-lmarena neighbors in PCA space
-    """
-    if pca_dims is None:
-        pca_dims = ALT_COMMITTEE_PCA_DIMS
-
-    X_df = pd.DataFrame(X_no_alt_all).copy()
-    alt_numeric = pd.to_numeric(pd.Series(alt_series), errors="coerce").reindex(X_df.index)
-    known_mask = alt_numeric.notna()
-
-    if train_idx is None:
-        train_idx = np.arange(len(X_df))
-    train_idx = np.asarray(train_idx, dtype=int)
-    train_known_mask = pd.Series(False, index=X_df.index)
-    train_known_mask.iloc[train_idx] = True
-    train_known_mask = train_known_mask & known_mask
-    n_known = int(train_known_mask.sum())
-
-    if n_known < 5:
-        fallback = float(np.nanmean(alt_numeric.loc[train_known_mask])) if n_known else 0.0
-        n_all = len(X_df)
-        return {
-            "mu_bar": pd.Series(fallback, index=X_df.index, dtype="float64"),
-            "u_total": pd.Series(50.0, index=X_df.index, dtype="float64"),
-            "d_support": pd.Series(999.0, index=X_df.index, dtype="float64"),
-            "committee_preds": np.full((1, n_all), fallback),
-        }
-
-    # Collect predictions from each committee member
-    all_preds = []
-    all_stds = []
-    rng = np.random.RandomState(42)
-    known_indices = np.where(train_known_mask.values)[0]
-
-    for n_pca in pca_dims:
-        # Temporarily override global PCA components
-        saved = globals().get("ALT_PCA_N_COMPONENTS", 10)
-        globals()["ALT_PCA_N_COMPONENTS"] = n_pca
-        try:
-            for b in range(n_bootstraps):
-                # Bootstrap subsample of known training rows (80%)
-                n_sample = max(int(0.8 * len(known_indices)), n_pca + 2)
-                boot_idx = rng.choice(known_indices, size=min(n_sample, len(known_indices)), replace=True)
-                fit = _fit_alt_model_on_rows(
-                    X_df, alt_numeric, cfg,
-                    train_idx=boot_idx,
-                    interaction_pairs=interaction_pairs,
-                )
-                pred = fit["pred_all"].values
-                std = fit.get("pred_std_all", pd.Series(np.nan, index=X_df.index)).values
-                all_preds.append(pred)
-                all_stds.append(std)
-        finally:
-            globals()["ALT_PCA_N_COMPONENTS"] = saved
-
-    preds_matrix = np.array(all_preds)  # shape (n_members, n_models)
-    stds_matrix = np.array(all_stds)
-
-    # Consensus prediction
-    mu_bar = np.mean(preds_matrix, axis=0)
-
-    # Total uncertainty: aleatoric (mean of individual variances) + epistemic (variance of means)
-    aleatoric_var = np.nanmean(stds_matrix ** 2, axis=0)
-    epistemic_var = np.var(preds_matrix, axis=0)
-    u_total = np.sqrt(aleatoric_var + epistemic_var)
-
-    # Support distance: mean distance to k nearest known-lmarena neighbors
-    # Use standardized base features (same as what PCA sees)
-    svd_cols = [c for c in X_df.columns if c.startswith("_svd_f")]
-    base_cols = [c for c in X_df.columns if c not in svd_cols]
-    X_base = X_df[base_cols].values
-    from sklearn.preprocessing import StandardScaler as _SS
-    scaler = _SS()
-    X_scaled = scaler.fit_transform(X_base)
-    known_scaled = X_scaled[known_mask.values]
-    from sklearn.neighbors import NearestNeighbors
-    nn = NearestNeighbors(n_neighbors=min(knn_k, len(known_scaled)), metric="euclidean")
-    nn.fit(known_scaled)
-    dists, _ = nn.kneighbors(X_scaled)
-    d_support = np.mean(dists, axis=1)
-
-    n_members = len(all_preds)
-    print(f"  ALT committee: {n_members} members (PCA dims {pca_dims} × {n_bootstraps} bootstraps)")
-    print(f"  mu_bar range: [{mu_bar.min():.0f}, {mu_bar.max():.0f}], "
-          f"u_total range: [{u_total.min():.1f}, {u_total.max():.1f}], "
-          f"d_support range: [{d_support.min():.1f}, {d_support.max():.1f}]")
-
-    return {
-        "mu_bar": pd.Series(mu_bar, index=X_df.index, dtype="float64"),
-        "u_total": pd.Series(u_total, index=X_df.index, dtype="float64"),
-        "d_support": pd.Series(d_support, index=X_df.index, dtype="float64"),
-        "committee_preds": preds_matrix,
-    }
-
-
-
-
-
-
-def select_features_tree(
-    X: pd.DataFrame,
-    y: pd.Series,
-    model_type: str = "xgb",
-    mode: Union[str, int] = "auto",           # "auto" -> 1-SE; int -> keep top-K; "none" -> no selection
-    k_grid: List[Union[int, str]] = (10, 20, 50, 100, 200, "all"),
-    cv: int = 5,
-    cv_repeats: int = 1,
-    random_state: int = 42,
-    # --- new args ---
-    drop_collinear: bool = True,
-    r2_threshold: float = 0.95,
-    min_variance: float = 1e-12,
-) -> Tuple[List[str], pd.DataFrame, Dict]:
-    """Full feature selection pipeline using tree-based importance ranking.
-
-    This is the main feature selection entry point, combining:
-    1. Tree-based importance ranking (LightGBM/XGBoost gain)
-    2. Collinearity pruning (drop highly correlated features)
-    3. Optimal k selection via 1-SE rule (if mode='auto')
-
-    Args:
-        X: Feature matrix as DataFrame.
-        y: Target series.
-        model_type: 'lgbm' or 'xgb' for ranking. Defaults to 'xgb'.
-        mode: Selection mode:
-            - 'auto': Use 1-SE rule to find optimal k
-            - int: Keep exactly top-k features
-            - 'none': Keep all features after collinearity pruning
-        k_grid: K values to evaluate when mode='auto'. Defaults to standard grid.
-        cv: Cross-validation folds. Defaults to 5.
-        cv_repeats: Number of CV repeats (new seed per repeat). Defaults to 1.
-        random_state: Random seed. Defaults to 42.
-        drop_collinear: If True, prune highly correlated features. Defaults to True.
-        r2_threshold: R² threshold for collinearity pruning (0.95 = drop if
-            corr >= 0.975). Defaults to 0.95.
-        min_variance: Minimum variance to consider a feature. Defaults to 1e-12.
-
-    Returns:
-        Tuple of (selected_cols, ranking_df, diagnostics) where:
-        - selected_cols: List of selected feature names
-        - ranking_df: DataFrame with columns [feature, mean_gain, std_gain]
-        - diagnostics: Dict with selection details including:
-            - chosen_K: Number of features selected
-            - collinearity: Info about dropped features
-            - CV traces (when mode='auto')
-
-    Algorithm:
-        1. Rank all features by tree importance (CV-averaged gain)
-        2. Optionally prune features with R² >= threshold to higher-ranked ones
-        3. Select final subset based on mode (auto/top-k/none)
-    """
-    Xdf = pd.DataFrame(X).reset_index(drop=True)
-    yser = (y.iloc[:,0] if isinstance(y, pd.DataFrame) and y.shape[1]==1 else pd.Series(y)).reset_index(drop=True)
-
-    # numeric y and mask of rows with known labels
-    ynum = pd.to_numeric(yser, errors="coerce")
-    row_mask = ynum.notna().to_numpy()
-    Xtr = Xdf.iloc[row_mask].copy()
-    ytr = ynum.iloc[row_mask].to_numpy()
-
-
-    # X, y = _ensure_frame_series(X, y)
-    # # Use only rows with target present
-    # mask = y.notna()
-    # Xtr = pd.DataFrame(X)[mask].copy()
-    # ytr = pd.Series(y)[mask].copy()
-
-    ranking_df = rank_features_tree(
-        Xtr,
-        ytr,
-        model_type=model_type,
-        cv=cv,
-        cv_repeats=cv_repeats,
-        random_state=random_state,
-    )
-    ranked_cols = ranking_df["feature"].tolist()
-
-    # ---- prune collinear features by importance on TRAIN data ----
-    collinear_info = {"r2_threshold": r2_threshold, "dropped_map": {}, "n_dropped": 0}
-    if drop_collinear and len(ranked_cols) > 1:
-        pruned_cols, dropped_map = _prune_correlated_by_importance(
-            Xtr, ranked_cols, r2_threshold=r2_threshold, min_variance=min_variance
-        )
-        collinear_info["dropped_map"] = dropped_map
-        collinear_info["n_dropped"] = sum(len(v) for v in dropped_map.values())
-        ranked_cols = pruned_cols
-
-    # ---- selection modes ----
-    if mode == "none":
-        diags = {
-            "chosen_K": len(ranked_cols),
-            "reason": "mode=none",
-            "collinearity": collinear_info,
-            "cv_repeats": int(_normalize_cv_repeats(cv_repeats)),
-        }
-        return ranked_cols, ranking_df, diags
-
-    if isinstance(mode, int):
-        K = max(1, min(int(mode), len(ranked_cols)))
-        diags = {
-            "chosen_K": K,
-            "reason": "top-K",
-            "collinearity": collinear_info,
-            "cv_repeats": int(_normalize_cv_repeats(cv_repeats)),
-        }
-        return ranked_cols[:K], ranking_df, diags
-
-    # auto (1-SE rule) over the pruned ranking
-    chosen_cols, diags = choose_k_by_cv_from_rank(
-        Xtr,
-        pd.Series(ytr),
-        ranked_cols,
-        model_type=model_type,
-        k_grid=list(k_grid),
-        cv=cv,
-        cv_repeats=cv_repeats,
-        random_state=random_state,
-    )
-    diags = dict(diags)  # ensure mutable
-    diags["collinearity"] = collinear_info
-    return chosen_cols, ranking_df, diags
-
-
-def _prune_correlated_by_importance(
-    X_train: pd.DataFrame,
-    ranked_features: List[str],
-    r2_threshold: float = 0.95,
-    min_variance: float = 1e-12,
-) -> Tuple[List[str], Dict[str, List[str]]]:
-    """Prune highly correlated features, keeping the most important one.
-
-    Given a list of features ranked by importance, this function identifies
-    groups of highly correlated features (R² >= threshold) and keeps only
-    the highest-ranked member of each group.
-
-    This prevents multicollinearity issues in downstream models and reduces
-    redundancy without losing predictive information.
-
-    Args:
-        X_train: Training data for computing correlations.
-        ranked_features: Features sorted by importance (most important first).
-        r2_threshold: R² threshold for pruning. Features with R² >= threshold
-            to any higher-ranked feature are dropped. Defaults to 0.95.
-        min_variance: Minimum variance required to consider a feature.
-            Features with variance <= min_variance are ignored. Defaults to 1e-12.
-
-    Returns:
-        Tuple of (kept_features, dropped_map) where:
-        - kept_features: List of retained feature names (in importance order)
-        - dropped_map: Dict mapping kept features to list of features they
-            "absorbed" (features dropped due to high correlation with them)
-
-    Algorithm:
-        1. Compute correlation matrix on training data
-        2. Convert to R² (square of Pearson correlation)
-        3. Iterate through ranked features:
-            a. If feature not already dropped, keep it
-            b. Mark all lower-ranked features with R² >= threshold as dropped
-
-    Example:
-        >>> kept, dropped = _prune_correlated_by_importance(X_train, ranking)
-        >>> print(f"Kept {len(kept)} features, dropped {sum(len(v) for v in dropped.values())}")
-    """
-    # Guard rails
-    r2_threshold = float(r2_threshold)
-    if not (0.0 < r2_threshold < 1.0):
-        raise ValueError("r2_threshold must be in (0, 1).")
-
-    # Restrict to ranked, numeric, non-constant columns
-    cols = [c for c in ranked_features if c in X_train.columns]
-    Xn = X_train[cols].select_dtypes(include=[np.number]).copy()
-    if Xn.shape[1] <= 1:
-        return [c for c in ranked_features if c in Xn.columns], {}
-
-    variances = Xn.var(axis=0, ddof=0)
-    Xn = Xn.loc[:, variances > min_variance]
-    if Xn.shape[1] <= 1:
-        # If everything was constant, just return what remains in order
-        kept = [c for c in ranked_features if c in Xn.columns]
-        return kept, {}
-
-    # Pearson |r| -> R^2
-    corr = Xn.corr().abs().fillna(0.0)
-    r2 = corr ** 2
-    # ignore self-corr
-    np.fill_diagonal(r2.values, 0.0)
-
-    kept: List[str] = []
-    dropped = set()
-    dropped_map: Dict[str, List[str]] = {}
-
-    for f in ranked_features:
-        if f not in Xn.columns or f in dropped:
-            continue
-        # Check correlation with ALL already-kept features (bidirectional)
-        dominated = False
-        for kept_feat in kept:
-            if r2.loc[f, kept_feat] >= r2_threshold:
-                dominated = True
-                break
-        if dominated:
-            dropped.add(f)
-            continue
-        kept.append(f)
-        # Drop any LOWER-ranked features with high R^2 to f
-        high = r2.index[(r2.loc[f] >= r2_threshold)].tolist()
-        if high:
-            dropped_map[f] = high
-            dropped.update(high)
-
-    return kept, dropped_map
-# ---- END TREE-BASED FEATURE SELECTION ----
 
 def _sha256_file(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1<<20), b""):
+        for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
 
 
 def now_pst_timestamp() -> str:
-    from zoneinfo import ZoneInfo
-    from datetime import datetime
     tz = ZoneInfo("America/Los_Angeles")
     return datetime.now(tz).strftime("%Y%m%d_%H%M%S")
+
 
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
+
 def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    from sklearn.metrics import mean_squared_error # type: ignore
+    from sklearn.metrics import mean_squared_error  # type: ignore
     return float(np.sqrt(mean_squared_error(y_true, y_pred)))
 
-def prediction_intervals_from_trees(model, X, z: float = 1.96):
-    if not hasattr(model, "estimators_"):
-        raise ValueError("Model has no estimators_ attribute for tree-based intervals.")
-    all_preds = np.stack([est.predict(X) for est in model.estimators_], axis=0)
-    mu = all_preds.mean(axis=0)
-    std = all_preds.std(axis=0, ddof=1)
-    lower = mu - z * std
-    upper = mu + z * std
-    return mu, std, lower, upper
 
-def bayesian_ridge_predict_with_sigma(br: BayesianRidge, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Predict with posterior uncertainty for BayesianRidge."""
-    if not hasattr(br, "sigma_"):
-        raise ValueError("Model not fitted or missing sigma_.")
-    mu = br.predict(X)
-    Sigma = br.sigma_
-    noise_var = 1.0 / float(br.alpha_)
-    XS = X @ Sigma
-    var = np.einsum("ij,ij->i", XS, X) + noise_var
-    std = np.sqrt(np.maximum(var, 1e-12))
-    return mu, std
+def mmss(delta_secs: float) -> str:
+    m, s = divmod(delta_secs, 60)
+    return f"{int(m)}m {s:05.2f}s"  # e.g., 0m 09.37s, 2m 03.04s
 
 
-def compute_uncertainty_calibration_factor(
-    spec: "ModelSpec",
-    X: np.ndarray,
-    y: np.ndarray,
-    target_coverage: float = 0.95,
-    n_splits: int = 5,
-    cv_repeats: int = 1,
-    seed: int = SEED,
-    splits: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
-    sample_weight: Optional[np.ndarray] = None,
-) -> float:
-    """Compute calibration factor to scale model uncertainty for proper coverage.
-
-    Uses cross-validation to collect (residual, std) pairs and finds the factor k
-    such that |residual| < k * std achieves target_coverage.
-
-    This preserves relative uncertainty (extrapolation points remain more uncertain)
-    while ensuring calibrated coverage.
-
-    Args:
-        spec: ModelSpec defining the model to evaluate.
-        X: Feature matrix of shape (n_samples, n_features).
-        y: Target array of shape (n_samples,).
-        target_coverage: Desired coverage probability (default: 0.95).
-        n_splits: Number of CV folds.
-        cv_repeats: Number of CV repeats (new seed per repeat). Defaults to 1.
-        seed: Base seed for CV splits. Defaults to SEED.
-        splits: Optional pre-computed splits to reuse.
-
-    Returns:
-        Calibration factor k. Multiply model std by k for calibrated intervals.
-    """
-    normalized_residuals = []
-
-    if splits is None:
-        splits = _build_repeated_splits(len(X), n_splits, cv_repeats, seed)
-    if not splits:
-        return 1.0
-
-    for tr_idx, va_idx in splits:
-        X_tr, y_tr = X[tr_idx], y[tr_idx]
-        X_va, y_va = X[va_idx], y[va_idx]
-        w_tr = sample_weight[tr_idx] if sample_weight is not None else None
-
-        model = spec.build(X_tr, y_tr, w_tr)
-        preds = model.predict(X_va)
-
-        # Get model's uncertainty estimate
-        std_va = np.full(len(y_va), np.nan)
-
-        if isinstance(model, Pipeline):
-            if "br" in model.named_steps:
-                scaler = model.named_steps["scaler"]
-                br = model.named_steps["br"]
-                X_va_scaled = scaler.transform(X_va)
-                _, std_va = bayesian_ridge_predict_with_sigma(br, X_va_scaled)
-            elif "ard" in model.named_steps:
-                scaler = model.named_steps["scaler"]
-                ard = model.named_steps["ard"]
-                X_va_scaled = scaler.transform(X_va)
-                _, std_param = ard.predict(X_va_scaled, return_std=True)
-                noise_var = 1.0 / ard.alpha_
-                std_va = np.sqrt(std_param**2 + noise_var)
-
-        if np.isnan(std_va).all():
-            # Fallback: use constant std = 1 (calibration factor becomes raw residual quantile)
-            std_va = np.ones(len(y_va))
-
-        # Compute |residual| / std
-        abs_residuals = np.abs(y_va - preds)
-        # Avoid division by zero
-        std_va = np.maximum(std_va, 1e-8)
-        normalized_residuals.extend(abs_residuals / std_va)
-
-    normalized_residuals = np.array(normalized_residuals)
-    # Find k such that |residual| / std < k covers target_coverage
-    calibration_factor = float(np.percentile(normalized_residuals, target_coverage * 100))
-    # Ensure reasonable bounds
-    calibration_factor = max(0.5, min(calibration_factor, 5.0))
-    return calibration_factor
-
-
-def hgb_quantile_preds(X_train, y_train, X, q_low=0.05, q_high=0.95, seed=SEED):
-    hgb_low = HistGradientBoostingRegressor(loss="quantile", quantile=q_low, random_state=seed)
-    hgb_high = HistGradientBoostingRegressor(loss="quantile", quantile=q_high, random_state=seed)
-    hgb_mean = HistGradientBoostingRegressor(loss="squared_error", random_state=seed)
-    hgb_low.fit(X_train, y_train)
-    hgb_high.fit(X_train, y_train)
-    hgb_mean.fit(X_train, y_train)
-    lower = hgb_low.predict(X)
-    upper = hgb_high.predict(X)
-    mu = hgb_mean.predict(X)
-    std = (upper - lower) / (2.0 * 1.96)
-    return mu, std, lower, upper
-
-def prob_above_threshold(mu: np.ndarray, std: np.ndarray, threshold: float,
-                         t_df: Optional[float] = None) -> np.ndarray:
-    """P(score > threshold) using t-distribution when t_df is provided, else Gaussian."""
-    scale = np.where(std <= 1e-12, 1e-12, std)
-    z = (threshold - mu) / scale
-    try:
-        if t_df is not None and t_df > 0:
-            from scipy.stats import t as t_dist  # type: ignore
-            return 1.0 - t_dist.cdf(z, t_df)
-        from scipy.stats import norm  # type: ignore
-        return 1.0 - norm.cdf(z)
-    except Exception:
-        return 0.5 * (1.0 - np.erf(z / np.sqrt(2.0)))
+# ==============================================================================
+# IMPUTATION
+# ==============================================================================
 
 def run_imputation(
     df: pd.DataFrame,
@@ -3073,36 +304,6 @@ def run_imputation(
     1. Extracts numeric columns (excluding ID and target)
     2. Configures the selected imputer with appropriate hyperparameters
     3. Runs fit_transform and returns the imputed DataFrame
-
-    Args:
-        df: Input DataFrame with ID_COL and numeric benchmark columns.
-        passes: Maximum imputation iterations. Defaults to 14.
-        alpha: Significance level for prediction intervals. Defaults to 0.08.
-        verbose: Verbosity level (0=silent, 1=progress, 2=debug). Defaults to 1.
-        use_feature_selector: If True, use per-column feature selection.
-            Defaults to True.
-        selector_tau: Maximum allowed correlation with already-selected predictors
-            (used by SpecializedColumnImputer). Defaults to 0.8.
-        selector_k_max: Maximum predictors per column for linear models. Defaults to 30.
-        gp_selector_k_max: Maximum predictors for GP models (mRMR selection). Defaults to 10.
-        imputer_n_jobs: Parallel workers for imputation. Defaults to -1 (all cores).
-        categorical_threshold: Max distinct numeric values to auto-treat as categorical.
-        force_categorical_cols: Explicit columns to impute as categorical.
-        tolerance_percentile: Percentile of training uncertainties used to set initial
-            tolerance per column.
-        tolerance_relaxation_factor: Multiplicative relaxation when a round writes no
-            cells.
-        tolerance_multiplier: Multiplier on the initial tolerance to account for
-            higher uncertainty in missing rows.
-        tier_quantiles: Quantiles that define easy/medium/hard imputation tiers.
-        calibrate_tolerances: If True, run per-column tolerance calibration.
-        calibration_target_rmse_ratio: Target RMSE/SD ratio for calibration.
-        calibration_n_rounds: Monte Carlo rounds for calibration.
-        calibration_holdout_frac: Fraction of known values to hold out for calibration.
-        recalibrate_every_n_passes: Recalibrate every N passes (0 = only at start).
-        imputer_type: 'specialized' (default) or 'model_bank'.
-        confidence_threshold: For model_bank imputer, σ/sd threshold for confident
-            imputations in pass 2. Defaults to 0.4.
 
     Returns:
         Tuple of (imputed_df, imputer) where:
@@ -3178,8 +379,8 @@ def run_imputation(
     imputed_df = df[[ID_COL]].join(X_imp)
     return imputed_df, imputer
 
-def evaluate_imputation(imputer: SpecializedColumnImputer, orig_df: pd.DataFrame):
 
+def evaluate_imputation(imputer: SpecializedColumnImputer, orig_df: pd.DataFrame):
 
     numeric_cols = [c for c in orig_df.columns if c not in (ID_COL, TARGET, ALT_TARGET) and pd.api.types.is_numeric_dtype(orig_df[c])]
     X = orig_df[numeric_cols].copy()
@@ -3191,7 +392,7 @@ def evaluate_imputation(imputer: SpecializedColumnImputer, orig_df: pd.DataFrame
 
     if "err" in per_cell.columns:
         pass
-    elif "abs_err" in per_cell.columns and {"y_pred","y_true"}.issubset(per_cell.columns):
+    elif "abs_err" in per_cell.columns and {"y_pred", "y_true"}.issubset(per_cell.columns):
         per_cell["err"] = per_cell["y_pred"] - per_cell["y_true"]
     else:
         per_cell["err"] = np.nan
@@ -3199,334 +400,24 @@ def evaluate_imputation(imputer: SpecializedColumnImputer, orig_df: pd.DataFrame
     per_col = per_col.merge(err_std, on="col", how="left")
     return per_cell, per_col, by_bin
 
-def _feature_components(name: str) -> List[str]:
-    """
-    Break a interaction feature name (e.g., 'A*B' or 'C^2') into the base columns
-    that generated it. Returns [name] when no decomposition is needed.
-
-    Smart parsing: only splits on '*' if result looks like valid feature names
-    (not fragments like "4" or "Fast" from "Grok 4 Fast").
-    """
-    s = str(name).strip()
-    if "*" in s:
-        parts = [p.strip() for p in s.split("*") if p.strip()]
-        # Only treat as interaction if exactly 2 parts AND both look like valid features
-        # Valid features are typically longer than 3 chars and not pure numbers
-        if len(parts) == 2:
-            valid = all(
-                len(p) > 3 and not p.replace(".", "").replace("-", "").isdigit()
-                for p in parts
-            )
-            if valid:
-                return parts
-        # Otherwise, it's a name containing '*', not an interaction
-        return [s]
-    if "^" in s:
-        base = s.split("^", 1)[0].strip()
-        return [base] if base else [s]
-    return [s]
-
-
-def _fit_alt_residual_spline(
-    base_pred: pd.Series,
-    actual: pd.Series,
-    min_points: int = 15,
-    max_knots: int = 6,
-) -> Optional[dict]:
-    """
-    Fits a spline-based calibration model on residuals vs. base predictions.
-    Returns dict with fitted transformer/regressor or None if insufficient data.
-    """
-    finite_base = pd.Series(np.isfinite(base_pred.to_numpy()), index=base_pred.index)
-    finite_actual = pd.Series(np.isfinite(actual.to_numpy()), index=actual.index)
-    mask = base_pred.notna() & actual.notna() & finite_base & finite_actual
-    n = int(mask.sum())
-    if n < min_points:
-        return None
-    x = base_pred.loc[mask].to_numpy().reshape(-1, 1)
-    residual = (actual.loc[mask] - base_pred.loc[mask]).to_numpy()
-    n_knots = max(3, min(max_knots, n // 3))
-    transformer = SplineTransformer(
-        n_knots=n_knots,
-        degree=3,
-        include_bias=True,
-    )
-    Xt = transformer.fit_transform(x)
-    reg = LinearRegression()
-    reg.fit(Xt, residual)
-    return {
-        "transformer": transformer,
-        "reg": reg,
-        "n_points": n,
-        "n_knots": n_knots,
-    }
-
-
-def _apply_alt_residual_spline(calib: dict, preds: pd.Series) -> np.ndarray:
-    transformer: SplineTransformer = calib["transformer"]
-    reg: LinearRegression = calib["reg"]
-    X = preds.to_numpy().reshape(-1, 1)
-    Xt = transformer.transform(X)
-    return reg.predict(Xt)
-
 
 # ==============================================================================
-# MODEL SPECIFICATIONS
+# CONFORMAL INTERVALS
 # ==============================================================================
 
-@dataclass
-class ModelSpec:
-    """Specification for a regression model to evaluate.
-
-    A ModelSpec encapsulates everything needed to train and identify a model:
-    - A name for reporting
-    - A build function that takes (X_train, y_train) and returns a fitted model
-    - A kind label for grouping (linear, tree, blend, etc.)
-
-    Attributes:
-        name: Human-readable model name (e.g., "BayesianRidge").
-        build: Callable that takes (X_train, y_train) and returns fitted model.
-            The returned model must have a predict(X) method.
-        kind: Model category for grouping ("linear", "tree", "blend", etc.).
-    """
-    name: str
-    build: callable
-    kind: str
-
-
-def build_model_specs() -> List[ModelSpec]:
-    """Build the list of model specifications to evaluate.
-
-    Returns:
-        List containing ModelSpecs for BayesianRidge, ARDRegression, and
-        GaussianProcessRegressor for cross-validation comparison.
-    """
-    specs: List[ModelSpec] = []
-
-    # BayesianRidge - robust linear baseline with uncertainty
-    def fit_bayes(Xtr, ytr, wtr=None):
-        pipe = Pipeline([("scaler", StandardScaler()), ("br", BayesianRidge(compute_score=True, max_iter=10000))])
-        if wtr is not None:
-            pipe.fit(Xtr, ytr, br__sample_weight=wtr)
-        else:
-            pipe.fit(Xtr, ytr)
-        return pipe
-    # specs.append(ModelSpec("BayesianRidge", fit_bayes, "linear"))
-
-    # ARDRegression - Bayesian with per-feature relevance determination
-    def fit_ard(Xtr, ytr, wtr=None):
-        pipe = Pipeline([("scaler", StandardScaler()), ("ard", ARDRegression(max_iter=10000))])
-        pipe.fit(Xtr, ytr)  # ARDRegression does not support sample_weight
-        return pipe
-    specs.append(ModelSpec("ARDRegression", fit_ard, "linear"))
-
-    # HuberRegressor - robust to outliers via Huber loss
-    from sklearn.linear_model import HuberRegressor
-    def fit_huber(Xtr, ytr, wtr=None):
-        pipe = Pipeline([("scaler", StandardScaler()), ("huber", HuberRegressor(max_iter=10000, epsilon=1.35))])
-        if wtr is not None:
-            pipe.fit(Xtr, ytr, huber__sample_weight=wtr)
-        else:
-            pipe.fit(Xtr, ytr)
-        return pipe
-    specs.append(ModelSpec("HuberRegressor", fit_huber, "linear"))
-
-    # BayesianRidge with Yeo-Johnson target transform
-    from sklearn.compose import TransformedTargetRegressor
-    from sklearn.preprocessing import PowerTransformer
-    def fit_br_yj(Xtr, ytr, wtr=None):
-        inner = Pipeline([("scaler", StandardScaler()), ("br", BayesianRidge(compute_score=True, max_iter=10000))])
-        ttr = TransformedTargetRegressor(regressor=inner, transformer=PowerTransformer(method="yeo-johnson"))
-        ttr.fit(Xtr, ytr)  # sample_weight not easily forwarded through TTR
-        return ttr
-    # specs.append(ModelSpec("BR_YeoJohnson", fit_br_yj, "linear"))
-
-    return specs
-
-def cross_val_rmse_for_model(
-    spec: ModelSpec,
-    X: np.ndarray,
-    y: np.ndarray,
-    n_splits: int = 5,
-    n_jobs: int = 1,
-    splits: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
-    cv_repeats: int = 1,
-    seed: int = SEED,
-    sample_weight: Optional[np.ndarray] = None,
-    dense_mask: Optional[np.ndarray] = None,
-):
-    """Evaluate a model specification using cross-validated RMSE.
-
-    Performs K-fold cross-validation to estimate out-of-sample RMSE for a
-    given model specification. Supports both sequential and parallel execution.
-
-    Args:
-        spec: ModelSpec defining the model to evaluate (contains build function).
-        X: Feature matrix of shape (n_samples, n_features).
-        y: Target array of shape (n_samples,).
-        n_splits: Number of CV folds. Defaults to 5.
-        n_jobs: Parallel workers for fold evaluation. 1 = sequential. Defaults to 1.
-        splits: Pre-computed (train_idx, val_idx) tuples. If None, generates new
-            KFold splits. Useful for ensuring consistent splits across models.
-        cv_repeats: Number of CV repeats (new seed per repeat). Defaults to 1.
-        seed: Base seed for CV splits. Defaults to SEED.
-
-    Returns:
-        Tuple of (mean_rmse, std_rmse) across folds.
-
-    Example:
-        >>> spec = ModelSpec("BayesianRidge", fit_bayes, "linear")
-        >>> mean_rmse, std_rmse = cross_val_rmse_for_model(spec, X_train, y_train)
-        >>> print(f"RMSE: {mean_rmse:.3f} ± {std_rmse:.3f}")
-    """
-    if splits is None:
-        splits = _build_repeated_splits(len(X), n_splits, cv_repeats, seed)
-    if not splits:
-        raise ValueError("n_splits must be >= 2 for cross-validation.")
-
-    def _eval_fold(tr, va):
-        Xtr, Xva = X[tr], X[va]
-        ytr, yva = y[tr], y[va]
-        wtr = sample_weight[tr] if sample_weight is not None else None
-        model = spec.build(Xtr, ytr, wtr)
-        pred = model.predict(Xva)
-        if dense_mask is not None:
-            dense_va = dense_mask[va]
-            if dense_va.any():
-                return rmse(yva[dense_va], pred[dense_va])
-            return float("nan")
-        return rmse(yva, pred)
-
-    if n_jobs == 1:
-        rmses = [_eval_fold(tr, va) for tr, va in splits]
-    else:
-        rmses = Parallel(n_jobs=n_jobs, prefer="processes")(
-            delayed(_eval_fold)(tr, va) for tr, va in splits
-        )
-    rmses = np.asarray(rmses, dtype=float)
-    return float(np.mean(rmses)), float(np.std(rmses, ddof=1))
-
-def calibrate_prediction_intervals(
-    spec: ModelSpec,
-    X: np.ndarray,
-    y: np.ndarray,
-    target_coverage: float = 0.95,
-    n_splits: int = 5,
-    cv_repeats: int = 1,
-    seed: int = SEED,
-    sample_weight: Optional[np.ndarray] = None,
-) -> float:
-    """Compute conformal calibration factor for prediction intervals.
-
-    Uses conformal prediction to determine the residual quantile needed to achieve
-    target coverage. This provides honest prediction intervals based on actual
-    held-out errors rather than model assumptions.
-
-    Args:
-        spec: ModelSpec defining the model to evaluate.
-        X: Feature matrix of shape (n_samples, n_features).
-        y: Target array of shape (n_samples,).
-        target_coverage: Desired coverage probability (default: 0.95 for 95% intervals).
-        n_splits: Number of CV folds for collecting residuals.
-        cv_repeats: Number of CV repeats (new seed per repeat). Defaults to 1.
-        seed: Base seed for CV splits. Defaults to SEED.
-
-    Returns:
-        Calibration quantile: the absolute residual threshold for target coverage.
-
-    Example:
-        >>> cal_quantile = calibrate_prediction_intervals(spec, X, y, target_coverage=0.95)
-        >>> # For new predictions: intervals = (pred - cal_quantile, pred + cal_quantile)
-    """
-    residuals = []
-
-    splits = _build_repeated_splits(len(X), n_splits, cv_repeats, seed)
-    if not splits:
-        return float("nan")
-
-    for tr_idx, va_idx in splits:
-        w_tr = sample_weight[tr_idx] if sample_weight is not None else None
-        model = spec.build(X[tr_idx], y[tr_idx], w_tr)
-        preds = model.predict(X[va_idx])
-        residuals.extend(np.abs(y[va_idx] - preds))
-
-    residuals = np.array(residuals)
-    # Conformal quantile: find the residual threshold that covers target_coverage
-    calibration_quantile = np.percentile(residuals, target_coverage * 100)
-    return calibration_quantile
-
-def compute_coverage(y_true: np.ndarray, y_pred: np.ndarray, intervals: Tuple[np.ndarray, np.ndarray]) -> float:
-    """Check what fraction of true values fall within predicted intervals.
-
-    Args:
-        y_true: True target values.
-        y_pred: Predicted target values.
-        intervals: Tuple of (lower_bounds, upper_bounds).
-
-    Returns:
-        Coverage fraction (0 to 1).
-
-    Example:
-        >>> lower = predictions - calibration_quantile
-        >>> upper = predictions + calibration_quantile
-        >>> coverage = compute_coverage(y_test, predictions, (lower, upper))
-        >>> print(f"Actual coverage: {coverage:.1%}")
-    """
-    lower, upper = intervals
-    covered = (y_true >= lower) & (y_true <= upper)
-    return np.mean(covered)
-
-
-class _ScaledPositiveRidge:
-    """Ridge(positive=True) with built-in StandardScaler for fair penalization."""
-
-    def __init__(self, alpha=1.0):
-        self.alpha = alpha
-        self.scaler = StandardScaler()
-        self.ridge = Ridge(alpha=alpha, positive=True)
-
-    def fit(self, X, y):
-        X_s = self.scaler.fit_transform(X)
-        self.ridge.fit(X_s, y)
-        return self
-
-    def predict(self, X):
-        X_s = self.scaler.transform(X)
-        return self.ridge.predict(X_s)
-
-    @property
-    def coef_(self):
-        """Return coefficients in original feature scale for diagnostics."""
-        return self.ridge.coef_ / self.scaler.scale_
-
-    @property
-    def intercept_(self):
-        return self.ridge.intercept_ - np.dot(self.ridge.coef_, self.scaler.mean_ / self.scaler.scale_)
-
-
-def _fit_positive_ridge(X_tr, y_tr, X_va, alphas=None):
-    """Fit Ridge(positive=True) with manual alpha selection via LOO approximation.
-
-    Since RidgeCV doesn't support positive=True, we loop over alphas and pick
-    the one with lowest training MSE (with regularization acting as implicit CV).
-
-    Features are standardized internally so Ridge penalizes all features
-    equally regardless of scale (e.g. missing_frac in 0-1 vs score_dist in 0-300).
-    """
-    if alphas is None:
-        alphas = np.logspace(-3, 3, 20)
-    best_alpha = alphas[len(alphas) // 2]
-    best_loss = np.inf
-    for a in alphas:
-        r = _ScaledPositiveRidge(alpha=a)
-        r.fit(X_tr, y_tr)
-        loss = np.mean((y_tr - r.predict(X_tr)) ** 2) + a * np.sum(r.ridge.coef_ ** 2)
-        if loss < best_loss:
-            best_loss = loss
-            best_alpha = a
-    final = _ScaledPositiveRidge(alpha=best_alpha)
-    final.fit(X_tr, y_tr)
-    return final, final.predict(X_va)
+def prob_above_threshold(mu: np.ndarray, std: np.ndarray, threshold: float,
+                         t_df: Optional[float] = None) -> np.ndarray:
+    """P(score > threshold) using t-distribution when t_df is provided, else Gaussian."""
+    scale = np.where(std <= 1e-12, 1e-12, std)
+    z = (threshold - mu) / scale
+    try:
+        if t_df is not None and t_df > 0:
+            from scipy.stats import t as t_dist  # type: ignore
+            return 1.0 - t_dist.cdf(z, t_df)
+        from scipy.stats import norm  # type: ignore
+        return 1.0 - norm.cdf(z)
+    except Exception:
+        return 0.5 * (1.0 - np.erf(z / np.sqrt(2.0)))
 
 
 def _detect_suite_missing_fracs(
@@ -3706,7 +597,7 @@ def compute_grouped_conformal_intervals(
     for name in sorted(final_groups.keys()):
         train_mask, all_mask = final_groups[name]
         print(f"    {name}: n_train={int(train_mask.sum())}, n_all={int(all_mask.sum())}, "
-              f"halfwidth=±{group_q[name]:.1f}")
+              f"halfwidth=\u00b1{group_q[name]:.1f}")
 
     return {
         "std": std_new,
@@ -3728,294 +619,9 @@ def compute_grouped_conformal_intervals(
     }
 
 
-def compute_normalized_conformal_intervals(
-    mu: np.ndarray,
-    oof_preds: np.ndarray,
-    y_train: np.ndarray,
-    X_features: np.ndarray,
-    train_idx: np.ndarray,
-    pre_imputation_missing: np.ndarray,
-    feature_gains: np.ndarray,
-    feature_names: Optional[List[str]] = None,
-    target_coverage: float = 0.95,
-    n_splits: int = 5,
-    k_neighbors: int = 7,
-    n_pca_components: int = 10,
-    sigma_floor_percentile: float = 5.0,
-    seed: int = 42,
-) -> dict:
-    """Compute heteroscedastic prediction intervals via normalized conformal prediction.
-
-    Builds a scale model from mask-native uncertainty features (raw missing
-    fraction, clean importance-weighted missing, suite-level missing, distance
-    metrics) with monotone (positive-only) Ridge coefficients so that more
-    missing data always implies wider intervals.
-
-    Args:
-        mu: Point predictions for ALL models (train + pred), shape (n_all,).
-        oof_preds: OOF predictions for training rows (may contain NaN), shape (n_train,).
-        y_train: Actual target values for training rows, shape (n_train,).
-        X_features: Feature matrix for ALL models (post-imputation), shape (n_all, p).
-        train_idx: Indices (into the n_all arrays) of training rows.
-        pre_imputation_missing: Boolean missing mask BEFORE imputation, shape (n_all, n_raw_features).
-        feature_gains: Importance (gain) per raw feature column, shape (n_raw_features,).
-        feature_names: Column names corresponding to pre_imputation_missing columns.
-        target_coverage: Desired marginal coverage (default 0.95).
-        n_splits: Folds for cross-fitting the scale model.
-        k_neighbors: Neighbors for k-NN distance feature.
-        n_pca_components: Max PCA components for distance features.
-        sigma_floor_percentile: Percentile for flooring sigma_hat.
-        seed: Random seed.
-
-    Returns:
-        Dict with keys: std, lower, upper, sigma_hat, q_hat, sigma_floor,
-        oof_sigma, sigma_cv, oof_coverage, scale_model_coef,
-        uncertainty_features.
-    """
-    n_all = len(mu)
-    n_train = len(y_train)
-    rng = np.random.RandomState(seed)
-
-    # --- a. Mask-native uncertainty features ---
-    # (i) Raw unweighted missing fraction (no gain contamination)
-    raw_missing_frac = pre_imputation_missing.astype(float).mean(axis=1)
-
-    # (ii) Importance-weighted missing fraction with target/ALT gains zeroed out
-    clean_gains = feature_gains.copy()
-    if feature_names is not None:
-        for i, name in enumerate(feature_names):
-            if name in TARGETS:
-                clean_gains[i] = 0.0
-    log_gains = np.log1p(clean_gains)
-    total_log_gain = log_gains.sum()
-    if total_log_gain < 1e-12:
-        total_log_gain = 1.0
-    imp_weighted_missing_clean = (pre_imputation_missing.astype(float) @ log_gains) / total_log_gain
-
-    # (iii) Suite-level missing fraction (detects entire benchmark suites missing)
-    suite_missing_frac = _detect_suite_missing_fracs(
-        pre_imputation_missing,
-        feature_names if feature_names is not None else [f"col_{i}" for i in range(pre_imputation_missing.shape[1])],
-    )
-
-    # --- b. PCA distance features (fit on training rows, transform all) ---
-    n_comp = min(n_pca_components, X_features.shape[1], len(train_idx) - 1)
-    n_comp = max(1, n_comp)
-    pca_scaler = StandardScaler()
-    pca = PCA(n_components=n_comp)
-    train_pca = pca.fit_transform(pca_scaler.fit_transform(X_features[train_idx]))
-    all_pca = pca.transform(pca_scaler.transform(X_features))
-
-    # Standardize PCA components by training std
-    train_std = np.std(train_pca, axis=0)
-    train_std[train_std < 1e-12] = 1.0
-    train_pca_z = train_pca / train_std
-    all_pca_z = all_pca / train_std
-
-    # Mahalanobis distance from training centroid
-    centroid = np.mean(train_pca_z, axis=0)
-    mahal_dist = np.sqrt(np.sum((all_pca_z - centroid) ** 2, axis=1))
-
-    # k-NN distance
-    k_actual = min(k_neighbors, len(train_idx) - 1)
-    k_actual = max(1, k_actual)
-    nn = NearestNeighbors(n_neighbors=k_actual)
-    nn.fit(train_pca_z)
-    knn_dists, _ = nn.kneighbors(all_pca_z)
-    knn_dist = np.mean(knn_dists, axis=1)
-
-    # --- c. Cross-fit the scale model (on training rows only) ---
-    # OOF residuals for training rows
-    oof_valid_mask = ~np.isnan(oof_preds)
-    residuals_all_train = np.abs(y_train - oof_preds)
-
-    # Score-distance feature: further from the top predicted score → wider intervals.
-    # With top-tier boost, high-predicted models have smaller residuals; this lets
-    # the positive-only Ridge learn "closer to top → tighter intervals".
-    max_mu = np.max(mu)
-    score_dist_from_top = max_mu - mu
-
-    # Build uncertainty features for all models
-    # 6 features: raw_missing_frac, imp_weighted_missing_clean, suite_missing_frac, mahal_dist, knn_dist, score_dist
-    U_all = np.column_stack([
-        raw_missing_frac, imp_weighted_missing_clean, suite_missing_frac,
-        mahal_dist, knn_dist, score_dist_from_top,
-    ])
-
-    # Cross-fit: predict log-residuals for each training row OOF
-    # Uses Ridge(positive=True) so more missing/distant → wider intervals (monotone constraint)
-    oof_sigma = np.full(n_train, np.nan)
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=rng.randint(0, 2**31))
-    train_positions = np.arange(n_train)  # positions within training subset
-    valid_positions = train_positions[oof_valid_mask]
-
-    for fold_tr, fold_va in kf.split(valid_positions):
-        fold_tr_pos = valid_positions[fold_tr]
-        fold_va_pos = valid_positions[fold_va]
-
-        # Get the global indices for this fold's training subset
-        fold_tr_global = train_idx[fold_tr_pos]
-
-        # Re-fit Scaler + PCA + kNN on this fold's training subset
-        fold_scaler = StandardScaler()
-        fold_n_comp = min(n_pca_components, X_features.shape[1], len(fold_tr_global) - 1)
-        fold_n_comp = max(1, fold_n_comp)
-        fold_pca = PCA(n_components=fold_n_comp)
-        fold_train_pca = fold_pca.fit_transform(fold_scaler.fit_transform(X_features[fold_tr_global]))
-
-        fold_train_std = np.std(fold_train_pca, axis=0)
-        fold_train_std[fold_train_std < 1e-12] = 1.0
-        fold_train_pca_z = fold_train_pca / fold_train_std
-
-        # Transform fold-val rows
-        fold_va_global = train_idx[fold_va_pos]
-        fold_va_pca = fold_pca.transform(fold_scaler.transform(X_features[fold_va_global]))
-        fold_va_pca_z = fold_va_pca / fold_train_std
-
-        fold_centroid = np.mean(fold_train_pca_z, axis=0)
-        fold_mahal_tr = np.sqrt(np.sum((fold_train_pca_z - fold_centroid) ** 2, axis=1))
-        fold_mahal_va = np.sqrt(np.sum((fold_va_pca_z - fold_centroid) ** 2, axis=1))
-
-        fold_k = min(k_neighbors, len(fold_tr_global) - 1)
-        fold_k = max(1, fold_k)
-        fold_nn = NearestNeighbors(n_neighbors=fold_k)
-        fold_nn.fit(fold_train_pca_z)
-        fold_knn_tr, _ = fold_nn.kneighbors(fold_train_pca_z)
-        fold_knn_va, _ = fold_nn.kneighbors(fold_va_pca_z)
-
-        # Build uncertainty features for this fold
-        U_fold_tr = np.column_stack([
-            raw_missing_frac[fold_tr_global],
-            imp_weighted_missing_clean[fold_tr_global],
-            suite_missing_frac[fold_tr_global],
-            fold_mahal_tr,
-            np.mean(fold_knn_tr, axis=1),
-            score_dist_from_top[fold_tr_global],
-        ])
-        U_fold_va = np.column_stack([
-            raw_missing_frac[fold_va_global],
-            imp_weighted_missing_clean[fold_va_global],
-            suite_missing_frac[fold_va_global],
-            fold_mahal_va,
-            np.mean(fold_knn_va, axis=1),
-            score_dist_from_top[fold_va_global],
-        ])
-
-        # Fit Ridge(positive=True) on log1p(|residual|) — monotone constraint
-        log_r_tr = np.log1p(residuals_all_train[fold_tr_pos])
-        _, fold_preds = _fit_positive_ridge(U_fold_tr, log_r_tr, U_fold_va)
-        oof_sigma[fold_va_pos] = fold_preds
-
-    # Convert from log space
-    oof_sigma_valid = np.expm1(oof_sigma[oof_valid_mask])
-
-    # --- d. Calibrate (no floor — let the scale model speak freely) ---
-    sigma_floor = 1e-6  # numerical safety only
-    oof_sigma_valid = np.maximum(oof_sigma_valid, sigma_floor)
-
-    conformity_scores = residuals_all_train[oof_valid_mask] / oof_sigma_valid
-    # Use empirical quantile directly (no finite-sample inflation)
-    q_hat = float(np.percentile(conformity_scores, target_coverage * 100))
-
-    # OOF coverage check
-    oof_lower = mu[train_idx][oof_valid_mask] - q_hat * oof_sigma_valid
-    oof_upper = mu[train_idx][oof_valid_mask] + q_hat * oof_sigma_valid
-    oof_coverage = float(np.mean((y_train[oof_valid_mask] >= oof_lower) & (y_train[oof_valid_mask] <= oof_upper)))
-
-    # --- e. Fit final featurizer + scale model on all valid training rows ---
-    log_r_all_valid = np.log1p(residuals_all_train[oof_valid_mask])
-    U_train_valid = U_all[train_idx[oof_valid_mask]]
-    final_ridge, _ = _fit_positive_ridge(U_train_valid, log_r_all_valid, U_train_valid)
-
-    # --- f. Produce intervals for all models ---
-    sigma_hat = np.expm1(final_ridge.predict(U_all))
-    sigma_hat = np.maximum(sigma_hat, sigma_floor)
-
-    lower = mu - q_hat * sigma_hat
-    upper = mu + q_hat * sigma_hat
-    std_new = q_hat * sigma_hat / 1.96  # Gaussian-equivalent std (may be overridden by caller)
-
-    sigma_cv = float(np.std(sigma_hat) / np.mean(sigma_hat)) if np.mean(sigma_hat) > 0 else 0.0
-
-    # Scale model coefficients
-    coef_names = [
-        "raw_missing_frac", "imp_weighted_missing_clean", "suite_missing_frac",
-        "mahal_dist", "knn_dist", "score_dist_from_top",
-    ]
-    scale_model_coef = dict(zip(coef_names, final_ridge.coef_.tolist()))
-    scale_model_coef["intercept"] = float(final_ridge.intercept_)
-
-    return {
-        "std": std_new,
-        "lower": lower,
-        "upper": upper,
-        "sigma_hat": sigma_hat,
-        "q_hat": q_hat,
-        "sigma_floor": sigma_floor,
-        "oof_sigma": oof_sigma_valid,
-        "sigma_cv": sigma_cv,
-        "oof_coverage": oof_coverage,
-        "scale_model_coef": scale_model_coef,
-        "uncertainty_features": pd.DataFrame({
-            "raw_missing_frac": raw_missing_frac,
-            "imp_weighted_missing_clean": imp_weighted_missing_clean,
-            "suite_missing_frac": suite_missing_frac,
-            "mahal_dist": mahal_dist,
-            "knn_dist": knn_dist,
-            "score_dist_from_top": score_dist_from_top,
-            "sigma_hat": sigma_hat,
-        }),
-    }
-
-
-def cross_val_rmse_multi_seed(
-    spec: ModelSpec,
-    X: np.ndarray,
-    y: np.ndarray,
-    seeds: List[int] = None,
-    n_splits: int = 5,
-) -> Tuple[float, float]:
-    """Run CV with multiple seeds and report mean±std of RMSE estimates.
-
-    Evaluates model performance across different random train/test splits to
-    assess stability and reduce dependence on a single random split.
-
-    Args:
-        spec: ModelSpec defining the model to evaluate.
-        X: Feature matrix of shape (n_samples, n_features).
-        y: Target array of shape (n_samples,).
-        seeds: List of random seeds to use. Defaults to [42, 123, 456, 789, 1000].
-        n_splits: Number of CV folds per seed. Defaults to 5.
-
-    Returns:
-        Tuple of (mean_rmse, std_rmse) across all seeds.
-
-    Example:
-        >>> mean, std = cross_val_rmse_multi_seed(spec, X, y)
-        >>> print(f"RMSE: {mean:.2f} ± {std:.2f} (across {len(seeds)} seeds)")
-    """
-    if seeds is None:
-        seeds = [42, 123, 456, 789, 1000]
-
-    results = []
-    for seed in seeds:
-        kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-        splits = list(kf.split(X))
-        mean_rmse, _ = cross_val_rmse_for_model(spec, X, y, n_splits=n_splits, splits=splits)
-        results.append(mean_rmse)
-
-    return float(np.mean(results)), float(np.std(results, ddof=1))
-
-# ---------------------------------------------------------------------------
-# Adaptive KNN + Kernel Ridge + Jackknife Variance Inflation
-# ---------------------------------------------------------------------------
-
-KNN_DIST_MULT = 2.0   # include neighbors within dist_mult × nearest distance
-KNN_MAX_K = 80
-KNN_MIN_K = 20
-KNN_BW_PCT = 0.3      # kernel bandwidth at this percentile of neighbor distances
-KNN_VI_CLIP = (1.0, 1.5)
-
+# ==============================================================================
+# KNN PREDICTION
+# ==============================================================================
 
 def predict_adaptive_knn(
     Xtr: np.ndarray,
@@ -4031,8 +637,6 @@ def predict_adaptive_knn(
 
     Returns (prediction, std_estimate, k_used).
     """
-    from sklearn.neighbors import NearestNeighbors
-
     nn = NearestNeighbors(n_neighbors=max_k)
     nn.fit(Xtr)
     dists, idx = nn.kneighbors(Xte)
@@ -4170,1418 +774,9 @@ def fit_and_predict_knn(
     }
 
 
-def fit_and_predict_all(
-    specs: List[ModelSpec],
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    X_all: np.ndarray,
-    cv_n_jobs: int = 1,
-    model_n_jobs: int = 1,
-    cv_splits: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
-    cv_repeats: int = 1,
-    cv_seed: int = SEED,
-    sample_weight: Optional[np.ndarray] = None,
-):
-    def _fit_single(spec: ModelSpec) -> Tuple[str, Dict[str, np.ndarray]]:
-        # Compute calibration factor for uncertainty scaling
-        calibration_factor = 1.0
-        if spec.name in ("BayesianRidge", "ARDRegression"):
-            try:
-                calibration_factor = compute_uncertainty_calibration_factor(
-                    spec,
-                    X_train,
-                    y_train,
-                    target_coverage=0.95,
-                    n_splits=5,
-                    cv_repeats=cv_repeats,
-                    seed=cv_seed,
-                    splits=cv_splits,
-                    sample_weight=sample_weight,
-                )
-            except Exception:
-                calibration_factor = 1.0
-
-        model = spec.build(X_train, y_train, sample_weight)
-        mu = model.predict(X_all)
-
-        # James-Stein variance inflation for final predictions
-        if PRED_CALIBRATION_ENABLED:
-            pred_tr = model.predict(X_train)
-            std_y = np.std(y_train)
-            std_p = np.std(pred_tr)
-            if std_p > 1e-8:
-                k = np.clip(std_y / std_p, 0.5, 2.0)
-                mu = np.mean(y_train) + k * (mu - np.mean(pred_tr))
-
-        std = np.full_like(mu, fill_value=np.nan, dtype=float)
-        lower = np.full_like(mu, fill_value=np.nan, dtype=float)
-        upper = np.full_like(mu, fill_value=np.nan, dtype=float)
-
-        if spec.name == "BayesianRidge":
-            if isinstance(model, Pipeline) and "br" in model.named_steps:
-                X_all_scaled = model.named_steps["scaler"].transform(X_all)
-                br = model.named_steps["br"]
-                mu_br, std_br = bayesian_ridge_predict_with_sigma(br, X_all_scaled)
-                mu = mu_br
-                std = std_br * calibration_factor  # Apply calibration
-                lower = mu - 1.96 * std
-                upper = mu + 1.96 * std
-        elif spec.name == "ARDRegression":
-            if isinstance(model, Pipeline) and "ard" in model.named_steps:
-                X_all_scaled = model.named_steps["scaler"].transform(X_all)
-                ard = model.named_steps["ard"]
-                # predict(return_std=True) gives parameter uncertainty only
-                # Must add observation noise for total predictive uncertainty
-                mu, std_param = ard.predict(X_all_scaled, return_std=True)
-                noise_var = 1.0 / ard.alpha_  # observation noise variance
-                std = np.sqrt(std_param**2 + noise_var) * calibration_factor  # Apply calibration
-                lower = mu - 1.96 * std
-                upper = mu + 1.96 * std
-        elif spec.kind == "tree":
-            try:
-                mu2, std2, lower2, upper2 = prediction_intervals_from_trees(model, X_all, z=1.96)
-                std, lower, upper = std2, lower2, upper2
-            except Exception:
-                pass
-        elif spec.name == "HistGradientBoosting":
-            try:
-                mu_h, std_h, low_h, up_h = hgb_quantile_preds(
-                    X_train, y_train, X_all, 0.05, 0.95, seed=SEED
-                )
-                mu, std, lower, upper = mu_h, std_h, low_h, up_h
-            except Exception:
-                pass
-
-        if np.isnan(std).all():
-            mean_rmse, _ = cross_val_rmse_for_model(
-                spec,
-                X_train,
-                y_train,
-                n_splits=5,
-                n_jobs=cv_n_jobs,
-                splits=cv_splits,
-                cv_repeats=cv_repeats,
-                seed=cv_seed,
-            )
-            std = np.full_like(mu, mean_rmse)
-            lower = mu - 1.96 * std
-            upper = mu + 1.96 * std
-
-        return spec.name, {"mu": mu, "std": std, "lower": lower, "upper": upper, "fitted": model, "calibration_factor": calibration_factor}
-
-    if model_n_jobs == 1:
-        items = [_fit_single(spec) for spec in specs]
-    else:
-        items = Parallel(n_jobs=model_n_jobs, prefer="processes")(
-            delayed(_fit_single)(spec) for spec in specs
-        )
-
-    return {name: payload for name, payload in items}
-
-def fit_and_predict_all_with_alt(
-    specs: List[ModelSpec],
-    X_df: pd.DataFrame,
-    y_all: np.ndarray,
-    train_idx: np.ndarray,
-    pred_idx: np.ndarray,
-    alt_col: str,
-    cv_n_jobs: int = 1,
-    model_n_jobs: int = 1,
-    selector_cfg: Optional[dict] = None,
-    poly_cfg: Optional[dict] = None,
-    cv_base_features: Optional[pd.DataFrame] = None,
-    cv_splits: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
-    cv_repeats: int = 1,
-    cv_seed: int = SEED,
-    oof_repeats: int = 1,
-    sample_weight: Optional[np.ndarray] = None,
-):
-    """Fit all models and generate predictions with proper ALT handling.
-
-    This function simulates deployment conditions where the ALT target must
-    be imputed for rows missing the main target. It uses OOF stacking to
-    prevent leakage.
-
-    The key insight is that at deployment time:
-    - Training rows had known targets, so we used OOF ALT predictions during training
-    - Inference rows have no known target, so we use full-fit ALT predictions
-
-    Args:
-        specs: List of ModelSpec instances to evaluate.
-        X_df: Full feature DataFrame including alt_col.
-        y_all: Full target array (may have NaN for inference rows).
-        train_idx: Indices of training rows (with known target).
-        pred_idx: Indices for prediction (typically all rows).
-        alt_col: Name of the ALT target column.
-        cv_n_jobs: Parallel workers for CV. Defaults to 1.
-        model_n_jobs: Parallel workers for model fitting. Defaults to 1.
-        selector_cfg: Feature selection config. Defaults to None.
-        poly_cfg: Polynomial interaction config. Defaults to None.
-        cv_base_features: Base features for CV (before ALT augmentation).
-        cv_splits: Pre-computed CV splits. Defaults to None.
-        oof_repeats: Repeats for inner ALT OOF CV. Defaults to 1.
-
-    Returns:
-        Dict mapping model name to dict with keys:
-        - mu: Point predictions
-        - std: Uncertainty estimates
-        - lower: Lower confidence bound
-        - upper: Upper confidence bound
-        - fitted: Fitted model instance
-
-    Algorithm:
-        1. Generate OOF ALT predictions for training rows (prevents leakage)
-        2. Train ALT model on all training rows (for inference predictions)
-        3. Prepare training data with OOF ALT values
-        4. Prepare inference data with full-fit ALT predictions
-        5. Fit and predict with each model spec
-    """
-    if alt_col not in X_df.columns:
-        X_train = X_df.values[train_idx]
-        y_train = y_all[train_idx]
-        X_all = X_df.values
-        w_train = sample_weight[train_idx] if sample_weight is not None else None
-        return fit_and_predict_all(
-            specs,
-            X_train,
-            y_train,
-            X_all,
-            cv_n_jobs=cv_n_jobs,
-            model_n_jobs=model_n_jobs,
-            cv_splits=cv_splits,
-            cv_repeats=cv_repeats,
-            cv_seed=cv_seed,
-            sample_weight=w_train,
-        )
-
-    alt_feature_names = [c for c in X_df.columns if c != alt_col]
-    X_no_alt_df = X_df[alt_feature_names].copy()
-    alt_numeric = pd.to_numeric(X_df[alt_col], errors="coerce")
-    top_tier_boost = TOP_TIER_BOOST
-    top_tier_threshold = TOP_TIER_THRESHOLD
-
-    # 1. Generate OOF predictions for the TRAINING rows
-    # These will be used to train the final model
-    X_train_df = X_df.iloc[train_idx]
-    y_alt_train = alt_numeric.iloc[train_idx]
-    
-    # We need a robust OOF generator
-    w_train = sample_weight[train_idx] if sample_weight is not None else None
-    oof_preds_train = _generate_oof_alt_predictions(
-        X_train_df,
-        y_alt_train,
-        ALT_SELECTOR_CFG,
-        n_splits=5,
-        repeats=oof_repeats,
-        seed=cv_seed,
-        sample_weight=w_train,
-    )
-
-    # 2. Train Alt Model on ALL training rows (for inference on test set)
-    alt_fit_full = _fit_alt_model_on_rows(X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, train_idx,
-                                          sample_weight=sample_weight)
-    alt_pred_all = alt_fit_full["pred_all"]
-
-    # 2b. kNN residual correction for inference (non-training) rows
-    if ALT_KNN_ALPHA > 0:
-        known_train_mask = alt_numeric.iloc[train_idx].notna()
-        known_train_positions = np.where(known_train_mask)[0]
-        known_train_global = train_idx[known_train_positions]
-        all_idx = np.arange(len(X_no_alt_df))
-        infer_idx = np.setdiff1d(all_idx, train_idx)
-        if len(known_train_global) >= 15 and len(infer_idx) > 0:
-            # Use OOF residuals from step 1 as the residual bank
-            oof_residuals = (
-                alt_numeric.iloc[train_idx].loc[known_train_mask].to_numpy()
-                - oof_preds_train.loc[known_train_mask].to_numpy()
-            )
-            rhat_infer = _apply_alt_knn_correction(
-                X_no_alt_df, known_train_global, infer_idx, oof_residuals,
-            )
-            alt_pred_all.iloc[infer_idx] += ALT_KNN_ALPHA * rhat_infer
-
-    # 3. Prepare Training Data for Final Model (using OOF)
-    # We replace the Alt column with OOF predictions
-    X_train_final_df = X_train_df.copy()
-    X_train_final_df[alt_col] = oof_preds_train.values
-
-    X_train = X_train_final_df.values
-    y_train = y_all[train_idx]
-
-    # 4. Prepare Inference Data (using Full-Fit Preds)
-    # For the final prediction, we want to simulate the test time scenario.
-    # At test time, we predict Alt using the model trained on Train.
-    # So we use alt_pred_all for everyone.
-    X_all_aug_df = X_df.copy()
-    X_all_aug_df[alt_col] = alt_pred_all.values
-    X_all_aug = X_all_aug_df.values
-
-    def _fit_single(spec: ModelSpec) -> Tuple[str, Dict[str, np.ndarray]]:
-        # Compute calibration factor for uncertainty scaling
-        calibration_factor = 1.0
-        if spec.name in ("BayesianRidge", "ARDRegression"):
-            try:
-                calibration_factor = compute_uncertainty_calibration_factor(
-                    spec,
-                    X_train,
-                    y_train,
-                    target_coverage=0.95,
-                    n_splits=5,
-                    cv_repeats=cv_repeats,
-                    seed=cv_seed,
-                    splits=cv_splits,
-                    sample_weight=w_train,
-                )
-            except Exception:
-                calibration_factor = 1.0
-
-        X_train_b, y_train_b, w_train_b = _apply_top_tier_boost(
-            X_train,
-            y_train,
-            w_train,
-            boost=top_tier_boost,
-            threshold=top_tier_threshold,
-        )
-        model = spec.build(X_train_b, y_train_b, w_train_b)
-        mu = model.predict(X_all_aug)
-
-        # James-Stein variance inflation for final predictions
-        if PRED_CALIBRATION_ENABLED:
-            pred_tr = model.predict(X_train)
-            std_y = np.std(y_train)
-            std_p = np.std(pred_tr)
-            if std_p > 1e-8:
-                k = np.clip(std_y / std_p, 0.5, 2.0)
-                mu = np.mean(y_train) + k * (mu - np.mean(pred_tr))
-
-        std = np.full_like(mu, np.nan)
-        lower = np.full_like(mu, np.nan)
-        upper = np.full_like(mu, np.nan)
-
-        if spec.name == "BayesianRidge":
-            if isinstance(model, Pipeline) and "br" in model.named_steps:
-                X_all_scaled = model.named_steps["scaler"].transform(X_all_aug)
-                br = model.named_steps["br"]
-                mu_br, std_br = bayesian_ridge_predict_with_sigma(br, X_all_scaled)
-                mu = mu_br
-                std = std_br * calibration_factor  # Apply calibration
-                lower = mu - 1.96 * std
-                upper = mu + 1.96 * std
-        elif spec.name == "ARDRegression":
-            if isinstance(model, Pipeline) and "ard" in model.named_steps:
-                X_all_scaled = model.named_steps["scaler"].transform(X_all_aug)
-                ard = model.named_steps["ard"]
-                # predict(return_std=True) gives parameter uncertainty only
-                # Must add observation noise for total predictive uncertainty
-                mu, std_param = ard.predict(X_all_scaled, return_std=True)
-                noise_var = 1.0 / ard.alpha_  # observation noise variance
-                std = np.sqrt(std_param**2 + noise_var) * calibration_factor  # Apply calibration
-                lower = mu - 1.96 * std
-                upper = mu + 1.96 * std
-
-        if np.isnan(std).all():
-            # Use training residual RMSE as flat uncertainty (avoids expensive fallback CV)
-            train_resid = y_all[train_idx] - mu[train_idx]
-            mean_rmse = float(np.sqrt(np.mean(train_resid ** 2)))
-            std = np.full_like(mu, mean_rmse)
-            lower = mu - 1.96 * std
-            upper = mu + 1.96 * std
-
-        return spec.name, {"mu": mu, "std": std, "lower": lower, "upper": upper, "fitted": model, "calibration_factor": calibration_factor}
-
-    if model_n_jobs == 1:
-        items = [_fit_single(spec) for spec in specs]
-    else:
-        items = Parallel(n_jobs=model_n_jobs, prefer="processes")(
-            delayed(_fit_single)(spec) for spec in specs
-        )
-
-    return {name: payload for name, payload in items}
-
-
-def _generate_oof_alt_predictions(
-    X_df: pd.DataFrame,
-    y_alt: pd.Series,
-    cfg: dict,
-    n_splits: int = 5,
-    repeats: int = 1,
-    seed: int = SEED,
-    sample_weight: Optional[np.ndarray] = None,
-) -> pd.Series:
-    """Generate out-of-fold predictions for the ALT target to prevent leakage.
-
-    When using an imputed ALT column as a feature for predicting the main target,
-    we must avoid leakage: the ALT model shouldn't see the same rows during
-    training that will use its predictions for final model training.
-
-    This function implements OOF stacking:
-    1. Split data into K folds
-    2. For each fold, train ALT model on K-1 folds, predict on held-out fold
-    3. Concatenate held-out predictions to get full OOF predictions
-
-    Args:
-        X_df: Feature DataFrame (may contain ALT_TARGET column which is ignored).
-        y_alt: Original ALT target values (with missing values).
-        cfg: Configuration dict for ALT feature selection.
-        n_splits: Number of CV folds. Defaults to 5.
-        repeats: Number of CV repeats (new seed per repeat). Defaults to 1.
-        seed: Random seed. Defaults to SEED.
-
-    Returns:
-        Series of OOF predictions, same index as X_df.
-
-    Note:
-        For rows where ALT was observed, OOF predictions may differ from
-        observed values. For rows where ALT was missing, OOF predictions
-        provide the imputed value without leakage.
-        When repeats > 1, OOF predictions are averaged across repeats.
-    """
-    # Safety check for small data
-    if len(X_df) < n_splits * 2:
-        # Fallback to single fit if too small for CV
-        fit = _fit_alt_model_on_rows(X_df.drop(columns=[ALT_TARGET], errors="ignore"), y_alt, cfg,
-                                     sample_weight=sample_weight)
-        return fit["pred_all"]
-
-    splits = _build_repeated_splits(len(X_df), n_splits, repeats, seed)
-    if not splits:
-        fit = _fit_alt_model_on_rows(X_df.drop(columns=[ALT_TARGET], errors="ignore"), y_alt, cfg,
-                                     sample_weight=sample_weight)
-        return fit["pred_all"]
-
-    oof_sum = pd.Series(0.0, index=X_df.index, dtype=float)
-    oof_count = pd.Series(0, index=X_df.index, dtype=int)
-
-    X_no_alt = X_df.drop(columns=[ALT_TARGET], errors="ignore")
-    y_alt_numeric = pd.to_numeric(y_alt, errors="coerce")
-
-    for fold_k, (tr, va) in enumerate(splits):
-        # Train Alt Model on tr
-        # We pass the global X_no_alt but specify train_idx=tr
-        # This function handles the training on 'tr' and prediction on everything
-        fit = _fit_alt_model_on_rows(X_no_alt, y_alt_numeric, cfg, train_idx=tr,
-                                     sample_weight=sample_weight)
-
-        # We only care about the predictions for 'va'
-        pred_all = fit["pred_all"]
-        va_idx = X_df.index[va]
-        pred_va = pred_all.loc[va_idx].values.copy()
-
-        # kNN residual smoothing on known-ALT training rows
-        if ALT_KNN_ALPHA > 0:
-            y_tr = y_alt_numeric.iloc[tr]
-            known_in_tr = np.where(y_tr.notna())[0]
-            known_tr_global = tr[known_in_tr]  # indices into X_no_alt
-            if len(known_in_tr) >= 15:
-                # Build inner OOF residual bank on known-ALT training rows
-                X_known = X_no_alt.iloc[known_tr_global].reset_index(drop=True)
-                y_known = y_alt_numeric.iloc[known_tr_global].reset_index(drop=True)
-                r_bank = _build_alt_inner_residual_bank(
-                    X_known, y_known, cfg, seed=seed + fold_k,
-                )
-                # kNN correction: neighbors from known-ALT training rows only
-                rhat = _apply_alt_knn_correction(
-                    X_no_alt, known_tr_global, va, r_bank,
-                )
-                pred_va = pred_va + ALT_KNN_ALPHA * rhat
-
-        # Assign to OOF
-        oof_sum.loc[va_idx] += pred_va
-        oof_count.loc[va_idx] += 1
-
-    oof_preds = oof_sum / oof_count.replace(0, np.nan)
-    if oof_preds.isna().any():
-        fallback_fit = _fit_alt_model_on_rows(X_no_alt, y_alt_numeric, cfg,
-                                              sample_weight=sample_weight)
-        oof_preds = oof_preds.fillna(fallback_fit["pred_all"])
-    return oof_preds
-
-
-def cross_val_rmse_with_alt(
-    spec: ModelSpec,
-    X_df: pd.DataFrame,
-    y: np.ndarray,
-    alt_col: str,
-    n_splits: int = 5,
-    n_jobs: int = 1,
-    selector_cfg: Optional[dict] = None,
-    poly_cfg: Optional[dict] = None,
-    splits: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
-    cv_repeats: int = 1,
-    seed: int = SEED,
-    oof_repeats: int = 1,
-    sample_weight: Optional[np.ndarray] = None,
-    dense_mask: Optional[np.ndarray] = None,
-):
-    """Evaluate a model with ALT target imputation using nested CV.
-
-    This is a more sophisticated CV evaluation that properly handles ALT
-    target imputation to prevent leakage. For each outer fold:
-    1. Generate OOF ALT predictions for training data (inner CV)
-    2. Train ALT model on full training data for validation predictions
-    3. Train final model on training data with OOF ALT
-    4. Evaluate on validation data with full-fit ALT predictions
-
-    This nested structure ensures the ALT model never sees validation data
-    during training, giving realistic estimates of deployment performance.
-
-    Args:
-        spec: ModelSpec defining the model to evaluate.
-        X_df: Feature DataFrame including alt_col.
-        y: Target array.
-        alt_col: Name of the ALT target column in X_df.
-        n_splits: Number of outer CV folds. Defaults to 5.
-        n_jobs: Parallel workers. Defaults to 1.
-        selector_cfg: Feature selection config for target model. Defaults to None.
-        poly_cfg: Polynomial interaction config. Defaults to None.
-        splits: Pre-computed CV splits. Defaults to None.
-        cv_repeats: Number of CV repeats (new seed per repeat). Defaults to 1.
-        seed: Base seed for CV splits. Defaults to SEED.
-        oof_repeats: Repeats for inner ALT OOF CV. Defaults to 1.
-
-    Returns:
-        Tuple of (mean_rmse, std_rmse, oof_preds, oof_folds) across folds.
-        oof_preds: array of OOF predictions (NaN if not covered).
-        oof_folds: array of fold assignments (-1 if not covered).
-
-    Note:
-        Falls back to simple CV if alt_col not present in X_df.
-    """
-    if alt_col not in X_df.columns:
-        m, s = cross_val_rmse_for_model(
-            spec,
-            X_df.values,
-            y,
-            n_splits=n_splits,
-            n_jobs=n_jobs,
-            splits=splits,
-            cv_repeats=cv_repeats,
-            seed=seed,
-            sample_weight=sample_weight,
-            dense_mask=dense_mask,
-        )
-        return m, s, np.full(len(y), np.nan), np.full(len(y), -1, dtype=int)
-
-    alt_feature_names = [c for c in X_df.columns if c != alt_col]
-    X_no_alt_df = X_df[alt_feature_names].copy()
-    alt_numeric = pd.to_numeric(X_df[alt_col], errors="coerce")
-
-    if splits is None:
-        splits = _build_repeated_splits(len(X_df), n_splits, cv_repeats, seed)
-    if not splits:
-        raise ValueError("n_splits must be >= 2 for cross-validation.")
-
-    selector_cfg = selector_cfg or {"enabled": False}
-    poly_cfg = poly_cfg or {"enabled": False}
-    poly_enabled = bool(poly_cfg.get("enabled", False))
-    poly_limit = int(poly_cfg.get("limit", 0) or 0)
-    poly_include_squares = bool(poly_cfg.get("include_squares", False))
-    alt_centric_poly = bool(poly_cfg.get("alt_centric", False))
-    alt_centric_k = int(poly_cfg.get("alt_centric_k", 6))
-    top_tier_boost = TOP_TIER_BOOST
-    top_tier_threshold = TOP_TIER_THRESHOLD
-
-    def _eval_fold(tr, va):
-        # 1. Generate OOF predictions for the TRAINING set of this fold
-        X_tr_fold = X_df.iloc[tr]
-        y_alt_tr_fold = alt_numeric.iloc[tr]
-        w_tr = sample_weight[tr] if sample_weight is not None else None
-
-        oof_preds_tr = _generate_oof_alt_predictions(
-            X_tr_fold,
-            y_alt_tr_fold,
-            ALT_SELECTOR_CFG,
-            n_splits=5,
-            repeats=oof_repeats,
-            seed=seed,
-            sample_weight=w_tr,
-        )
-
-        # 2. Train Alt Model on FULL 'tr' to predict for 'va'
-        alt_fit_full = _fit_alt_model_on_rows(X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, tr,
-                                              sample_weight=sample_weight)
-        alt_pred_all = alt_fit_full["pred_all"]
-        # 3. Prepare Training Data for Final Model (using OOF)
-        Xtr_df = X_df.iloc[tr].copy()
-        Xtr_df[alt_col] = oof_preds_tr.values
-
-        # 4. Prepare Validation Data for Final Model (using Full-Fit Preds)
-        Xva_df = X_df.iloc[va].copy()
-        Xva_df[alt_col] = alt_pred_all.loc[Xva_df.index].values
-
-        # 5. Feature selection and expansion for THIS fold's data
-        sel_cols = _select_target_cols_for_train(Xtr_df, y[tr], selector_cfg)
-        Xtr_sel = Xtr_df[sel_cols].copy()
-        Xva_sel = Xva_df[sel_cols].copy()
-
-        if poly_enabled:
-            if alt_centric_poly and alt_col in Xtr_sel.columns:
-                Xtr_sel, chosen_ints = expand_alt_centric_interactions(
-                    Xtr_sel, y[tr], alt_col=alt_col,
-                    top_k=alt_centric_k, return_interactions=True,
-                )
-                Xva_sel = expand_alt_centric_interactions(
-                    Xva_sel, alt_col=alt_col,
-                    preset_interactions=chosen_ints, return_interactions=False,
-                )
-            else:
-                Xtr_sel, core = expand_poly_interactions(
-                    Xtr_sel,
-                    include_squares=poly_include_squares,
-                    limit=poly_limit,
-                    return_core=True,
-                )
-                Xva_sel = expand_poly_interactions(
-                    Xva_sel,
-                    include_squares=poly_include_squares,
-                    limit=poly_limit,
-                    preset_core=core,
-                )
-
-        Xtr_fit, ytr_fit, wtr_fit = _apply_top_tier_boost(
-            Xtr_sel.values,
-            y[tr],
-            w_tr,
-            boost=top_tier_boost,
-            threshold=top_tier_threshold,
-        )
-        model = spec.build(Xtr_fit, ytr_fit, wtr_fit)
-        pred = model.predict(Xva_sel.values)
-        if dense_mask is not None:
-            dense_va = dense_mask[va]
-            rmse_val = rmse(y[va][dense_va], pred[dense_va]) if dense_va.any() else float("nan")
-        else:
-            rmse_val = rmse(y[va], pred)
-        return rmse_val, va, pred
-
-    if n_jobs == 1:
-        results = [_eval_fold(tr, va) for tr, va in splits]
-    else:
-        results = Parallel(n_jobs=n_jobs, prefer="processes")(
-            delayed(_eval_fold)(tr, va) for tr, va in splits
-        )
-    rmses = np.array([r[0] for r in results], dtype=float)
-
-    # Accumulate OOF predictions (average if repeated CV)
-    oof_preds = np.full(len(y), np.nan)
-    oof_folds = np.full(len(y), -1, dtype=int)
-    oof_counts = np.zeros(len(y))
-    for fold_k, (rmse_val, va, pred) in enumerate(results):
-        fold_within = fold_k % n_splits
-        for i, vi in enumerate(va):
-            if oof_counts[vi] == 0:
-                oof_preds[vi] = pred[i]
-            else:
-                oof_preds[vi] = (oof_preds[vi] * oof_counts[vi] + pred[i]) / (oof_counts[vi] + 1)
-            oof_counts[vi] += 1
-            oof_folds[vi] = fold_within
-
-    return float(np.mean(rmses)), float(np.std(rmses, ddof=1)), oof_preds, oof_folds
-
-
-def _apply_top_tier_boost(
-    X,
-    y,
-    w=None,
-    *,
-    boost: Optional[int] = None,
-    threshold: Optional[float] = None,
-):
-    """Duplicate top-tier training rows to counteract regularisation shrinkage.
-
-    Returns augmented (X, y, w) with top-tier rows duplicated (BOOST-1) times.
-    """
-    boost = TOP_TIER_BOOST if boost is None else int(boost)
-    threshold = TOP_TIER_THRESHOLD if threshold is None else float(threshold)
-    if boost <= 1 or threshold <= 0:
-        return X, y, w
-    top_mask = y >= threshold
-    n_top = int(top_mask.sum())
-    if n_top == 0:
-        return X, y, w
-    n_dupes = boost - 1
-    if isinstance(X, pd.DataFrame):
-        X_top = pd.concat([X.loc[top_mask]] * n_dupes, ignore_index=True)
-        X_aug = pd.concat([X, X_top], ignore_index=True)
-    else:
-        X_top = np.tile(X[top_mask], (n_dupes, 1))
-        X_aug = np.vstack([X, X_top])
-    y_aug = np.concatenate([y, np.tile(y[top_mask], n_dupes)])
-    if w is not None:
-        w_aug = np.concatenate([w, np.tile(w[top_mask], n_dupes)])
-    else:
-        w_aug = None
-    return X_aug, y_aug, w_aug
-
-
-def _precompute_single_fold(
-    tr: np.ndarray,
-    va: np.ndarray,
-    X_df: pd.DataFrame,
-    y: np.ndarray,
-    alt_col: str,
-    X_no_alt_df: pd.DataFrame,
-    alt_numeric: pd.Series,
-    oof_repeats: int,
-    seed: int,
-    sample_weight: Optional[np.ndarray],
-    selector_cfg: dict,
-    poly_enabled: bool,
-    poly_include_squares: bool,
-    poly_limit: int,
-    alt_centric_poly: bool,
-    alt_centric_k: int,
-    top_tier_boost: int,
-    top_tier_threshold: float,
-) -> dict:
-    """Compute ALT-augmented train/val data for a single CV fold."""
-    X_tr_fold = X_df.iloc[tr]
-    y_alt_tr_fold = alt_numeric.iloc[tr]
-    w_tr = sample_weight[tr] if sample_weight is not None else None
-
-    oof_preds_tr = _generate_oof_alt_predictions(
-        X_tr_fold, y_alt_tr_fold, ALT_SELECTOR_CFG,
-        n_splits=5, repeats=oof_repeats, seed=seed,
-        sample_weight=w_tr,
-    )
-
-    if TIERED_ALT_ENABLED:
-        alt_fit_full = _fit_tiered_alt(
-            X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, tr,
-            n_tiers=TIERED_ALT_N_TIERS,
-        )
-    else:
-        alt_fit_full = _fit_alt_model_on_rows(
-            X_no_alt_df, alt_numeric, ALT_SELECTOR_CFG, tr,
-            sample_weight=sample_weight,
-        )
-    alt_pred_all = alt_fit_full["pred_all"]
-
-    Xtr_df = X_df.iloc[tr].copy()
-    Xtr_df[alt_col] = oof_preds_tr.values
-    Xva_df = X_df.iloc[va].copy()
-    Xva_df[alt_col] = alt_pred_all.loc[Xva_df.index].values
-
-    if GREEDY_RESIDUAL_K > 0:
-        # Greedy residual selection: start with ALT + PCA, add raw/interaction
-        # columns that correlate with the residual
-        base_cols = [c for c in Xtr_df.columns
-                     if c == alt_col or c.startswith("_target_pc")]
-        if not base_cols:
-            base_cols = [alt_col] if alt_col in Xtr_df.columns else []
-        candidate_cols = [c for c in Xtr_df.columns
-                          if c not in base_cols]
-        sel_cols, Xtr_aug = _greedy_residual_select(
-            Xtr_df, y[tr], base_cols, candidate_cols,
-            max_k=GREEDY_RESIDUAL_K,
-            poly=GREEDY_RESIDUAL_POLY,
-        )
-        # Build matching augmented val DataFrame (interaction columns)
-        Xva_aug = Xva_df.copy()
-        for col in sel_cols:
-            if col not in Xva_aug.columns and "*" in col:
-                ca, cb = col.split("*", 1)
-                if ca in Xva_df.columns and cb in Xva_df.columns:
-                    Xva_aug[col] = Xva_df[ca].values * Xva_df[cb].values
-        Xtr_sel = Xtr_aug[sel_cols].copy()
-        Xva_sel = Xva_aug[sel_cols].copy()
-    else:
-        sel_cols = _select_target_cols_for_train(Xtr_df, y[tr], selector_cfg)
-        Xtr_sel = Xtr_df[sel_cols].copy()
-        Xva_sel = Xva_df[sel_cols].copy()
-
-    if poly_enabled:
-        if alt_centric_poly and alt_col in Xtr_sel.columns:
-            Xtr_sel, chosen_ints = expand_alt_centric_interactions(
-                Xtr_sel, y[tr], alt_col=alt_col,
-                top_k=alt_centric_k, return_interactions=True,
-            )
-            Xva_sel = expand_alt_centric_interactions(
-                Xva_sel, alt_col=alt_col,
-                preset_interactions=chosen_ints, return_interactions=False,
-            )
-        else:
-            Xtr_sel, core = expand_poly_interactions(
-                Xtr_sel, include_squares=poly_include_squares,
-                limit=poly_limit, return_core=True,
-            )
-            Xva_sel = expand_poly_interactions(
-                Xva_sel, include_squares=poly_include_squares,
-                limit=poly_limit, preset_core=core,
-            )
-
-    Xtr_out, ytr_out, wtr_out = Xtr_sel.values, y[tr], w_tr
-
-    # Pseudo-missing augmentation: add copies of training rows where real
-    # lmarena is replaced with OOF-predicted lmarena, weighted down.
-    # This teaches the model that imputed lmarena should carry less signal.
-    if PSEUDO_MISSING_AUG_ENABLED and alt_col in Xtr_sel.columns:
-        alt_col_idx = list(Xtr_sel.columns).index(alt_col)
-        # oof_preds_tr contains cross-fitted ALT predictions for training rows
-        pseudo_X = Xtr_sel.values.copy()
-        pseudo_X[:, alt_col_idx] = oof_preds_tr.values
-        # Also update any interaction columns involving alt_col
-        for ci, cname in enumerate(Xtr_sel.columns):
-            if "*" in cname:
-                parts = cname.split("*")
-                if alt_col in parts:
-                    partner = parts[0] if parts[1] == alt_col else parts[1]
-                    if partner in Xtr_sel.columns:
-                        pi = list(Xtr_sel.columns).index(partner)
-                        pseudo_X[:, ci] = pseudo_X[:, alt_col_idx] * pseudo_X[:, pi]
-        Xtr_out = np.vstack([Xtr_out, pseudo_X])
-        ytr_out = np.concatenate([ytr_out, y[tr]])
-        pseudo_w = np.full(len(tr), PSEUDO_MISSING_WEIGHT)
-        if wtr_out is not None:
-            wtr_out = np.concatenate([wtr_out, pseudo_w])
-        else:
-            wtr_out = np.concatenate([np.ones(len(tr)), pseudo_w])
-
-    # Apply top-tier boost (duplicate high-ELO rows in training)
-    Xtr_out, ytr_out, wtr_out = _apply_top_tier_boost(
-        Xtr_out,
-        ytr_out,
-        wtr_out,
-        boost=top_tier_boost,
-        threshold=top_tier_threshold,
-    )
-
-    return {
-        "Xtr": Xtr_out,
-        "ytr": ytr_out,
-        "wtr": wtr_out,
-        "Xva": Xva_sel.values,
-        "yva": y[va],
-        "va": va,
-    }
-
-
-def _precompute_alt_fold_data(
-    X_df: pd.DataFrame,
-    y: np.ndarray,
-    alt_col: str,
-    splits: List[Tuple[np.ndarray, np.ndarray]],
-    n_splits: int,
-    oof_repeats: int = 1,
-    seed: int = SEED,
-    sample_weight: Optional[np.ndarray] = None,
-    selector_cfg: Optional[dict] = None,
-    poly_cfg: Optional[dict] = None,
-    n_jobs: int = 1,
-    top_tier_boost: int = 1,
-    top_tier_threshold: float = 0.0,
-) -> List[dict]:
-    """Pre-compute ALT-augmented train/val data per fold.
-
-    Factored from cross_val_rmse_with_alt so the expensive ALT OOF
-    imputation, feature selection, and poly expansion are computed once
-    and shared across all model specs in choose_best_model_with_alt.
-    """
-    selector_cfg = selector_cfg or {"enabled": False}
-    poly_cfg = poly_cfg or {"enabled": False}
-
-    alt_feature_names = [c for c in X_df.columns if c != alt_col]
-    X_no_alt_df = X_df[alt_feature_names].copy()
-    alt_numeric = pd.to_numeric(X_df[alt_col], errors="coerce")
-
-    poly_enabled = bool(poly_cfg.get("enabled", False))
-    poly_limit = int(poly_cfg.get("limit", 0) or 0)
-    poly_include_squares = bool(poly_cfg.get("include_squares", False))
-    alt_centric_poly = bool(poly_cfg.get("alt_centric", False))
-    alt_centric_k = int(poly_cfg.get("alt_centric_k", 6))
-
-    t0 = time.time()
-
-    if n_jobs == 1:
-        fold_data = [
-            _precompute_single_fold(
-                tr, va, X_df, y, alt_col, X_no_alt_df, alt_numeric,
-                oof_repeats, seed, sample_weight, selector_cfg,
-                poly_enabled, poly_include_squares, poly_limit,
-                alt_centric_poly, alt_centric_k,
-                top_tier_boost, top_tier_threshold,
-            )
-            for tr, va in splits
-        ]
-    else:
-        fold_data = Parallel(n_jobs=n_jobs, prefer="processes")(
-            delayed(_precompute_single_fold)(
-                tr, va, X_df, y, alt_col, X_no_alt_df, alt_numeric,
-                oof_repeats, seed, sample_weight, selector_cfg,
-                poly_enabled, poly_include_squares, poly_limit,
-                alt_centric_poly, alt_centric_k,
-                top_tier_boost, top_tier_threshold,
-            )
-            for tr, va in splits
-        )
-
-    elapsed = time.time() - t0
-    print(f"Pre-computed {len(fold_data)} ALT-augmented folds in {mmss(elapsed)}")
-    return fold_data
-
-
-def choose_best_model_with_alt(
-    specs: List[ModelSpec],
-    X_df: pd.DataFrame,
-    y: np.ndarray,
-    alt_col: str,
-    n_splits: int = 5,
-    model_n_jobs: int = 1,
-    cv_n_jobs: int = 1,
-    selector_cfg: Optional[dict] = None,
-    poly_cfg: Optional[dict] = None,
-    splits: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
-    cv_repeats: int = 1,
-    seed: int = SEED,
-    oof_repeats: int = 1,
-    sample_weight: Optional[np.ndarray] = None,
-    dense_mask: Optional[np.ndarray] = None,
-):
-    if splits is None:
-        splits = _build_repeated_splits(len(X_df), n_splits, cv_repeats, seed)
-    if not splits:
-        raise ValueError("n_splits must be >= 2 for cross-validation.")
-
-    selector_cfg = selector_cfg or {"enabled": False}
-    poly_cfg = poly_cfg or {"enabled": False}
-    top_tier_boost = TOP_TIER_BOOST
-    top_tier_threshold = TOP_TIER_THRESHOLD
-
-    if alt_col not in X_df.columns:
-        # No ALT column: fall back to simple per-spec CV with OOF predictions
-        def _eval_spec_simple(spec: ModelSpec):
-            m, s = cross_val_rmse_for_model(
-                spec, X_df.values, y,
-                n_splits=n_splits, n_jobs=cv_n_jobs,
-                splits=splits, cv_repeats=cv_repeats, seed=seed,
-                sample_weight=sample_weight, dense_mask=dense_mask,
-            )
-            # Compute OOF predictions for conformal calibration
-            X_vals = X_df.values
-            oof_preds = np.full(len(y), np.nan)
-            oof_folds = np.full(len(y), -1, dtype=int)
-            for fold_idx, (tr, va) in enumerate(splits):
-                w_tr = sample_weight[tr] if sample_weight is not None else None
-                mdl = spec.build(X_vals[tr], y[tr], w_tr)
-                oof_preds[va] = mdl.predict(X_vals[va])
-                oof_folds[va] = fold_idx
-            return {"model": spec.name, "rmse_mean": m, "rmse_std": s,
-                    "oof_preds": oof_preds,
-                    "oof_folds": oof_folds}
-
-        if model_n_jobs == 1:
-            rows = [_eval_spec_simple(spec) for spec in specs]
-        else:
-            rows = Parallel(n_jobs=model_n_jobs, prefer="processes")(
-                delayed(_eval_spec_simple)(spec) for spec in specs
-            )
-    else:
-        # Pre-compute ALT-augmented fold data ONCE (shared across all model specs).
-        # This avoids redoing the expensive ALT OOF imputation, feature selection,
-        # and poly expansion for every model spec — only the final model fit varies.
-        fold_data = _precompute_alt_fold_data(
-            X_df, y, alt_col, splits, n_splits,
-            oof_repeats=oof_repeats, seed=seed,
-            sample_weight=sample_weight,
-            selector_cfg=selector_cfg, poly_cfg=poly_cfg,
-            n_jobs=cv_n_jobs,
-            top_tier_boost=top_tier_boost,
-            top_tier_threshold=top_tier_threshold,
-        )
-
-        def _eval_spec_on_folds(spec: ModelSpec):
-            fold_rmses = []
-            oof_preds = np.full(len(y), np.nan)
-            oof_folds = np.full(len(y), -1, dtype=int)
-            oof_counts = np.zeros(len(y))
-
-            for fold_k, fd in enumerate(fold_data):
-                model = spec.build(fd["Xtr"], fd["ytr"], fd["wtr"])
-                pred = model.predict(fd["Xva"])
-
-                # James-Stein variance inflation: undo shrinkage compression
-                if PRED_CALIBRATION_ENABLED:
-                    pred_tr = model.predict(fd["Xtr"])
-                    std_y = np.std(fd["ytr"])
-                    std_p = np.std(pred_tr)
-                    if std_p > 1e-8:
-                        k = np.clip(std_y / std_p, 0.5, 2.0)
-                        pred = np.mean(fd["ytr"]) + k * (pred - np.mean(pred_tr))
-
-                if dense_mask is not None:
-                    dense_va = dense_mask[fd["va"]]
-                    rmse_val = rmse(fd["yva"][dense_va], pred[dense_va]) if dense_va.any() else float("nan")
-                else:
-                    rmse_val = rmse(fd["yva"], pred)
-                fold_rmses.append(rmse_val)
-
-                fold_within = fold_k % n_splits
-                for i, vi in enumerate(fd["va"]):
-                    if oof_counts[vi] == 0:
-                        oof_preds[vi] = pred[i]
-                    else:
-                        oof_preds[vi] = (oof_preds[vi] * oof_counts[vi] + pred[i]) / (oof_counts[vi] + 1)
-                    oof_counts[vi] += 1
-                    oof_folds[vi] = fold_within
-
-            fold_rmses = np.array(fold_rmses, dtype=float)
-            return {
-                "model": spec.name,
-                "rmse_mean": float(np.mean(fold_rmses)),
-                "rmse_std": float(np.std(fold_rmses, ddof=1)),
-                "oof_preds": oof_preds,
-                "oof_folds": oof_folds,
-            }
-
-        if model_n_jobs == 1:
-            rows = [_eval_spec_on_folds(spec) for spec in specs]
-        else:
-            rows = Parallel(n_jobs=model_n_jobs, prefer="processes")(
-                delayed(_eval_spec_on_folds)(spec) for spec in specs
-            )
-
-    # Blend50: equal-weight average of all models' OOF predictions
-    if len(rows) >= 2:
-        obs_mask = ~np.isnan(y)
-        all_oof = np.column_stack([r["oof_preds"] for r in rows])
-        blend_oof = np.nanmean(all_oof, axis=1)
-        blend_valid = obs_mask & ~np.isnan(blend_oof)
-        blend_rmse_vals = []
-        # Use same fold structure as first model for per-fold RMSE
-        ref_folds = rows[0]["oof_folds"]
-        for fold_id in np.unique(ref_folds[~np.isnan(ref_folds)]):
-            fold_mask = (ref_folds == fold_id) & blend_valid
-            if fold_mask.sum() > 0:
-                blend_rmse_vals.append(float(np.sqrt(np.mean((y[fold_mask] - blend_oof[fold_mask]) ** 2))))
-        blend_mean = float(np.mean(blend_rmse_vals)) if blend_rmse_vals else float("nan")
-        blend_std = float(np.std(blend_rmse_vals, ddof=1)) if len(blend_rmse_vals) > 1 else 0.0
-        rows.append({"model": "Blend50", "rmse_mean": blend_mean, "rmse_std": blend_std,
-                      "oof_preds": blend_oof, "oof_folds": rows[0]["oof_folds"]})
-
-        # Inverse-RMSE weighted blend
-        rmses_arr = np.array([r["rmse_mean"] for r in rows if r["model"] != "Blend50"])
-        inv_w = 1.0 / rmses_arr
-        inv_w /= inv_w.sum()
-        non_blend = [r for r in rows if r["model"] != "Blend50"]
-        blend_w_oof = sum(w * r["oof_preds"] for w, r in zip(inv_w, non_blend))
-        blend_w_rmse_vals = []
-        for fold_id in np.unique(ref_folds[~np.isnan(ref_folds)]):
-            fold_mask = (ref_folds == fold_id) & blend_valid
-            if fold_mask.sum() > 0:
-                blend_w_rmse_vals.append(float(np.sqrt(np.mean((y[fold_mask] - blend_w_oof[fold_mask]) ** 2))))
-        bw_mean = float(np.mean(blend_w_rmse_vals)) if blend_w_rmse_vals else float("nan")
-        bw_std = float(np.std(blend_w_rmse_vals, ddof=1)) if len(blend_w_rmse_vals) > 1 else 0.0
-        rows.append({"model": "BlendWeighted", "rmse_mean": bw_mean, "rmse_std": bw_std,
-                      "oof_preds": blend_w_oof, "oof_folds": rows[0]["oof_folds"]})
-
-    eval_df = pd.DataFrame([{k: v for k, v in r.items() if k not in ("oof_preds", "oof_folds")}
-                            for r in rows]).sort_values("rmse_mean", ascending=True).reset_index(drop=True)
-    best_name = eval_df.iloc[0]["model"]
-    best_row = next(r for r in rows if r["model"] == best_name)
-    # For blended winner, return the best individual spec for final training
-    best_spec = next((sp for sp in specs if sp.name == best_name), specs[0])
-    blend_winner = best_name == "Blend50"
-    return best_spec, eval_df, best_row["oof_preds"], best_row["oof_folds"]
-
-def choose_best_model(
-    specs: List[ModelSpec],
-    X: np.ndarray,
-    y: np.ndarray,
-    model_n_jobs: int = 1,
-    cv_n_jobs: int = 1,
-    cv_repeats: int = 1,
-    seed: int = SEED,
-):
-    def _eval_spec(spec: ModelSpec):
-        m, s = cross_val_rmse_for_model(
-            spec,
-            X,
-            y,
-            n_splits=5,
-            n_jobs=cv_n_jobs,
-            cv_repeats=cv_repeats,
-            seed=seed,
-        )
-        return {"model": spec.name, "rmse_mean": m, "rmse_std": s}
-
-    if model_n_jobs == 1:
-        rows = [_eval_spec(spec) for spec in specs]
-    else:
-        rows = Parallel(n_jobs=model_n_jobs, prefer="processes")(
-            delayed(_eval_spec)(spec) for spec in specs
-        )
-
-    eval_df = pd.DataFrame(rows).sort_values("rmse_mean", ascending=True).reset_index(drop=True)
-    best_name = eval_df.iloc[0]["model"]
-    best_spec = next(sp for sp in specs if sp.name == best_name)
-    return best_spec, eval_df
-
-def summarize_model(model, feature_names: List[str]) -> pd.DataFrame:
-    # If it's a pipeline, inspect the last step too
-    last = None
-    if isinstance(model, Pipeline):
-        last = list(model.named_steps.values())[-1]
-
-    target = last or model  # where we'll look for attributes
-
-    # 1) Linear-style models
-    if hasattr(target, "coef_"):
-        coefs = np.ravel(target.coef_)
-        df = pd.DataFrame({"feature": feature_names, "importance": coefs})
-        df["abs_importance"] = df["importance"].abs()
-        return df.sort_values("abs_importance", ascending=False).drop(columns=["abs_importance"])
-
-    # 2) Native tree/GBM-style importances
-    if hasattr(target, "feature_importances_"):
-        fi = np.ravel(target.feature_importances_)
-        df = pd.DataFrame({"feature": feature_names, "importance": fi})
-        return df.sort_values("importance", ascending=False)
-
-    # 3) Generic fallback: permutation importance
-    if hasattr(model, "_X_train_") and hasattr(model, "_y_train_"):
-        r = permutation_importance(
-            model, model._X_train_, model._y_train_,
-            n_repeats=10, random_state=42, scoring="neg_mean_squared_error"
-        )
-        df = pd.DataFrame({
-            "feature": feature_names,
-            "importance": r.importances_mean,
-            "importance_std": r.importances_std
-        })
-        return df.sort_values("importance", ascending=False)
-
-    # 4) If all else fails
-    return pd.DataFrame({"feature": feature_names, "importance": np.nan})
-
-
-def compute_variance_contributions(
-    model,
-    X: np.ndarray,
-    feature_names: List[str],
-    alt_info: Optional[dict] = None,
-) -> pd.DataFrame:
-    """Compute variance contribution of each feature to predictions.
-
-    For linear models, computes (beta_j * std(X_j))^2 / var(predictions).
-    This represents the fraction of prediction variance attributable to each feature.
-
-    Args:
-        model: Fitted model (Pipeline or estimator with coef_).
-        X: Feature matrix used for predictions.
-        feature_names: Names of features matching X columns.
-        alt_info: Optional dict from alt_result with pca/pca_scaler/int_scaler
-            for the post-PCA interaction architecture. When provided, PCA
-            coefficients are projected back to original feature space via
-            pca.components_.T, and interaction contributions are computed
-            directly. feature_names should be the BASE feature names.
-
-    Returns:
-        DataFrame with columns: feature, variance_contribution, base_feature, grouped_contribution
-    """
-    # --- Post-PCA interaction architecture: project PCA back + interactions ---
-    if alt_info is not None and not isinstance(model, Pipeline):
-        pca_obj = alt_info.get("pca")
-        int_names = alt_info.get("interaction_names", [])
-        if pca_obj is not None and hasattr(model, "coef_"):
-            coefs = np.ravel(model.coef_)
-            n_pca = pca_obj.n_components_
-            n_pca_input = pca_obj.components_.shape[1]
-            # Dimensionality guard: feature_names must match PCA input dimensionality
-            if n_pca_input != len(feature_names):
-                return pd.DataFrame({
-                    "feature": feature_names,
-                    "variance_contribution": np.nan,
-                    "base_feature": feature_names,
-                    "grouped_contribution": np.nan,
-                })
-            coef_pca = coefs[:n_pca]
-            coef_int = coefs[n_pca:]
-
-            # PCA portion: project back to original features via squared loadings
-            pc_contrib = coef_pca ** 2 * pca_obj.explained_variance_
-            var_pca_per_base = (pca_obj.components_.T ** 2) @ pc_contrib  # (n_base,)
-
-            # Interaction portion: coef^2 (interactions are standardized, std=1)
-            var_int = np.zeros(len(int_names))
-            for j in range(len(int_names)):
-                if j < len(coef_int):
-                    # Interactions were standardized — coef is on std=1 scale
-                    var_int[j] = coef_int[j] ** 2
-
-            # Combine and normalize
-            all_names = list(feature_names) + list(int_names)
-            all_contrib = np.concatenate([var_pca_per_base, var_int])
-            total = all_contrib.sum()
-            if total < 1e-12:
-                total = 1.0
-            all_contrib = all_contrib / total
-
-            df = pd.DataFrame({
-                "feature": all_names,
-                "variance_contribution": all_contrib,
-            })
-            df["base_features"] = df["feature"].apply(lambda f: _feature_components(f))
-            base_contrib = defaultdict(float)
-            for _, row in df.iterrows():
-                contrib_per_base = row["variance_contribution"] / len(row["base_features"])
-                for base in row["base_features"]:
-                    base_contrib[base] += contrib_per_base
-            df["primary_base"] = df["base_features"].apply(lambda x: x[0] if x else "")
-            df["grouped_contribution"] = df["primary_base"].map(base_contrib)
-            return df.sort_values("variance_contribution", ascending=False).reset_index(drop=True)
-
-    # Get coefficients
-    if isinstance(model, Pipeline):
-        last = list(model.named_steps.values())[-1]
-    else:
-        last = model
-
-    if not hasattr(last, "coef_"):
-        return pd.DataFrame({
-            "feature": feature_names,
-            "variance_contribution": np.nan,
-            "base_feature": feature_names,
-            "grouped_contribution": np.nan,
-        })
-
-    coefs = np.ravel(last.coef_)
-
-    # Handle PCA pipelines: coefs are in PCA space (n_components), not feature space.
-    # Project back to per-feature contributions using explained variance weighting.
-    if isinstance(model, Pipeline) and "pca" in model.named_steps:
-        pca_step = model.named_steps["pca"]
-        n_pca_features = pca_step.components_.shape[1]
-        if n_pca_features != len(feature_names):
-            # PCA was trained on a different number of features than provided.
-            # Fall back to NaN contributions.
-            return pd.DataFrame({
-                "feature": feature_names,
-                "variance_contribution": np.nan,
-                "base_feature": feature_names,
-                "grouped_contribution": np.nan,
-            })
-        # Per-PC contribution: coef^2 * variance of that PC
-        pc_contrib = coefs ** 2 * pca_step.explained_variance_
-        # Distribute to original features via squared loadings
-        var_contrib = (pca_step.components_.T ** 2) @ pc_contrib
-        total = var_contrib.sum()
-        if total < 1e-12:
-            total = 1.0
-        var_contrib = var_contrib / total
-    elif len(coefs) != X.shape[1]:
-        return pd.DataFrame({
-            "feature": feature_names,
-            "variance_contribution": np.nan,
-            "base_feature": feature_names,
-            "grouped_contribution": np.nan,
-        })
-    elif isinstance(model, Pipeline) and "scaler" in model.named_steps:
-        # For Pipeline with StandardScaler, coefficients are on standardized scale (std=1)
-        # So variance contribution is simply coef^2 / sum(coef^2)
-        total_coef_sq = np.sum(coefs ** 2)
-        if total_coef_sq < 1e-12:
-            total_coef_sq = 1.0
-        var_contrib = (coefs ** 2) / total_coef_sq
-    else:
-        # Raw coefficients - weight by feature variance
-        preds = model.predict(X)
-        pred_var = np.var(preds)
-        if pred_var < 1e-12:
-            pred_var = 1.0
-        X_std = np.std(X, axis=0)
-        var_contrib = (coefs * X_std) ** 2 / pred_var
-
-    # Create DataFrame
-    df = pd.DataFrame({
-        "feature": feature_names,
-        "variance_contribution": var_contrib,
-    })
-
-    # Extract base features using _feature_components
-    df["base_features"] = df["feature"].apply(lambda f: _feature_components(f))
-
-    # Group by base feature (a feature can contribute to multiple base features if it's an interaction)
-    base_contrib = defaultdict(float)
-    for _, row in df.iterrows():
-        contrib_per_base = row["variance_contribution"] / len(row["base_features"])
-        for base in row["base_features"]:
-            base_contrib[base] += contrib_per_base
-
-    # Add grouped contribution for each feature's primary base
-    df["primary_base"] = df["base_features"].apply(lambda x: x[0] if x else "")
-    df["grouped_contribution"] = df["primary_base"].map(base_contrib)
-
-    return df.sort_values("variance_contribution", ascending=False).reset_index(drop=True)
-
-
-def filter_features_by_importance(
-    feature_names: List[str],
-    variance_contributions: pd.DataFrame,
-    threshold: float = 0.01,
-) -> set:
-    """Filter features keeping only those above importance threshold.
-
-    Keeps features where the feature's own variance contribution >= threshold.
-
-    Args:
-        feature_names: List of all feature names.
-        variance_contributions: DataFrame from compute_variance_contributions.
-        threshold: Minimum variance contribution (default 1%).
-
-    Returns:
-        Set of feature names that meet the threshold.
-    """
-    if variance_contributions.empty or variance_contributions["variance_contribution"].isna().all():
-        return set(feature_names)
-
-    # Build lookup of feature -> variance_contribution
-    feat_to_contrib = {}
-    for _, row in variance_contributions.iterrows():
-        feat = row["feature"]
-        contrib = row.get("variance_contribution", 0.0)
-        if pd.notna(contrib):
-            feat_to_contrib[feat] = contrib
-
-    # Keep features where own variance contribution >= threshold
-    kept_features = set()
-    for feat in feature_names:
-        if feat_to_contrib.get(feat, 0.0) >= threshold:
-            kept_features.add(feat)
-
-    return kept_features
-
-
-def compute_imputer_variance_contributions(
-    imputer,
-    X_df: pd.DataFrame,
-    threshold: float = 0.01,
-) -> Dict[str, set]:
-    """Compute important predictors for each imputer model based on variance contribution.
-
-    For each column model in the imputer, computes importance of predictors:
-    - For linear models: uses coefficient-based variance contribution
-    - For non-linear models: uses squared correlation (R²) as importance proxy
-
-    Args:
-        imputer: Fitted SpecializedColumnImputer with models_ attribute.
-        X_df: DataFrame with feature columns used for imputation.
-        threshold: Minimum relative importance (default 1%).
-
-    Returns:
-        Dict mapping column name -> set of important predictor names.
-    """
-    important_predictors: Dict[str, set] = {}
-
-    if imputer is None or not hasattr(imputer, "models_"):
-        return important_predictors
-
-    for col, model in imputer.models_.items():
-        feature_names = getattr(model, "feature_names", [])
-        if not feature_names:
-            important_predictors[col] = set()
-            continue
-
-        # Get available features for this model
-        available_cols = [f for f in feature_names if f in X_df.columns]
-        if not available_cols or col not in X_df.columns:
-            important_predictors[col] = set(feature_names)
-            continue
-
-        try:
-            # Check if this is a linear model with coefficients
-            inner_model = getattr(model, "model", None)
-            scaler = getattr(model, "scaler", None)
-
-            if inner_model is not None and hasattr(inner_model, "coef_"):
-                # Linear model: use coefficient-based importance
-                X_subset = X_df[available_cols].values
-                coef = inner_model.coef_
-
-                if len(coef) == len(available_cols):
-                    feature_std = np.nanstd(X_subset, axis=0)
-                    feature_std = np.where(feature_std == 0, 1e-10, feature_std)
-                    contrib = np.abs(coef) * feature_std
-
-                    total_contrib = contrib.sum()
-                    if total_contrib > 0:
-                        rel_contrib = contrib / total_contrib
-                    else:
-                        rel_contrib = np.ones(len(coef)) / len(coef)
-
-                    important = set()
-                    for i, feat in enumerate(available_cols):
-                        if rel_contrib[i] >= threshold:
-                            important.add(feat)
-                    important_predictors[col] = important
-                    continue
-
-            # Non-linear model (GP, categorical): use correlation-based importance
-            # Compute R² for each predictor with the target column
-            y = X_df[col].values
-            valid_mask = ~np.isnan(y)
-
-            if valid_mask.sum() < 10:
-                # Not enough data points
-                important_predictors[col] = set(feature_names)
-                continue
-
-            r_squared = []
-            for feat in available_cols:
-                x = X_df[feat].values
-                pair_valid = valid_mask & ~np.isnan(x)
-                if pair_valid.sum() < 5:
-                    r_squared.append(0.0)
-                    continue
-                x_valid = x[pair_valid]
-                y_valid = y[pair_valid]
-                # Compute correlation
-                x_mean = np.mean(x_valid)
-                y_mean = np.mean(y_valid)
-                cov = np.mean((x_valid - x_mean) * (y_valid - y_mean))
-                std_x = np.std(x_valid)
-                std_y = np.std(y_valid)
-                if std_x > 0 and std_y > 0:
-                    r = cov / (std_x * std_y)
-                    r_squared.append(r ** 2)
-                else:
-                    r_squared.append(0.0)
-
-            r_squared = np.array(r_squared)
-            total_r2 = r_squared.sum()
-
-            if total_r2 > 0:
-                rel_importance = r_squared / total_r2
-            else:
-                rel_importance = np.ones(len(r_squared)) / len(r_squared)
-
-            important = set()
-            for i, feat in enumerate(available_cols):
-                if rel_importance[i] >= threshold:
-                    important.add(feat)
-
-            important_predictors[col] = important
-
-        except Exception:
-            # On any error, keep all predictors
-            important_predictors[col] = set(feature_names)
-
-    return important_predictors
-
-
-def mmss(delta_secs: float) -> str:
-    m, s = divmod(delta_secs, 60)
-    return f"{int(m)}m {s:05.2f}s"  # e.g., 0m 09.37s, 2m 03.04s
-
-def _parse_alt_mode(s: str):
-    s = str(s).strip().lower()
-    if s == "auto":
-        return "auto"
-    if s == "none":
-        return "none"
-    try:
-        return int(s)
-    except Exception:
-        return "auto"
+# ==============================================================================
+# CV SPLIT HELPERS
+# ==============================================================================
 
 def _normalize_cv_repeats(repeats: int) -> int:
     try:
@@ -5629,7 +824,7 @@ def _build_group_splits(
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
     """Build CV splits using GroupKFold (groups stay together).
 
-    For repeats > 1, permute the group→fold mapping to create
+    For repeats > 1, permute the group->fold mapping to create
     different fold assignments while keeping groups intact.
     """
     reps = _normalize_cv_repeats(repeats)
@@ -5751,13 +946,153 @@ def get_or_create_splits(
         _save_splits(path, n_rows, n_splits, repeats, seed, splits)
     return splits
 
+
 # ==============================================================================
-# GLOBAL CONFIGURATION
+# IMPUTER VARIANCE CONTRIBUTIONS (for dependency graph)
 # ==============================================================================
 
-ALT_SELECTOR_CFG = {}        # Configuration for ALT target feature selection
-ALT_REGRESSOR_NAME = "bayes" # Regressor type for ALT target model
-TARGET_SELECTOR_CFG = {}     # Configuration for main target feature selection
+def compute_imputer_variance_contributions(
+    imputer,
+    X_df: pd.DataFrame,
+    threshold: float = 0.01,
+) -> Dict[str, set]:
+    """Compute important predictors for each imputer model based on variance contribution.
+
+    For each column model in the imputer, computes importance of predictors:
+    - For linear models: uses coefficient-based variance contribution
+    - For non-linear models: uses squared correlation (R^2) as importance proxy
+
+    Args:
+        imputer: Fitted SpecializedColumnImputer with models_ attribute.
+        X_df: DataFrame with feature columns used for imputation.
+        threshold: Minimum relative importance (default 1%).
+
+    Returns:
+        Dict mapping column name -> set of important predictor names.
+    """
+    important_predictors: Dict[str, set] = {}
+
+    if imputer is None or not hasattr(imputer, "models_"):
+        return important_predictors
+
+    for col, model in imputer.models_.items():
+        feature_names = getattr(model, "feature_names", [])
+        if not feature_names:
+            important_predictors[col] = set()
+            continue
+
+        # Get available features for this model
+        available_cols = [f for f in feature_names if f in X_df.columns]
+        if not available_cols or col not in X_df.columns:
+            important_predictors[col] = set(feature_names)
+            continue
+
+        try:
+            # Check if this is a linear model with coefficients
+            inner_model = getattr(model, "model", None)
+            scaler = getattr(model, "scaler", None)
+
+            if inner_model is not None and hasattr(inner_model, "coef_"):
+                # Linear model: use coefficient-based importance
+                X_subset = X_df[available_cols].values
+                coef = inner_model.coef_
+
+                if len(coef) == len(available_cols):
+                    feature_std = np.nanstd(X_subset, axis=0)
+                    feature_std = np.where(feature_std == 0, 1e-10, feature_std)
+                    contrib = np.abs(coef) * feature_std
+
+                    total_contrib = contrib.sum()
+                    if total_contrib > 0:
+                        rel_contrib = contrib / total_contrib
+                    else:
+                        rel_contrib = np.ones(len(coef)) / len(coef)
+
+                    important = set()
+                    for i, feat in enumerate(available_cols):
+                        if rel_contrib[i] >= threshold:
+                            important.add(feat)
+                    important_predictors[col] = important
+                    continue
+
+            # Non-linear model (GP, categorical): use correlation-based importance
+            y = X_df[col].values
+            valid_mask = ~np.isnan(y)
+
+            if valid_mask.sum() < 10:
+                important_predictors[col] = set(feature_names)
+                continue
+
+            r_squared = []
+            for feat in available_cols:
+                x = X_df[feat].values
+                pair_valid = valid_mask & ~np.isnan(x)
+                if pair_valid.sum() < 5:
+                    r_squared.append(0.0)
+                    continue
+                x_valid = x[pair_valid]
+                y_valid = y[pair_valid]
+                x_mean = np.mean(x_valid)
+                y_mean = np.mean(y_valid)
+                cov = np.mean((x_valid - x_mean) * (y_valid - y_mean))
+                std_x = np.std(x_valid)
+                std_y = np.std(y_valid)
+                if std_x > 0 and std_y > 0:
+                    r = cov / (std_x * std_y)
+                    r_squared.append(r ** 2)
+                else:
+                    r_squared.append(0.0)
+
+            r_squared = np.array(r_squared)
+            total_r2 = r_squared.sum()
+
+            if total_r2 > 0:
+                rel_importance = r_squared / total_r2
+            else:
+                rel_importance = np.ones(len(r_squared)) / len(r_squared)
+
+            important = set()
+            for i, feat in enumerate(available_cols):
+                if rel_importance[i] >= threshold:
+                    important.add(feat)
+
+            important_predictors[col] = important
+
+        except Exception:
+            # On any error, keep all predictors
+            important_predictors[col] = set(feature_names)
+
+    return important_predictors
+
+
+# ==============================================================================
+# FEATURE COMPONENT PARSING (for dependency graph)
+# ==============================================================================
+
+def _feature_components(name: str) -> List[str]:
+    """
+    Break a interaction feature name (e.g., 'A*B' or 'C^2') into the base columns
+    that generated it. Returns [name] when no decomposition is needed.
+
+    Smart parsing: only splits on '*' if result looks like valid feature names
+    (not fragments like "4" or "Fast" from "Grok 4 Fast").
+    """
+    s = str(name).strip()
+    if "*" in s:
+        parts = [p.strip() for p in s.split("*") if p.strip()]
+        # Only treat as interaction if exactly 2 parts AND both look like valid features
+        if len(parts) == 2:
+            valid = all(
+                len(p) > 3 and not p.replace(".", "").replace("-", "").isdigit()
+                for p in parts
+            )
+            if valid:
+                return parts
+        return [s]
+    if "^" in s:
+        base = s.split("^", 1)[0].strip()
+        return [base] if base else [s]
+    return [s]
 
 
 # ==============================================================================
@@ -5765,360 +1100,100 @@ TARGET_SELECTOR_CFG = {}     # Configuration for main target feature selection
 # ==============================================================================
 
 def main():
-    """Main entry point for the LMSYS prediction pipeline.
+    """Main entry point for the KNN prediction pipeline.
 
-    This function orchestrates the complete prediction workflow:
-
-    1. **Argument Parsing**: Configure imputation, feature selection, parallelism
-    2. **Data Loading**: Read benchmark CSV, identify numeric columns
-    3. **Low-Variance Filtering**: Drop constant/near-constant columns
-    4. **Imputation**: Run SpecializedColumnImputer (cached if available)
-    5. **Feature Selection**: Tree-based ranking with 1-SE rule
-    6. **ALT Target Handling**: OOF stacking for alternative target imputation
-    7. **Model Comparison**: CV evaluation of BayesianRidge
-    8. **Prediction**: Generate final predictions with uncertainty intervals
-    9. **Dependency Graph**: Build column dependency graph from imputer
-
-    Outputs (written to timestamped output directory):
-        - imputed_full.csv: Complete imputed benchmark matrix
-        - predictions_*.csv: Per-model predictions with intervals
-        - model_comparison.csv: CV results for all models
-        - feature_ranking_*.csv: Feature importance rankings
-        - run_config.json: Configuration used for this run
-        - column_dependency_*.csv/json: Column dependency information
-        - imputation_quality_*.csv: Quality metrics (if not cached)
-
-    Command Line Args:
-        See argparse configuration for full list. Key options:
-        --csv_path: Input benchmark CSV
-        --output_root: Base output directory
-        --passes: Imputation iterations
-        --alpha: Prediction interval confidence level
-        --feature_selector: none/lgbm/xgb
-        --top_k_features: auto/int/none
-
-    Example:
-        $ python lmsys_predictor5.py --csv_path data.csv --passes 12 --alpha 0.95
-
-    Note:
-        Results are cached based on input file hash and imputation parameters.
-        Re-running with same parameters will reuse cached imputation.
+    Orchestrates:
+    1. Argument parsing (imputation + KNN + output flags)
+    2. Parallelism configuration
+    3. Data loading and numeric column identification
+    4. Low-variance filtering
+    5. Imputation (ModelBankImputer via run_imputation, with caching)
+    6. Feature matrix construction (imputed cols + SVD factors + trajectory)
+    7. KNN prediction (fit_and_predict_knn)
+    8. Grouped conformal interval calibration
+    9. Output saving (predictions CSV, OOF CSV, metadata JSON, dependency graph)
     """
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="KNN Arena ELO Predictor")
+    # -- Data I/O --
     ap.add_argument("--csv_path", type=str, default="../benchmark_combiner/benchmarks/clean_combined_all_benches.csv")
     ap.add_argument("--output_root", type=str, default="analysis_output")
+    # -- Imputer config --
     ap.add_argument("--passes", type=int, default=14)
     ap.add_argument("--alpha", type=float, default=0.9361)
-    ap.add_argument("--categorical_threshold", type=int, default=0,
-                    help="Max distinct numeric values to auto-treat as categorical; 0 disables auto-detection.")
-    ap.add_argument("--tolerance_percentile", type=float, default=91.1553,
-                    help="Percentile of training uncertainties used as initial tolerance threshold (90-100).")
-    ap.add_argument("--tolerance_relaxation_factor", type=float, default=1.2704,
-                    help="Multiplicative factor to relax tolerance when no cells are imputed in a pass.")
-    ap.add_argument("--tolerance_multiplier", type=float, default=5.8849,
-                    help="Multiplier on initial tolerance to account for missing rows having higher uncertainty.")
-    # v7.2: Per-column tolerance calibration
-    ap.add_argument("--calibrate_tolerances", action="store_true",
-                    help="Enable per-column tolerance calibration based on masked evaluation.")
-    ap.add_argument("--calibration_target_rmse_ratio", type=float, default=0.6266,
-                    help="Target RMSE/SD ratio for calibration. Lower = stricter.")
-    ap.add_argument("--calibration_n_rounds", type=int, default=3,
-                    help="Monte Carlo rounds for tolerance calibration.")
-    ap.add_argument("--calibration_holdout_frac", type=float, default=0.2,
-                    help="Fraction of known values to hold out for calibration.")
-    ap.add_argument("--recalibrate_every_n_passes", type=int, default=5,
-                    help="Recalibrate tolerances every N passes. 0 = only at start.")
-    ap.add_argument("--no_feature_selector", dest="use_feature_selector", action="store_false",
-                    help="Disable per-column feature selection before imputation.")
-    ap.set_defaults(use_feature_selector=True)
-    ap.add_argument("--selector_tau", type=float, default=0.9012,
-                    help="Maximum allowed |corr| with already kept predictors during selection.")
-    ap.add_argument("--selector_k_max", type=int, default=37,
-                    help="Upper bound on selected predictors per column.")
-    ap.add_argument("--gp_selector_k_max", type=int, default=28,
-                    help="Max features for GP models (mRMR selection). Default 28.")
-    ap.add_argument("--imputer_n_jobs", type=int, default=-1,
-                    help="Parallel workers for the SpecializedColumnImputer (-1 uses all available cores).")
     ap.add_argument("--imputer_type", type=str, default="model_bank",
                     choices=["specialized", "model_bank"],
-                    help="Imputer algorithm: 'model_bank' (default, per-cell predictor selection) or 'specialized' (SVD warm-start).")
-    ap.add_argument("--confidence_threshold", type=float, default=0.4,
-                    help="For model_bank imputer: normalized σ/sd threshold for confident imputations in pass 2.")
-    ap.add_argument("--coherence_lambda", type=float, default=1.0,
-                    help="For model_bank imputer: shrinkage strength for low-rank coherence projection. "
-                         "Higher = less pulling toward SVD. 0 = disable coherence.")
+                    help="Imputer algorithm: 'model_bank' (default) or 'specialized' (SVD warm-start).")
+    ap.add_argument("--confidence_threshold", type=float, default=0.4)
+    ap.add_argument("--coherence_lambda", type=float, default=1.0)
     ap.add_argument("--coherence_shape", type=str, default="exp",
-                    choices=["linear", "squared", "power3", "exp", "step"],
-                    help="Shrinkage weight shape: linear=τ/(τ+λ), squared=τ²/(τ²+λ), "
-                         "power3=τ³/(τ³+λ), exp=1-exp(-τ/λ), step=hard threshold.")
-    ap.add_argument("--coherence_gate", type=str, default="fixed",
-                    choices=["fixed", "row_adaptive", "learned"],
-                    help="Coherence gate type: fixed (shape-based), row_adaptive (λ scaled by "
-                         "row completeness²), learned (Ridge-trained per-cell gate).")
-    ap.add_argument("--n_imputations", type=int, default=1,
-                    help="Number of multiple imputations. K>1 samples from N(μ,σ²) per cell, "
-                         "runs downstream pipeline K times, averages OOF predictions.")
-    ap.add_argument("--tier_quantiles", type=str, default="0.33,0.67",
-                    help="Comma-separated quantiles that define easy/medium/hard imputation tiers.")
-    ap.add_argument("--selector_n_jobs", type=int, default=-2,
-                    help="Parallel workers for feature selection; 1 disables parallelism.")
-    ap.add_argument("--cv_n_jobs", type=int, default=1,
-                    help="Parallel workers for cross-validation folds.")
-    ap.add_argument("--model_n_jobs", type=int, default=1,
-                    help="Parallel workers across model specifications.")
-    ap.add_argument("--cv_splits_path", type=str, default="",
-                    help="Optional path to persist/reuse target-model CV splits (JSON; includes repeats if enabled).")
-    ap.add_argument("--cv_repeats", type=int, default=1,
-                    help="Global default for CV repeats (overridden by *_repeats flags).")
-    ap.add_argument("--cv_repeats_outer", type=int, default=None,
-                    help="Repeats for outer model CV + uncertainty calibration (overrides --cv_repeats).")
-    ap.add_argument("--cv_repeats_inner", type=int, default=None,
-                    help="Repeats for inner ALT OOF CV (overrides --cv_repeats).")
-    ap.add_argument("--feature_cv_repeats", type=int, default=None,
-                    help="Repeats for tree-based feature selection CV (overrides --cv_repeats).")
-    ap.add_argument("--alt_cv_repeats", type=int, default=None,
-                    help="Repeats for ALT imputation CV report (overrides --cv_repeats).")
-    ap.add_argument("--cv_seed", type=int, default=SEED,
-                    help="Base seed for CV splits (seed + repeat_index).")
-    ap.add_argument("--feature_selector", choices=["none", "lgbm", "xgb"], default="lgbm")
-    ap.add_argument("--top_k_features", default="auto", help="'auto' for 1-SE, integer for K, or 'none'")
-    ap.add_argument("--selector_cv", type=int, default=5)
-    ap.add_argument("--outer_cv", type=int, default=None,
-                    help="Number of folds for outer target CV (defaults to selector_cv). "
-                         "Set to n_train for LOO. Inner feature selection still uses --selector_cv.")
-    ap.add_argument("--top_k_loo", type=int, default=0,
-                    help="LOO only on the top K models by target score. "
-                         "All models still used for training. 0 = disabled.")
-    ap.add_argument("--pca_in_target", type=int, default=0,
-                    help="Add N PCA components of benchmark columns as target model features. "
-                         "0 = disabled. Use with --cross_domain_alt for best combo.")
-    ap.add_argument("--greedy_residual_k", type=int, default=0,
-                    help="Max raw columns to add via greedy residual correlation. "
-                         "After ALT+PCA predict most variance, greedily select raw columns "
-                         "correlated with residual. 0 = disabled. Fold-internal (no leakage).")
-    ap.add_argument("--greedy_residual_poly", action="store_true",
-                    help="Also consider A*B interaction terms as greedy residual candidates. "
-                         "Selecting A*B does NOT require selecting A or B separately.")
-    ap.add_argument("--force_features", type=str, default="",
-                    help="Comma-separated feature names to force into the selected set "
-                         "(added after feature selection, before poly expansion).")
-    ap.add_argument("--drop_features", type=str, default="",
-                    help="Comma-separated feature names to drop from the selected set "
-                         "(removed after feature selection + force, before poly expansion). "
-                         "Drops main effects only — interactions involving these features "
-                         "are still created if the feature was selected before dropping.")
-    ap.add_argument("--selector_k_grid", default="4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,25,all")
-        # interaction options
-    ap.add_argument("--poly_interactions", action="store_true",
-                    help="Add degree-2 pairwise interactions before selection.")
-    ap.add_argument("--poly_include_squares", action="store_true",
-                    help="Also include squared terms (A^2).")
-    ap.add_argument("--poly_limit", type=int, default=6,
-                    help="If >0, only interact top-K variance columns; keep others as main effects.")
-    ap.add_argument("--alt_centric_poly", action="store_true",
-                    help="Use ALT-centric interactions (ALT*feature) ranked by residual correlation instead of variance-based poly.")
-    ap.add_argument("--alt_centric_k", type=int, default=6,
-                    help="Number of ALT*feature interactions to keep when using alt-centric poly.")
-    ap.add_argument("--alt_regressor", choices=["bayes", "lgbm", "ridge", "stack", "gp"], default="bayes",
-                help="Regressor for ALT model: bayes (BayesianRidge), gp (Gaussian Process), lgbm, ridge, stack.")
-    ap.add_argument("--alt_committee", action="store_true",
-                help="Use committee of ALT models (PCA dims {6,8,10,12} × 2 bootstraps) "
-                     "to produce uncertainty estimates (u_total, d_support).")
-    ap.add_argument("--tiered_alt", action="store_true",
-                help="Two-pass tiered ALT: global model assigns tiers, per-tier models refine. "
-                     "Different features matter at different lmarena levels.")
-    ap.add_argument("--tiered_alt_n_tiers", type=int, default=4,
-                help="Number of tiers for tiered ALT (default 4 = quartiles).")
-    ap.add_argument("--tiered_alt_select", choices=["corr", "mrmr", "forward"], default="corr",
-                help="Feature selection method for per-tier models (default corr).")
-    ap.add_argument("--tiered_alt_k", type=int, default=5,
-                help="Number of features to select per tier (default 5).")
-    ap.add_argument("--tiered_alt_model", choices=["ridge", "br"], default="ridge",
-                help="Model type for per-tier models: ridge or br (default ridge).")
-    ap.add_argument("--tiered_alt_alpha", type=float, default=1.0,
-                help="Ridge alpha for per-tier models (default 1.0).")
-    ap.add_argument("--direct_target", action="store_true",
-                help="Skip lmarena entirely. Predict Arena ELO directly from benchmarks + style. "
-                     "No ALT imputation, no two-stage pipeline.")
-    ap.add_argument("--knn_predict", action="store_true",
-                help="Use adaptive KNN + kernel Ridge + jackknife VI for prediction. "
-                     "Bypasses the two-stage ALT pipeline. Best for lmarena target (R²=0.927).")
-    ap.add_argument("--knn_dist_mult", type=float, default=2.0,
-                help="Distance multiplier for adaptive k cutoff (default 2.0).")
-    ap.add_argument("--knn_max_k", type=int, default=80,
-                help="Maximum k for adaptive KNN (default 80).")
-    ap.add_argument("--knn_min_k", type=int, default=20,
-                help="Minimum k for adaptive KNN (default 20).")
-    ap.add_argument("--knn_bw_pct", type=float, default=0.3,
-                help="Bandwidth percentile for Gaussian kernel (default 0.3).")
-    ap.add_argument("--tiered_target", action="store_true",
-                help="Fit per-tier target models for Arena ELO prediction. "
-                     "Uses OOF predictions for tier assignment (no leakage).")
-    ap.add_argument("--tiered_target_n_tiers", type=int, default=4,
-                help="Number of tiers for tiered target model (default 4).")
-    ap.add_argument("--tiered_target_select", choices=["corr", "mrmr", "forward"], default="corr",
-                help="Feature selection for per-tier target models (default corr).")
-    ap.add_argument("--tiered_target_k", type=int, default=5,
-                help="Features per tier for target model (default 5).")
-    ap.add_argument("--tiered_target_model", choices=["ridge", "br"], default="ridge",
-                help="Model type for per-tier target (default ridge).")
-    ap.add_argument("--tiered_target_alpha", type=float, default=1.0,
-                help="Ridge alpha for per-tier target models (default 1.0).")
-    ap.add_argument("--pseudo_missing_aug", action="store_true",
-                help="Augment training with pseudo-imputed copies of known-lmarena rows. "
-                     "Teaches the model that imputed lmarena carries less weight.")
-    ap.add_argument("--pseudo_missing_weight", type=float, default=0.4,
-                help="Sample weight for pseudo-missing augmented rows (default 0.4).")
-    ap.add_argument("--alt_feature_selector", choices=["none", "lgbm", "xgb"], default="lgbm",
-                help="Tree-based selector for the ALT model (per-fold).")
-    ap.add_argument("--alt_top_k_features", default="auto",
-                    help="'auto' for 1-SE, integer for K, or 'none' (use all).")
-    ap.add_argument("--alt_selector_cv", type=int, default=5,
-                    help="CV folds for ALT selector.")
-    ap.add_argument("--alt_selector_k_grid", default="4,5,6,7,10,15,20,all",
-                    help="K grid for 1-SE rule when alt_top_k_features='auto'.")
-    ap.add_argument("--max_workers", type=int, default=0,
-                    help="Global cap on worker processes/threads (0 disables cap).")
-    ap.add_argument("--alt_interaction_prescreen", type=int, default=50,
-                    help="Number of candidate pairs to keep after Phase 1 residual correlation pre-screen.")
-    ap.add_argument("--alt_interaction_max_pairs", type=int, default=20,
-                    help="Maximum number of interaction pairs to select in greedy forward search.")
-    ap.add_argument("--alt_interaction_min_improvement", type=float, default=0.05,
-                    help="Minimum RMSE improvement to continue adding interaction pairs.")
-    ap.add_argument("--alt_n_runs", type=int, default=15,
-                    help="Number of independent greedy runs for consensus pair search (default 15).")
-    ap.add_argument("--alt_consensus_min", type=int, default=0,
-                    help="Minimum appearances across runs to keep a pair (0 = auto: ceil(n_runs/2)).")
-    ap.add_argument("--cross_domain_alt", action="store_true",
-                    help="Use cross-domain interaction search for ALT model instead of PCA. "
-                         "Finds coding×writing, knowledge×EQ type interactions via greedy search.")
-    ap.add_argument("--cd_top_k", type=int, default=25,
-                    help="Pre-screen to top K columns for cross-domain search (default 25).")
-    ap.add_argument("--cd_alpha", type=float, default=10.0,
-                    help="Ridge alpha for cross-domain ALT model (default 10).")
-    ap.add_argument("--cd_max_steps", type=int, default=10,
-                    help="Max greedy steps in cross-domain search (default 10).")
-    ap.add_argument("--cd_min_improvement", type=float, default=0.1,
-                    help="Min RMSE improvement per step in cross-domain search (default 0.1).")
-    ap.add_argument("--cd_min_obs", type=int, default=0,
-                    help="Min pre-imputation observations for a column to be eligible "
-                         "in cross-domain search (default 0 = no filter).")
-    ap.add_argument("--freeze_alt_pairs", type=str, default=None,
-                    help="Path to JSON file with frozen ALT interaction pairs. "
-                         "Skips consensus search entirely. Use for stable imputer tuning.")
+                    choices=["linear", "squared", "power3", "exp", "step"])
     ap.add_argument("--eb_parent", action="store_true",
-                    help="Enable empirical-Bayes parent shrinkage in imputation "
-                         "(shrinks uncertain cells toward column mean).")
-    ap.add_argument("--margin", type=float, default=20.0,
-                    help="Margin for 'top_by_margin_prob' column (default 20 points).")
+                    help="Enable empirical-Bayes parent shrinkage in imputation.")
+    # -- Tolerance config --
+    ap.add_argument("--tolerance_percentile", type=float, default=91.1553)
+    ap.add_argument("--tolerance_relaxation_factor", type=float, default=1.2704)
+    ap.add_argument("--tolerance_multiplier", type=float, default=5.8849)
+    ap.add_argument("--calibrate_tolerances", action="store_true")
+    ap.add_argument("--calibration_target_rmse_ratio", type=float, default=0.6266)
+    ap.add_argument("--calibration_n_rounds", type=int, default=3)
+    ap.add_argument("--calibration_holdout_frac", type=float, default=0.2)
+    ap.add_argument("--recalibrate_every_n_passes", type=int, default=5)
+    # -- Feature selector (imputer) --
+    ap.add_argument("--no_feature_selector", dest="use_feature_selector", action="store_false")
+    ap.set_defaults(use_feature_selector=True)
+    ap.add_argument("--selector_tau", type=float, default=0.9012)
+    ap.add_argument("--selector_k_max", type=int, default=37)
+    ap.add_argument("--gp_selector_k_max", type=int, default=28)
+    # -- Parallelism --
+    ap.add_argument("--imputer_n_jobs", type=int, default=-1)
+    ap.add_argument("--max_workers", type=int, default=0)
+    ap.add_argument("--cv_n_jobs", type=int, default=1)
+    ap.add_argument("--selector_n_jobs", type=int, default=-2)
+    # -- CV config --
+    ap.add_argument("--cv_repeats_outer", type=int, default=None)
+    ap.add_argument("--cv_seed", type=int, default=SEED)
+    ap.add_argument("--outer_cv", type=int, default=5)
+    ap.add_argument("--selector_cv", type=int, default=5)
+    ap.add_argument("--cv_splits_path", type=str, default="")
+    ap.add_argument("--cv_repeats", type=int, default=1)
     ap.add_argument("--group_cv", action="store_true",
                     help="Use GroupKFold by model provider (diagnostic).")
-    ap.add_argument("--no_traj_in_alt", dest="traj_in_alt", action="store_false",
-                    help="Exclude trajectory features from ALT model.")
-    ap.set_defaults(traj_in_alt=True)
-    ap.add_argument("--no_svd_in_alt", dest="svd_in_alt", action="store_false",
-                    help="Exclude SVD row-factor features from ALT model.")
-    ap.set_defaults(svd_in_alt=True)
-    ap.add_argument("--no_residual_head", dest="residual_head", action="store_false",
-                    help="Disable the soft regime residual head in ALT model.")
-    ap.set_defaults(residual_head=True)
-    ap.add_argument("--no_traj_in_target", dest="traj_in_target", action="store_false",
-                    help="Exclude trajectory features from target model.")
-    ap.set_defaults(traj_in_target=True)
-    ap.add_argument("--sigma2_weights", action="store_true",
-                    help="For model_bank imputer: use σ²-based sample weights instead of completeness².")
-    ap.add_argument("--iterative_coherence", action="store_true",
-                    help="For model_bank imputer: run pass1→coherence→pass2→coherence instead of pass1→pass2→coherence.")
-    ap.add_argument("--use_svd_predictors", action="store_true",
-                    help="For model_bank imputer: add SVD row factors as candidate predictors in per-cell models.")
-    ap.add_argument("--n_expansion_passes", type=int, default=1,
-                    help="For model_bank imputer: number of uncertainty-gated expansion passes (default 1).")
-    ap.add_argument("--max_confident_extras", type=int, default=1,
-                    help="For model_bank imputer: max confident imputed predictors per cell in expansion (default 1).")
-    ap.add_argument("--pred_calibration", action="store_true",
-                    help="Enable prediction calibration (James-Stein variance inflation). "
-                         "Corrects tail shrinkage from regularised models.")
-    ap.add_argument("--top_tier_boost", type=int, default=1,
-                    help="Duplicate top-tier training rows this many times (1=no boost). "
-                         "Counteracts regularisation shrinkage for extreme models.")
-    ap.add_argument("--top_tier_threshold", type=float, default=1450.0,
-                    help="ELO threshold for top-tier boost (default 1450).")
-    ap.add_argument("--conformal_alt_feature", action="store_true",
-                help="Add calibrated ALT conformal interval width as a feature.")
-    ap.add_argument("--loo_residual_profile", action="store_true",
-                help="Add LOO-predicted expected ALT imputation error as a feature. "
-                     "Works best with --alt_committee for d_support/u_total meta features.")
-    ap.add_argument("--adversarial_k", type=int, default=0,
-                help="Number of Monte Carlo samples for adversarial imputation (0=disabled). "
-                     "Samples lmarena from ALT uncertainty, re-predicts, averages. "
-                     "Requires ALT pred_std or --alt_committee.")
-    ap.add_argument("--alt_log_barrier", action="store_true",
-                help="(C) Sigmoid-bound ALT predictions to prevent extrapolation beyond observed range.")
-    ap.add_argument("--alt_barrier_margin", type=float, default=30.0,
-                help="Margin above max observed lmarena for log-barrier ceiling (default 30).")
-    ap.add_argument("--alt_convex_hull", action="store_true",
-                help="(D) Represent missing models as NNLS mixture of known models. "
-                     "Predictions bounded by convex hull of known scores.")
-    ap.add_argument("--alt_rank_transform", action="store_true",
-                help="(E) Map ALT predictions to percentile rank then back via empirical CDF. "
-                     "Predictions bounded to [min_known, max_known].")
-    ap.add_argument("--alt_pairwise", action="store_true",
-                help="(F) Pairwise ranking ALT: Bradley-Terry on benchmark differences, "
-                     "isotonic regression to map win-rate to score.")
-    ap.add_argument("--alt_delta_pred", action="store_true",
-                help="(G) KNN-based ALT: weighted average of nearest known-lmarena neighbors. "
-                     "Cannot extrapolate beyond convex hull.")
-    ap.add_argument("--dual_model", action="store_true",
-                help="(A) Train backup model without lmarena. Use backup for imputed models.")
-    ap.add_argument("--optimal_latent", action="store_true",
-                help="(B) Learn downstream-optimal latent z=f(benchmarks) that minimizes Arena error "
-                     "while staying near real lmarena. Use for imputed models.")
-    ap.add_argument("--optimal_latent_lambda", type=float, default=0.5,
-                help="Weight for lmarena anchor in optimal latent (default 0.5).")
-    ap.add_argument("--propagate_alt_variance", action="store_true",
-                help="Inflate conformal intervals for models with uncertain imputed lmarena. "
-                     "Uses analytic sensitivity dy/dlmarena × u_total². Requires --alt_committee.")
-    ap.add_argument("--uncertainty_gated_alt", action="store_true",
-                help="Replace lmarena with uncertainty-gated extrapolation basis: "
-                     "lmarena_in (capped), lmarena_out_confident, lmarena_out_uncertain. "
-                     "Requires --alt_committee.")
-    ap.add_argument("--gate_tau", type=float, default=15.0,
-                help="Uncertainty scale for reliability gate (default 15).")
-    ap.add_argument("--gate_h", type=float, default=5.0,
-                help="Support distance scale for reliability gate (default 5).")
-    ap.add_argument("--style_regime_split", action="store_true",
-                    help="Replace style_predicted_delta with two regime-specific features: "
-                         "_style_delta_low (below threshold) and _style_delta_high (above). "
-                         "Orthogonal by construction — lets ARD assign independent coefficients.")
-    ap.add_argument("--style_only_final", action="store_true",
-                    help="Restrict final-stage features to lmarena + style columns only. "
-                         "Based on lmsys = lmarena + style_adjustment.")
-    ap.add_argument("--elo_weight", action="store_true",
-                    help="Use continuous exp((ELO-center)/scale) sample weighting instead of binary boost.")
-    ap.add_argument("--elo_weight_center", type=float, default=1300.0,
-                    help="Center for ELO weighting (default 1300).")
-    ap.add_argument("--elo_weight_scale", type=float, default=100.0,
-                    help="Scale for ELO weighting (default 100).")
-    ap.add_argument("--top_correction", action="store_true",
-                    help="Train second-stage residual correction model on top-N models.")
-    ap.add_argument("--top_correction_n", type=int, default=50,
-                    help="Number of top models for residual correction (default 50).")
+    # -- KNN config --
+    ap.add_argument("--knn_predict", action="store_true", default=True,
+                    help="Use adaptive KNN prediction (default: True).")
+    ap.add_argument("--knn_dist_mult", type=float, default=2.0)
+    ap.add_argument("--knn_max_k", type=int, default=80)
+    ap.add_argument("--knn_min_k", type=int, default=20)
+    ap.add_argument("--knn_bw_pct", type=float, default=0.3)
+    # -- Misc --
+    ap.add_argument("--margin", type=float, default=20.0,
+                    help="Margin for 'top_by_margin_prob' column (default 20 points).")
+    ap.add_argument("--categorical_threshold", type=int, default=0)
+    ap.add_argument("--forced_categorical_cols", type=str, default="")
+    ap.add_argument("--tier_quantiles", type=str, default="0.33,0.67")
     ap.add_argument("--exclude_models", type=str, default="",
-                    help="Comma-separated model names to exclude from the dataset before imputation/prediction.")
-    args = ap.parse_args()
-    args.cv_repeats = max(1, int(args.cv_repeats))
-    def _resolve_repeats(value: Optional[int], default: int) -> int:
-        return max(1, int(value)) if value is not None else default
-    args.cv_repeats_outer = _resolve_repeats(args.cv_repeats_outer, args.cv_repeats)
-    args.cv_repeats_inner = _resolve_repeats(args.cv_repeats_inner, args.cv_repeats)
-    args.feature_cv_repeats = _resolve_repeats(args.feature_cv_repeats, args.cv_repeats)
-    args.alt_cv_repeats = _resolve_repeats(args.alt_cv_repeats, args.cv_repeats)
-    args.cv_seed = int(args.cv_seed)
-    if args.outer_cv is None:
-        args.outer_cv = args.selector_cv
-    _configure_parallelism(args)
-    print(f"Trajectory features: ALT={'ON' if args.traj_in_alt else 'OFF'}, Target={'ON' if args.traj_in_target else 'OFF'}")
+                    help="Comma-separated model names to exclude from the dataset.")
+    ap.add_argument("--svd_in_alt", dest="svd_in_features", action="store_true", default=True,
+                    help="Add SVD factors from imputer to feature matrix (default: True).")
+    ap.add_argument("--no_svd_in_alt", dest="svd_in_features", action="store_false",
+                    help="Exclude SVD factors from feature matrix.")
 
+    args = ap.parse_args()
+
+    # Resolve CV repeats
+    args.cv_repeats = max(1, int(args.cv_repeats))
+    if args.cv_repeats_outer is None:
+        args.cv_repeats_outer = args.cv_repeats
+    else:
+        args.cv_repeats_outer = max(1, int(args.cv_repeats_outer))
+    args.cv_seed = int(args.cv_seed)
+
+    # Need model_n_jobs for _configure_parallelism
+    args.model_n_jobs = 1
+
+    _configure_parallelism(args)
+
+    # -- Parse tier quantiles --
     tier_quantiles: Optional[List[float]] = None
     parsed_tiers: List[float] = []
     for part in str(getattr(args, "tier_quantiles", "")).split(","):
@@ -6128,12 +1203,9 @@ def main():
         try:
             num = float(val)
         except ValueError:
-            print(f"WARNING: ignoring invalid tier_quantiles entry '{val}'", file=sys.stderr)
             continue
-        if num < 0 or num > 1:
-            print(f"WARNING: tier_quantiles entry {num} is outside [0, 1]; skipping", file=sys.stderr)
-            continue
-        parsed_tiers.append(num)
+        if 0 <= num <= 1:
+            parsed_tiers.append(num)
     if parsed_tiers:
         tier_quantiles = sorted(parsed_tiers)
 
@@ -6143,75 +1215,9 @@ def main():
     out_dir = os.path.join(args.output_root, f"output_{stamp}")
     ensure_dir(out_dir)
 
-    global ALT_SELECTOR_CFG
-    ALT_SELECTOR_CFG = {
-        "enabled": args.alt_feature_selector != "none",
-        "model_type": args.alt_feature_selector,
-        "mode": _parse_alt_mode(args.alt_top_k_features),
-        "k_grid": [int(x) if x.isdigit() else x for x in args.alt_selector_k_grid.split(",")],
-        "cv": int(args.alt_selector_cv),
-        "cv_repeats": int(args.feature_cv_repeats),
-        "cv_seed": int(args.cv_seed),
-    }
-
-    global ALT_REGRESSOR_NAME
-    ALT_REGRESSOR_NAME = getattr(args, 'alt_regressor', 'bayes')
-
-    global ALT_COMMITTEE_ENABLED
-    ALT_COMMITTEE_ENABLED = getattr(args, 'alt_committee', False)
-
-    global TIERED_ALT_ENABLED, TIERED_ALT_N_TIERS
-    global TIERED_ALT_SELECT_METHOD, TIERED_ALT_SELECT_K
-    global TIERED_ALT_MODEL_TYPE, TIERED_ALT_RIDGE_ALPHA
-    TIERED_ALT_ENABLED = getattr(args, 'tiered_alt', False)
-    TIERED_ALT_N_TIERS = getattr(args, 'tiered_alt_n_tiers', 4)
-    TIERED_ALT_SELECT_METHOD = getattr(args, 'tiered_alt_select', 'corr')
-    TIERED_ALT_SELECT_K = getattr(args, 'tiered_alt_k', 5)
-    TIERED_ALT_MODEL_TYPE = getattr(args, 'tiered_alt_model', 'ridge')
-    TIERED_ALT_RIDGE_ALPHA = getattr(args, 'tiered_alt_alpha', 1.0)
-
-    global PSEUDO_MISSING_AUG_ENABLED, PSEUDO_MISSING_WEIGHT
-    PSEUDO_MISSING_AUG_ENABLED = getattr(args, 'pseudo_missing_aug', False)
-    PSEUDO_MISSING_WEIGHT = getattr(args, 'pseudo_missing_weight', 0.4)
-
-    global CROSS_DOMAIN_ALT_ENABLED, CROSS_DOMAIN_TOP_K_COLS, CROSS_DOMAIN_ALPHA
-    CROSS_DOMAIN_ALT_ENABLED = getattr(args, 'cross_domain_alt', False)
-    CROSS_DOMAIN_TOP_K_COLS = getattr(args, 'cd_top_k', 25)
-    CROSS_DOMAIN_ALPHA = getattr(args, 'cd_alpha', 10.0)
-
-    global GREEDY_RESIDUAL_K
-    GREEDY_RESIDUAL_K = getattr(args, 'greedy_residual_k', 0)
-
-    global GREEDY_RESIDUAL_POLY
-    GREEDY_RESIDUAL_POLY = getattr(args, 'greedy_residual_poly', False)
-
-    global PRED_CALIBRATION_ENABLED
-    PRED_CALIBRATION_ENABLED = getattr(args, 'pred_calibration', False)
-
-    global TOP_TIER_BOOST, TOP_TIER_THRESHOLD
-    TOP_TIER_BOOST = max(1, getattr(args, 'top_tier_boost', 1))
-    TOP_TIER_THRESHOLD = getattr(args, 'top_tier_threshold', 1450.0)
-    if TOP_TIER_BOOST > 1:
-        print(f"Top-tier boost: {TOP_TIER_BOOST}x for models with ELO >= {TOP_TIER_THRESHOLD}")
-
-    global STYLE_ONLY_FINAL
-    STYLE_ONLY_FINAL = getattr(args, 'style_only_final', False)
-    if STYLE_ONLY_FINAL:
-        print("Style-only final: restricting final model to lmarena + style features")
-
-    global ELO_WEIGHT_ENABLED, ELO_WEIGHT_CENTER, ELO_WEIGHT_SCALE
-    ELO_WEIGHT_ENABLED = getattr(args, 'elo_weight', False)
-    ELO_WEIGHT_CENTER = getattr(args, 'elo_weight_center', 1300.0)
-    ELO_WEIGHT_SCALE = getattr(args, 'elo_weight_scale', 100.0)
-    if ELO_WEIGHT_ENABLED:
-        print(f"ELO weighting: exp((ELO - {ELO_WEIGHT_CENTER}) / {ELO_WEIGHT_SCALE})")
-
-    global TOP_CORRECTION_ENABLED, TOP_CORRECTION_N
-    TOP_CORRECTION_ENABLED = getattr(args, 'top_correction', False)
-    TOP_CORRECTION_N = getattr(args, 'top_correction_n', 50)
-    if TOP_CORRECTION_ENABLED:
-        print(f"Top-tier correction: second-stage model on top-{TOP_CORRECTION_N} residuals")
-
+    # =========================================================================
+    # 1. Load CSV
+    # =========================================================================
     if not os.path.exists(args.csv_path):
         print(f"ERROR: CSV not found at {args.csv_path}", file=sys.stderr)
         sys.exit(2)
@@ -6220,13 +1226,10 @@ def main():
     if args.exclude_models:
         exclude_set = {m.strip() for m in args.exclude_models.split(",") if m.strip()}
         n_before = len(df)
-        df = df[~df[ID_COL].isin(exclude_set)]
-        df = df.reset_index(drop=True)
+        df = df[~df[ID_COL].isin(exclude_set)].reset_index(drop=True)
         n_dropped = n_before - len(df)
         if n_dropped:
             print(f"Excluded {n_dropped} model(s): {exclude_set}")
-        else:
-            print(f"WARNING: --exclude_models specified but none matched: {exclude_set}")
     if ID_COL not in df.columns:
         raise ValueError(f"CSV must contain '{ID_COL}' column.")
 
@@ -6237,6 +1240,9 @@ def main():
         print(f"Detected {len(categorical_numeric_cols)} low-cardinality integer-like column(s): {categorical_numeric_cols}")
         _coerce_discrete_columns_to_int(df, categorical_numeric_cols)
 
+    # =========================================================================
+    # 2. Low-variance filtering
+    # =========================================================================
     def _is_low_variance(col: pd.Series, dominance_thresh: float = 0.7, min_std: float = 1e-8, min_minority: int = 2) -> bool:
         s = col.dropna()
         if len(s) <= 1:
@@ -6246,7 +1252,6 @@ def main():
         vc = s.value_counts(normalize=True)
         if vc.empty:
             return True
-        # Drop if one category dominates or there are too few non-mode values
         minority_count = len(s) - int(s.value_counts().iloc[0])
         if vc.iloc[0] >= dominance_thresh or minority_count < min_minority:
             return True
@@ -6259,88 +1264,42 @@ def main():
         feature_cols = [c for c in feature_cols if c not in low_var_cols]
         categorical_numeric_cols = [c for c in categorical_numeric_cols if c in feature_cols]
 
-    # Diagnostics: catch degenerate columns (NaN-only or zero std) that can trigger divide-by-zero warnings
-    arr = df[feature_cols].to_numpy(dtype=float, na_value=np.nan)
-    stds = np.nanstd(arr, axis=0)
-    nan_only_mask = np.all(np.isnan(arr), axis=0)
-    zero_or_nan_std_mask = (~np.isfinite(stds)) | (stds <= 1e-12)
-    degenerate_cols = [feature_cols[i] for i, bad in enumerate(nan_only_mask | zero_or_nan_std_mask) if bad]
-    if degenerate_cols:
-        print(f"Warning: degenerate columns before imputation (NaN-only or zero std): {degenerate_cols}")
-
-    # Diagnostics: flag any columns that are still degenerate (zero std or too few non-null)
-    stds = df[feature_cols].std(ddof=0, skipna=True)
-    low_std_cols = stds[stds <= 1e-12].index.tolist()
-    nn = df[feature_cols].count()
-    few_nonnull_cols = nn[nn < 3].index.tolist()
-    if low_std_cols or few_nonnull_cols:
-        msg_parts = []
-        if low_std_cols:
-            msg_parts.append(f"near-zero std: {low_std_cols}")
-        if few_nonnull_cols:
-            msg_parts.append(f"few non-null (<3): {few_nonnull_cols}")
-        print("Warning: potential degenerate columns before imputation -> " + "; ".join(msg_parts))
-
-    missing_count_by_col = df[feature_cols].isna().sum().to_dict()
-
-    # Compute completeness-based sample weights for sparse model handling
-    # model_bank imputer benefits from weighting since per-cell imputation
-    # produces noisier features for rows with many imputed values
-    row_missing_ratio = df[feature_cols].isna().mean(axis=1).values
-    completeness = 1.0 - row_missing_ratio
-    weight_power = 2 if args.imputer_type == "model_bank" else COMPLETENESS_WEIGHT_POWER
-    sample_weights_all = completeness ** weight_power
-
-    # Optionally multiply in ELO-proportional weights (continuous alternative to binary boost)
-    if ELO_WEIGHT_ENABLED:
-        elo_vals = df[TARGET].values.copy()
-        # Only weight training rows (non-NaN target); prediction rows get weight=1
-        elo_weights = np.ones(len(df))
-        has_target = ~np.isnan(elo_vals)
-        elo_weights[has_target] = np.exp((elo_vals[has_target] - ELO_WEIGHT_CENTER) / ELO_WEIGHT_SCALE)
-        # Normalize so mean weight on training rows = 1 (preserves effective sample size)
-        elo_weights[has_target] /= elo_weights[has_target].mean()
-        sample_weights_all = sample_weights_all * elo_weights
-    dense_mask_all = row_missing_ratio <= DENSE_THRESHOLD
-    n_dense = int(dense_mask_all.sum())
-    n_sparse = int((~dense_mask_all).sum())
-    print(f"Completeness weighting: {n_dense} dense (≤{DENSE_THRESHOLD:.0%} missing), "
-          f"{n_sparse} sparse, power={weight_power}")
-
     if TARGET not in numeric_cols:
         raise ValueError(f"CSV must contain numeric target column '{TARGET}'. Found numeric: {numeric_cols}")
 
     y_orig = df[TARGET].copy()
     y_missing_mask = y_orig.isna().values
+    y_all = pd.to_numeric(df[TARGET], errors="coerce").to_numpy()
 
-    # ---- Track imputer metadata regardless of cache reuse ----
-    imputer: Optional[SpecializedColumnImputer] = None
+    missing_count_by_col = df[feature_cols].isna().sum().to_dict()
+
+    load_end = time.time()
+    print(f"load data: {mmss(load_end - start)}")
+
+    # =========================================================================
+    # 3. Imputation (with caching)
+    # =========================================================================
+    imputer: Optional[object] = None
     imputer_predictors_map: Dict[str, List[str]] = {}
-    imputer_important_predictors: Dict[str, set] = {}  # Filtered by 1% variance contribution
+    imputer_important_predictors: Dict[str, set] = {}
 
-    # ---- NEW: cache key + cache dir ----
     cache_dir = os.path.join(args.output_root, "_cache")
     ensure_dir(cache_dir)
     csv_hash = _sha256_file(args.csv_path)
     if args.exclude_models:
-        # Mix exclusion into cache key so cached results with different exclusions don't collide
         import hashlib as _hl
         excl_hash = _hl.sha256(args.exclude_models.encode()).hexdigest()[:12]
         csv_hash = csv_hash[:52] + excl_hash
     tier_key = "none" if tier_quantiles is None else "_".join(f"{q:.3f}" for q in tier_quantiles)
+
     if args.imputer_type == "model_bank":
         coh_lam = getattr(args, 'coherence_lambda', 1.0)
         coh_shape = getattr(args, 'coherence_shape', 'linear')
-        coh_gate = getattr(args, 'coherence_gate', 'fixed')
-        iter_coh = int(getattr(args, 'iterative_coherence', False))
-        svd_pred = int(getattr(args, 'use_svd_predictors', False))
-        n_exp = getattr(args, 'n_expansion_passes', 1)
-        m_ext = getattr(args, 'max_confident_extras', 1)
         eb = int(getattr(args, 'eb_parent', False))
         imp_key = (
             f"imputed_modelbank_{csv_hash}_alpha{args.alpha:.6f}_"
             f"skmax{args.selector_k_max}_conf{args.confidence_threshold:.2f}_"
-            f"coh{coh_lam:.2f}{coh_shape[0]}_g{coh_gate[0]}_ic{iter_coh}_svdp{svd_pred}_exp{n_exp}x{m_ext}_"
+            f"coh{coh_lam:.2f}{coh_shape[0]}_gfixed_ic0_svdp0_exp1x1_"
             f"eb{eb}_catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt3.0.csv"
         )
     else:
@@ -6352,12 +1311,11 @@ def main():
             f"tolm{args.tolerance_multiplier:.2f}_tier{tier_key}_"
             f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt2.0.csv"
         )
+
     cache_pkl = os.path.join(cache_dir, imp_key.replace(".csv", ".pkl"))
     cache_meta = os.path.join(cache_dir, imp_key + ".meta.json")
-    # Legacy CSV cache path (for backward compat — try pkl first, fall back to csv)
     cache_csv = os.path.join(cache_dir, imp_key)
 
-    # ---- NEW: reuse from cache if available ----
     imputed_path = os.path.join(out_dir, "imputed_full.csv")
     _cache_hit = False
     if os.path.exists(cache_pkl):
@@ -6365,6 +1323,7 @@ def main():
         with open(cache_pkl, "rb") as fh:
             _cached = _pkl.load(fh)
         imputed_df = _cached["imputed_df"]
+
         class _CachedImputer:
             pass
         imputer = _CachedImputer()
@@ -6374,6 +1333,7 @@ def main():
         _cache_hit = True
     elif os.path.exists(cache_csv):
         imputed_df = pd.read_csv(cache_csv)
+
         class _CachedImputer:
             pass
         svd_cache = cache_csv + ".svd_factors.csv"
@@ -6394,7 +1354,6 @@ def main():
                         str(col): [str(dep) for dep in deps] if isinstance(deps, list) else []
                         for col, deps in raw_map.items()
                     }
-                # Load important predictors (filtered by variance contribution)
                 raw_important = cache_payload.get("important_predictors", {})
                 if isinstance(raw_important, dict):
                     imputer_important_predictors = {
@@ -6404,11 +1363,8 @@ def main():
             except Exception as exc:
                 print(f"WARNING: failed to load imputer metadata cache ({exc}).", file=sys.stderr)
         already_done = True
-        load_end = time.time()
-        print(f"load data: {mmss(load_end - start)}")
+        print(f"  Imputation cache hit: {imp_key}")
     else:
-        load_end = time.time()
-        print(f"load data: {mmss(load_end - start)}")
         imputed_df, imputer = run_imputation(
             df[[ID_COL] + feature_cols],
             passes=args.passes,
@@ -6425,7 +1381,6 @@ def main():
             tolerance_relaxation_factor=args.tolerance_relaxation_factor,
             tolerance_multiplier=args.tolerance_multiplier,
             tier_quantiles=tier_quantiles,
-            # v7.2: Per-column tolerance calibration
             calibrate_tolerances=args.calibrate_tolerances,
             calibration_target_rmse_ratio=args.calibration_target_rmse_ratio,
             calibration_n_rounds=args.calibration_n_rounds,
@@ -6435,12 +1390,7 @@ def main():
             confidence_threshold=args.confidence_threshold,
             coherence_lambda=getattr(args, 'coherence_lambda', 1.0),
             coherence_shape=getattr(args, 'coherence_shape', 'linear'),
-            coherence_gate=getattr(args, 'coherence_gate', 'fixed'),
-            iterative_coherence=getattr(args, 'iterative_coherence', False),
             eb_parent=getattr(args, 'eb_parent', False),
-            use_svd_predictors=getattr(args, 'use_svd_predictors', False),
-            n_expansion_passes=getattr(args, 'n_expansion_passes', 1),
-            max_confident_extras=getattr(args, 'max_confident_extras', 1),
         )
         # Save imputation cache as pickle for exact float round-trip
         import pickle as _pkl
@@ -6456,11 +1406,9 @@ def main():
             col: sorted(set(deps))
             for col, deps in getattr(imputer, "predictors_map_", {}).items()
         }
-        # Compute important predictors (filtered by 1% variance contribution)
         imputer_important_predictors = compute_imputer_variance_contributions(
             imputer, imputed_df, threshold=0.01
         )
-        # Save both predictors_map and important_predictors to cache
         with open(cache_meta, "w", encoding="utf-8") as fh:
             json.dump({
                 "predictors_map": imputer_predictors_map,
@@ -6470,105 +1418,12 @@ def main():
 
     # Always write the copy for this run
     imputed_df.to_csv(imputed_path, index=False)
-    # Recompute sample weights using σ² matrix if available (model_bank imputer)
-    sigma2_mat = getattr(imputer, 'sigma2_matrix_', None)
-    if sigma2_mat is not None and args.imputer_type == "model_bank" and getattr(args, 'sigma2_weights', False):
-        # Per-row mean normalized σ: mean(sqrt(σ²_cell) / sd_col) across imputed cells
-        row_mean_sigma = pd.Series(0.0, index=df.index, dtype=float)
-        n_imputed_per_row = pd.Series(0.0, index=df.index, dtype=float)
-        for col in feature_cols:
-            if col not in sigma2_mat.columns:
-                continue
-            s2 = sigma2_mat[col].values
-            imputed_mask = s2 > 0  # σ²=0 means observed
-            if not imputed_mask.any():
-                continue
-            sd_col = float(sigma2_mat[col][~imputed_mask].std()) if (~imputed_mask).sum() > 1 else 1.0
-            if sd_col < 1e-10:
-                sd_col = 1.0
-            sigma_norm = np.where(imputed_mask & np.isfinite(s2),
-                                  np.sqrt(np.maximum(0, s2)) / sd_col, 0.0)
-            row_mean_sigma += sigma_norm
-            n_imputed_per_row += imputed_mask.astype(float)
-        n_safe = n_imputed_per_row.clip(lower=1)
-        row_mean_sigma = row_mean_sigma / n_safe
-        # Weight: exp(-mean_sigma / scale) — soft exponential decay
-        # Scale so the median imputed row gets weight ~0.7
-        median_sigma = float(np.median(row_mean_sigma[n_imputed_per_row > 0]))
-        scale = max(median_sigma / 0.357, 0.1)  # -ln(0.7)/median ≈ 0.357
-        sample_weights_all = np.exp(-row_mean_sigma.values / scale)
-        # Rows with no imputed cells get weight 1.0
-        sample_weights_all = np.where(n_imputed_per_row.values == 0, 1.0, sample_weights_all)
-        print(f"  σ²-weighted samples: mean_w={sample_weights_all.mean():.3f}, "
-              f"min_w={sample_weights_all.min():.3f}, max_w={sample_weights_all.max():.3f}")
-
-    id_series = imputed_df[[ID_COL]] if ID_COL in imputed_df.columns else None
     impute_end = time.time()
     print(f"impute:    {mmss(impute_end - load_end)}")
 
-    run_config = {
-        "csv_path": args.csv_path,
-        "passes": int(args.passes),
-        "alpha": float(args.alpha),
-        "use_feature_selector": bool(args.use_feature_selector),
-        "selector_tau": float(args.selector_tau),
-        "selector_k_max": int(args.selector_k_max),
-        "selector_n_jobs": int(args.selector_n_jobs),
-        "imputer_n_jobs": int(args.imputer_n_jobs),
-        "categorical_threshold": int(args.categorical_threshold),
-        "forced_categorical_cols": list(categorical_numeric_cols),
-        "tolerance_percentile": float(args.tolerance_percentile),
-        "tolerance_relaxation_factor": float(args.tolerance_relaxation_factor),
-        "tolerance_multiplier": float(args.tolerance_multiplier),
-        "tier_quantiles": tier_quantiles or [],
-        "cv_n_jobs": int(args.cv_n_jobs),
-        "model_n_jobs": int(args.model_n_jobs),
-        "cv_repeats": int(args.cv_repeats),
-        "cv_repeats_outer": int(args.cv_repeats_outer),
-        "cv_repeats_inner": int(args.cv_repeats_inner),
-        "feature_cv_repeats": int(args.feature_cv_repeats),
-        "force_features": getattr(args, "force_features", ""),
-        "drop_features": getattr(args, "drop_features", ""),
-        "alt_committee": getattr(args, "alt_committee", False),
-        "knn_predict": getattr(args, "knn_predict", False),
-        "knn_dist_mult": getattr(args, "knn_dist_mult", 2.0),
-        "knn_max_k": getattr(args, "knn_max_k", 80),
-        "knn_min_k": getattr(args, "knn_min_k", 20),
-        "tiered_alt": getattr(args, "tiered_alt", False),
-        "tiered_alt_n_tiers": getattr(args, "tiered_alt_n_tiers", 4),
-        "alt_cv_repeats": int(args.alt_cv_repeats),
-        "cv_seed": int(args.cv_seed),
-        "selector_cv": int(args.selector_cv),
-        "outer_cv": int(args.outer_cv),
-        "alt_selector_cv": int(args.alt_selector_cv),
-        "poly_interactions": bool(args.poly_interactions),
-        "poly_include_squares": bool(args.poly_include_squares),
-        "poly_limit": int(args.poly_limit),
-        "max_workers": int(args.max_workers),
-        "cv_splits_path": args.cv_splits_path,
-        "traj_in_alt": bool(args.traj_in_alt),
-        "traj_in_target": bool(args.traj_in_target),
-        "group_cv": bool(args.group_cv),
-        "feature_selector": args.feature_selector,
-        "alt_feature_selector": args.alt_feature_selector,
-        "alt_regressor": "bayes",
-        "eb_parent": bool(getattr(args, 'eb_parent', False)),
-        "cross_domain_alt": bool(CROSS_DOMAIN_ALT_ENABLED),
-        "cd_top_k": int(CROSS_DOMAIN_TOP_K_COLS),
-        "cd_alpha": float(CROSS_DOMAIN_ALPHA),
-        "pca_in_target": int(getattr(args, 'pca_in_target', 0)),
-        "greedy_residual_k": int(GREEDY_RESIDUAL_K),
-        "greedy_residual_poly": bool(GREEDY_RESIDUAL_POLY),
-        "used_cache": bool(already_done),
-        "cache_key": imp_key,
-        "cache_path": cache_csv,
-        "output_dir": out_dir,
-    }
-    with open(os.path.join(out_dir, "run_config.json"), "w", encoding="utf-8") as fh:
-        json.dump(run_config, fh, indent=2)
-
-
-    # Imputation quality assessment - always output, either fresh or from cache
+    # =========================================================================
+    # 4. Imputation quality evaluation
+    # =========================================================================
     quality_files = [
         "imputation_quality_per_cell.csv",
         "imputation_quality_per_column.csv",
@@ -6576,37 +1431,30 @@ def main():
     ]
     if not already_done:
         X_eval = df[feature_cols]
-
         per_cell, per_col, by_bin = evaluate_imputation(imputer, X_eval)
         per_cell.to_csv(os.path.join(out_dir, "imputation_quality_per_cell.csv"), index=False)
         per_col.to_csv(os.path.join(out_dir, "imputation_quality_per_column.csv"), index=False)
         by_bin.to_csv(os.path.join(out_dir, "imputation_quality_by_extrapolation_bin.csv"), index=False)
-
-        # Save imputation importance (which predictors matter for each column's imputation)
         try:
             imp_importance = imputer.get_imputation_importance()
             if not imp_importance.empty:
                 imp_importance.to_csv(os.path.join(out_dir, "imputation_importance.csv"), index=False)
-                print(f"  Imputation importance: {len(imp_importance)} predictor links saved")
-        except Exception as e:
-            print(f"  Warning: Could not extract imputation importance: {e}")
-        # Also save to cache for future runs
+        except Exception:
+            pass
         for qf in quality_files:
-            shutil.copy(os.path.join(out_dir, qf), os.path.join(cache_dir, imp_key + "." + qf))
+            src = os.path.join(out_dir, qf)
+            if os.path.exists(src):
+                shutil.copy(src, os.path.join(cache_dir, imp_key + "." + qf))
     else:
-        # Copy cached quality files to output directory
         for qf in quality_files:
             cached_qf = os.path.join(cache_dir, imp_key + "." + qf)
             if os.path.exists(cached_qf):
                 shutil.copy(cached_qf, os.path.join(out_dir, qf))
 
-    # ---------------- Safety check: ensure no NaNs/Infs remain after imputation ----------------
-    if not already_done:
-        post_nan_report = imputed_df[feature_cols].isna().sum().rename("nan_count").to_frame()
-        post_nan_report.to_csv(os.path.join(out_dir, "post_imputation_nan_report.csv"))
-
+    # =========================================================================
+    # 5. Build feature matrix
+    # =========================================================================
     safe_features = imputed_df[feature_cols].replace([np.inf, -np.inf], np.nan)
-
     medians = safe_features.median(axis=0, skipna=True)
     safe_features = safe_features.fillna(medians)
     still_nan_cols = safe_features.columns[safe_features.isna().any()].tolist()
@@ -6614,1290 +1462,110 @@ def main():
         safe_features[still_nan_cols] = safe_features[still_nan_cols].fillna(0.0)
     if safe_features.isna().any().any():
         safe_features = safe_features.fillna(0.0)
-    
-    alt_result = None
-    alt_feature_matrix: Optional[pd.DataFrame] = None
 
-    # Direct target: skip lmarena entirely, predict Arena from benchmarks + style
-    if getattr(args, "direct_target", False):
-        if ALT_TARGET in df.columns:
-            df = df.drop(columns=[ALT_TARGET])
-        if ALT_TARGET in safe_features.columns:
-            safe_features = safe_features.drop(columns=[ALT_TARGET])
-        print("Direct target: skipping lmarena, predicting Arena from benchmarks + style directly")
-
-    if ALT_TARGET in df.columns:
-        print(f"ALT regressor: {ALT_REGRESSOR_NAME}")
-
-        # --- Cross-domain interaction search (if enabled) ---
-        global CROSS_DOMAIN_FEATURES
-        if CROSS_DOMAIN_ALT_ENABLED:
-            alt_known_mask_cd = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna()
-            X_for_cd = safe_features.loc[alt_known_mask_cd]
-            y_for_cd = pd.to_numeric(df[ALT_TARGET], errors="coerce").loc[alt_known_mask_cd].values
-
-            # Pre-imputation observation counts (from original df, before imputation)
-            cd_min_obs = getattr(args, 'cd_min_obs', 0)
-            cd_obs_counts = df[feature_cols].notna().sum()
-
-            cd_cache_data = (
-                X_for_cd.values.tobytes()
-                + y_for_cd.tobytes()
-                + str(SEED).encode()
-                + str(CROSS_DOMAIN_TOP_K_COLS).encode()
-                + str(CROSS_DOMAIN_ALPHA).encode()
-                + str(getattr(args, 'cd_max_steps', 10)).encode()
-                + str(cd_min_obs).encode()
-            )
-            cd_hash = hashlib.sha256(cd_cache_data).hexdigest()[:16]
-            cd_cache_path = os.path.join(cache_dir, f"cross_domain_{cd_hash}.json")
-
-            if os.path.exists(cd_cache_path):
-                with open(cd_cache_path, "r", encoding="utf-8") as fh:
-                    cached_cd = json.load(fh)
-                CROSS_DOMAIN_FEATURES = {
-                    "start": tuple(cached_cd["start"]),
-                    "additions": [tuple(a) if isinstance(a, list) else a
-                                  for a in cached_cd["additions"]],
-                    "all_cols": cached_cd["all_cols"],
-                    "rmse": cached_cd.get("rmse", float("nan")),
-                }
-                print(f"Cross-domain ALT: loaded cached features "
-                      f"({len(CROSS_DOMAIN_FEATURES['additions']) + 1} groups)")
-            else:
-                cd_t0 = time.time()
-                CROSS_DOMAIN_FEATURES = _greedy_cross_domain_search(
-                    X_for_cd, y_for_cd,
-                    top_k_cols=CROSS_DOMAIN_TOP_K_COLS,
-                    alpha=CROSS_DOMAIN_ALPHA,
-                    n_folds=5,
-                    n_repeats=3,
-                    max_steps=getattr(args, 'cd_max_steps', 10),
-                    min_improvement=getattr(args, 'cd_min_improvement', 0.1),
-                    seed=SEED,
-                    verbose=True,
-                    min_obs=cd_min_obs,
-                    obs_counts=cd_obs_counts,
-                )
-                cd_elapsed = time.time() - cd_t0
-                print(f"Cross-domain search took {cd_elapsed:.1f}s")
-
-                # Cache results
-                cd_payload = {
-                    "start": list(CROSS_DOMAIN_FEATURES["start"]),
-                    "additions": [list(a) if isinstance(a, tuple) else a
-                                  for a in CROSS_DOMAIN_FEATURES["additions"]],
-                    "all_cols": CROSS_DOMAIN_FEATURES["all_cols"],
-                    "rmse": CROSS_DOMAIN_FEATURES["rmse"],
-                }
-                with open(cd_cache_path, "w", encoding="utf-8") as fh:
-                    json.dump(cd_payload, fh, indent=2)
-
-                # Save to output dir
-                with open(os.path.join(out_dir, "cross_domain_features.json"), "w", encoding="utf-8") as fh:
-                    json.dump(cd_payload, fh, indent=2)
-
-        # --- Runtime greedy search for ALT interaction terms (with caching) ---
-        global ALT_POST_PCA_INTERACTIONS
-        alt_known_mask = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna()
-        X_for_search = safe_features.loc[alt_known_mask]
-        y_for_search = pd.to_numeric(df[ALT_TARGET], errors="coerce").loc[alt_known_mask]
-
-        # Cache key: hash of feature values + ALT values + seed + n_repeats
-        alt_n_repeats = 5
-        search_hash_data = (
-            X_for_search.values.tobytes()
-            + y_for_search.values.tobytes()
-            + str(SEED).encode()
-            + str(alt_n_repeats).encode()
-            + str(getattr(args, 'alt_n_runs', 15)).encode()
-            + str(getattr(args, 'alt_consensus_min', 0)).encode()
-        )
-        search_hash = hashlib.sha256(search_hash_data).hexdigest()[:16]
-        interaction_cache_path = os.path.join(cache_dir, f"alt_interactions_{search_hash}.json")
-
-        # Frozen pairs override: skip search entirely for stable imputer tuning
-        freeze_path = getattr(args, 'freeze_alt_pairs', None)
-        if freeze_path and os.path.exists(freeze_path):
-            with open(freeze_path, "r", encoding="utf-8") as fh:
-                frozen = json.load(fh)
-            ALT_POST_PCA_INTERACTIONS = [tuple(p) for p in frozen["pairs"]]
-            print(f"ALT interactions: FROZEN — loaded {len(ALT_POST_PCA_INTERACTIONS)} pairs from {freeze_path}")
-        elif os.path.exists(interaction_cache_path):
-            with open(interaction_cache_path, "r", encoding="utf-8") as fh:
-                cached_int = json.load(fh)
-            ALT_POST_PCA_INTERACTIONS = [tuple(p) for p in cached_int["pairs"]]
-            print(f"ALT interactions: loaded {len(ALT_POST_PCA_INTERACTIONS)} cached pairs from cache")
-        else:
-            search_t0 = time.time()
-            alt_n_runs = getattr(args, 'alt_n_runs', 15)
-            alt_consensus_min = getattr(args, 'alt_consensus_min', 0)
-            if alt_consensus_min <= 0:
-                alt_consensus_min = (alt_n_runs + 1) // 2  # majority
-            selected_pairs, search_log_df = _greedy_select_alt_interactions(
-                X_for_search,
-                y_for_search,
-                n_pca=ALT_PCA_N_COMPONENTS,
-                n_folds=5,
-                n_repeats=alt_n_repeats,
-                seed=SEED,
-                prescreen_top_k=args.alt_interaction_prescreen,
-                max_pairs=args.alt_interaction_max_pairs,
-                min_improvement=args.alt_interaction_min_improvement,
-                n_runs=alt_n_runs,
-                consensus_min=alt_consensus_min,
-                verbose=True,
-                n_jobs=PARALLELISM_CFG.get("selector_n_jobs", -1),
-            )
-            search_elapsed = time.time() - search_t0
-            ALT_POST_PCA_INTERACTIONS = selected_pairs
-
-            # With consensus search, per-step RMSE is not available
-            baseline_rmse = float("nan")
-            selection_rmse = float("nan")
-
-            # Save to cache
-            cache_payload = {
-                "pairs": [list(p) for p in selected_pairs],
-                "n_pairs": len(selected_pairs),
-                "selection_rmse": selection_rmse,
-                "baseline_rmse": baseline_rmse,
-                "n_repeats": alt_n_repeats,
-                "n_candidate_cols": X_for_search.shape[1],
-            }
-            with open(interaction_cache_path, "w", encoding="utf-8") as fh:
-                json.dump(cache_payload, fh, indent=2)
-
-            # Save diagnostics to output dir
-            diag_payload = dict(cache_payload)
-            diag_payload["search_time_s"] = round(search_elapsed, 1)
-            with open(os.path.join(out_dir, "alt_interaction_pairs_selected.json"), "w", encoding="utf-8") as fh:
-                json.dump(diag_payload, fh, indent=2)
-            search_log_df.to_csv(os.path.join(out_dir, "alt_interaction_search_log.csv"), index=False)
-
-            print(f"ALT interactions: selected {len(selected_pairs)} pairs in {search_elapsed:.1f}s")
-
-        alt_feature_matrix = safe_features.copy()
-
-        # A2: Add SVD row factors as extra ALT features (additive, alongside PCA)
-        global _MODULE_SVD_ROW_FACTORS
-        if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
-            svd_factors = imputer.svd_row_factors_
-            _MODULE_SVD_ROW_FACTORS = svd_factors if args.residual_head else None  # expose for regime model
-            if args.svd_in_alt:
-                # Add raw, squared, and pairwise interaction SVD factors
-                svd_col_names = list(svd_factors.columns)
-                for col in svd_col_names:
-                    alt_feature_matrix[col] = svd_factors[col].values
-                    alt_feature_matrix[f"{col}_sq"] = svd_factors[col].values ** 2
-                # Top-k pairwise interactions (top 4 factors → 6 pairs)
-                n_interact = min(4, len(svd_col_names))
-                import itertools as _itertools
-                for i, j in _itertools.combinations(range(n_interact), 2):
-                    ci, cj = svd_col_names[i], svd_col_names[j]
-                    alt_feature_matrix[f"{ci}x{cj}"] = svd_factors[ci].values * svd_factors[cj].values
-
-        # X2: Imputation trajectory signatures (winsorized to cap outliers)
-        if args.traj_in_alt and imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
-            for col in imputer.trajectory_features_.columns:
-                vals = imputer.trajectory_features_[col].values.copy()
-                cap = float(np.percentile(vals, 95))
-                vals = np.clip(vals, None, cap)
-                alt_feature_matrix[col] = vals
-
-        print('impute alt for all')
-        alt_result = impute_alt_for_all(alt_feature_matrix, df[ALT_TARGET], ALT_SELECTOR_CFG)
-        # Store base features (pre-polynomial) for variance contribution calculation later
-        alt_result["base_features"] = list(safe_features.columns)
-        alt_result["poly_core"] = None
-        alt_result["poly_limit"] = int(args.poly_limit) if args.poly_limit else 0
-        alt_result["poly_include_squares"] = bool(args.poly_include_squares)
-        alt_filled = alt_result["filled"]
-
-        # --- ALT post-processing transforms (C, D, E, F, G) ---
-        alt_known = pd.to_numeric(df[ALT_TARGET], errors="coerce")
-        alt_known_mask = alt_known.notna()
-        alt_missing_mask = ~alt_known_mask
-
-        # (C) Log-barrier transform: compress extrapolation via sigmoid bounding
-        if getattr(args, "alt_log_barrier", False) and alt_missing_mask.any():
-            known_vals = alt_known.dropna().values
-            floor_val = float(np.min(known_vals)) - 50.0
-            ceil_val = float(np.max(known_vals)) + float(getattr(args, "alt_barrier_margin", 30.0))
-            raw_pred = alt_filled.values.copy()
-            # Sigmoid squash for imputed models only
-            imputed_pred = raw_pred[alt_missing_mask.values]
-            squashed = floor_val + (ceil_val - floor_val) / (1.0 + np.exp(-(imputed_pred - (floor_val + ceil_val)/2) / ((ceil_val - floor_val)/6)))
-            alt_filled = alt_filled.copy()
-            alt_filled.iloc[alt_missing_mask.values] = squashed
-            print(f"Log-barrier ALT: floor={floor_val:.0f}, ceil={ceil_val:.0f}, "
-                  f"max_raw={raw_pred[alt_missing_mask.values].max():.0f} -> max_squashed={squashed.max():.0f}")
-
-        # (D) Convex-hull predictor: represent model as NNLS mixture of known models
-        if getattr(args, "alt_convex_hull", False) and alt_missing_mask.any():
-            from scipy.optimize import nnls
-            # Use imputed benchmark features (no lmarena) for similarity
-            bench_cols = [c for c in safe_features.columns if c != ALT_TARGET]
-            X_bench = safe_features[bench_cols].values
-            known_idx = np.where(alt_known_mask.values)[0]
-            missing_idx = np.where(alt_missing_mask.values)[0]
-            X_known = X_bench[known_idx]
-            known_scores = alt_known.dropna().values
-            # For each missing model, find NNLS weights over known models
-            hull_preds = []
-            residual_norms = []
-            for i in missing_idx:
-                x_new = X_bench[i]
-                # Solve: min ||X_known.T @ w - x_new||^2, w >= 0
-                w, rnorm = nnls(X_known.T, x_new)
-                w_sum = w.sum()
-                if w_sum > 1e-8:
-                    w = w / w_sum  # normalize to convex combination
-                    pred = float(np.dot(w, known_scores))
-                else:
-                    pred = float(np.mean(known_scores))
-                hull_preds.append(pred)
-                residual_norms.append(rnorm)
-            alt_filled = alt_filled.copy()
-            alt_filled.iloc[missing_idx] = hull_preds
-            print(f"Convex-hull ALT: {len(missing_idx)} models, "
-                  f"pred range=[{min(hull_preds):.0f}, {max(hull_preds):.0f}]")
-
-        # (E) Rank-transform: predict percentile rank, map back via empirical CDF
-        if getattr(args, "alt_rank_transform", False) and alt_missing_mask.any():
-            known_scores = np.sort(alt_known.dropna().values)
-            raw_pred = alt_filled.values.copy()
-            imputed_pred = raw_pred[alt_missing_mask.values]
-            # Map raw prediction to rank among known scores, then back to score
-            # This clips to [min_known, max_known] naturally
-            rank_preds = []
-            for p in imputed_pred:
-                # Find interpolated position in known distribution
-                rank_frac = np.searchsorted(known_scores, p) / len(known_scores)
-                rank_frac = np.clip(rank_frac, 0.5/len(known_scores), 1.0 - 0.5/len(known_scores))
-                # Map back: linear interpolation in known scores
-                idx_float = rank_frac * (len(known_scores) - 1)
-                idx_lo = int(np.floor(idx_float))
-                idx_hi = min(idx_lo + 1, len(known_scores) - 1)
-                frac = idx_float - idx_lo
-                mapped = known_scores[idx_lo] * (1 - frac) + known_scores[idx_hi] * frac
-                rank_preds.append(mapped)
-            alt_filled = alt_filled.copy()
-            missing_idx = np.where(alt_missing_mask.values)[0]
-            alt_filled.iloc[missing_idx] = rank_preds
-            print(f"Rank-transform ALT: pred range=[{min(rank_preds):.0f}, {max(rank_preds):.0f}], "
-                  f"max_known={known_scores[-1]:.0f}")
-
-        # (F) Pairwise ranking: Bradley-Terry on benchmark differences
-        if getattr(args, "alt_pairwise", False) and alt_missing_mask.any():
-            known_idx = np.where(alt_known_mask.values)[0]
-            missing_idx = np.where(alt_missing_mask.values)[0]
-            known_scores = alt_known.dropna().values
-            bench_cols = [c for c in safe_features.columns if c != ALT_TARGET]
-            X_bench = safe_features[bench_cols].values
-            # Build pairwise training data: X_i - X_j -> sign(score_i - score_j)
-            from sklearn.linear_model import LogisticRegression
-            pairs_X, pairs_y = [], []
-            rng = np.random.RandomState(42)
-            # Sample pairs (cap at 5000 for speed)
-            n_known = len(known_idx)
-            max_pairs = min(5000, n_known * (n_known - 1) // 2)
-            for _ in range(max_pairs):
-                i, j = rng.choice(n_known, 2, replace=False)
-                diff = X_bench[known_idx[i]] - X_bench[known_idx[j]]
-                label = 1 if known_scores[i] > known_scores[j] else 0
-                pairs_X.append(diff)
-                pairs_y.append(label)
-            pairs_X = np.array(pairs_X)
-            pairs_y = np.array(pairs_y)
-            # Fit logistic regression on differences
-            lr = LogisticRegression(C=0.1, max_iter=1000, random_state=42)
-            lr.fit(pairs_X, pairs_y)
-            # For each missing model, compute win probability vs each known model
-            # Then use win rates to estimate rank, map to score via isotonic
-            from sklearn.isotonic import IsotonicRegression
-            # First: compute win rates for known models (for calibration)
-            known_win_rates = []
-            for i in range(n_known):
-                diffs = X_bench[known_idx[i]] - X_bench[known_idx]
-                probs = lr.predict_proba(diffs)[:, 1]
-                win_rate = float(np.mean(probs))
-                known_win_rates.append(win_rate)
-            # Fit isotonic: win_rate -> score
-            iso = IsotonicRegression(out_of_bounds="clip")
-            iso.fit(known_win_rates, known_scores)
-            # Predict for missing models
-            pw_preds = []
-            for i in missing_idx:
-                diffs = X_bench[i] - X_bench[known_idx]
-                probs = lr.predict_proba(diffs)[:, 1]
-                win_rate = float(np.mean(probs))
-                pred = float(iso.predict([win_rate])[0])
-                pw_preds.append(pred)
-            alt_filled = alt_filled.copy()
-            alt_filled.iloc[missing_idx] = pw_preds
-            print(f"Pairwise ALT: {max_pairs} pairs, "
-                  f"pred range=[{min(pw_preds):.0f}, {max(pw_preds):.0f}]")
-
-        # (G) Delta from predecessor: predict Δ from nearest known model
-        if getattr(args, "alt_delta_pred", False) and alt_missing_mask.any():
-            from sklearn.neighbors import NearestNeighbors
-            bench_cols = [c for c in safe_features.columns if c != ALT_TARGET]
-            X_bench = safe_features[bench_cols].values
-            known_idx = np.where(alt_known_mask.values)[0]
-            missing_idx = np.where(alt_missing_mask.values)[0]
-            known_scores = alt_known.dropna().values
-            # Standardize
-            from sklearn.preprocessing import StandardScaler as _SSd
-            sc = _SSd()
-            X_scaled = sc.fit_transform(X_bench)
-            X_known_sc = X_scaled[known_idx]
-            # For each missing model, find nearest known model
-            nn = NearestNeighbors(n_neighbors=min(5, len(known_idx)), metric="euclidean")
-            nn.fit(X_known_sc)
-            dists, idxs = nn.kneighbors(X_scaled[missing_idx])
-            # Weighted average of nearest known scores (inverse distance weighting)
-            delta_preds = []
-            for i in range(len(missing_idx)):
-                d = dists[i]
-                w = 1.0 / (d + 1e-6)
-                w = w / w.sum()
-                pred = float(np.dot(w, known_scores[idxs[i]]))
-                delta_preds.append(pred)
-            alt_filled = alt_filled.copy()
-            alt_filled.iloc[missing_idx] = delta_preds
-            print(f"Delta-pred ALT: {len(missing_idx)} models, "
-                  f"pred range=[{min(delta_preds):.0f}, {max(delta_preds):.0f}]")
-
-        # ALT committee uncertainty (Exp 1)
-        alt_committee_result = None
-        if ALT_COMMITTEE_ENABLED:
-            print("Fitting ALT committee...")
-            alt_committee_result = _fit_alt_committee(
-                alt_feature_matrix, df[ALT_TARGET], ALT_SELECTOR_CFG,
-                pca_dims=ALT_COMMITTEE_PCA_DIMS,
-                n_bootstraps=ALT_COMMITTEE_N_BOOTSTRAPS,
-            )
-            # Use committee consensus instead of single-model prediction for missing values
-            alt_numeric = pd.to_numeric(df[ALT_TARGET], errors="coerce")
-            missing_mask = alt_numeric.isna()
-            alt_filled = alt_numeric.copy()
-            alt_filled.loc[missing_mask] = alt_committee_result["mu_bar"].loc[missing_mask]
-            alt_filled = alt_filled.astype(float)
-            # Save committee diagnostics
-            committee_diag = pd.DataFrame({
-                "model_name": df[ID_COL].values if ID_COL in df.columns else np.arange(len(alt_filled)),
-                "alt_actual": alt_numeric.values,
-                "alt_committee_mu": alt_committee_result["mu_bar"].values,
-                "alt_committee_u_total": alt_committee_result["u_total"].values,
-                "alt_committee_d_support": alt_committee_result["d_support"].values,
-                "alt_single_pred": alt_result["predicted"].values,
-                "alt_used": alt_filled.values,
-                "is_imputed": missing_mask.values.astype(int),
-            })
-            committee_diag.to_csv(os.path.join(out_dir, "alt_committee_diagnostics.csv"), index=False)
-
-        safe_features = safe_features.assign(**{ALT_TARGET: alt_filled.values})
-
-        # Uncertainty-gated extrapolation basis (Exp 2)
-        if getattr(args, "uncertainty_gated_alt", False) and alt_committee_result is not None:
-            alt_vals = alt_filled.values
-            u_total = alt_committee_result["u_total"].values
-            d_support = alt_committee_result["d_support"].values
-            tau = getattr(args, "gate_tau", 15.0)
-            h = getattr(args, "gate_h", 5.0)
-            # Cutoff: 95th percentile of known lmarena
-            alt_known = pd.to_numeric(df[ALT_TARGET], errors="coerce")
-            cutoff = float(np.nanpercentile(alt_known.dropna(), 95))
-            # Reliability weight: high when confident AND locally supported
-            r = 1.0 / (1.0 + (u_total ** 2) / (tau ** 2) + (d_support ** 2) / (h ** 2))
-            # For models with real lmarena, r=1 (fully reliable)
-            real_mask = alt_known.notna().values
-            r[real_mask] = 1.0
-            lmarena_in = np.minimum(alt_vals, cutoff)
-            lmarena_excess = np.maximum(alt_vals - cutoff, 0)
-            lmarena_out_confident = lmarena_excess * r
-            lmarena_out_uncertain = lmarena_excess * (1 - r)
-            safe_features[ALT_TARGET] = lmarena_in
-            safe_features["_alt_out_confident"] = lmarena_out_confident
-            safe_features["_alt_out_uncertain"] = lmarena_out_uncertain
-            # Also add to lmarena style partners so interactions are allowed
-            _LMARENA_STYLE_ONLY_PARTNERS.add("_alt_out_confident")
-            _LMARENA_STYLE_ONLY_PARTNERS.add("_alt_out_uncertain")
-            print(f"Uncertainty-gated ALT: cutoff={cutoff:.0f}, "
-                  f"mean(r)={r.mean():.2f}, n_extrapolated={int((lmarena_excess > 0).sum())}")
-
-        # Propagate SVD factors into safe_features so the inner ALT refit
-        # (inside target CV) has the same feature set as the outer ALT.
-        if args.svd_in_alt and imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
-            svd_factors = imputer.svd_row_factors_
-            svd_col_names = list(svd_factors.columns)
-            for col in svd_col_names:
+    # Add SVD factors from imputer if available
+    if args.svd_in_features and imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
+        svd_factors = imputer.svd_row_factors_
+        svd_col_names = list(svd_factors.columns)
+        for col in svd_col_names:
+            if col not in safe_features.columns:
                 safe_features[col] = svd_factors[col].values
                 safe_features[f"{col}_sq"] = svd_factors[col].values ** 2
-            import itertools as _itertools
-            n_interact = min(4, len(svd_col_names))
-            for i, j in _itertools.combinations(range(n_interact), 2):
-                ci, cj = svd_col_names[i], svd_col_names[j]
-                safe_features[f"{ci}x{cj}"] = svd_factors[ci].values * svd_factors[cj].values
+        n_interact = min(4, len(svd_col_names))
+        for ci_idx, cj_idx in itertools.combinations(range(n_interact), 2):
+            ci = svd_col_names[ci_idx]
+            cj = svd_col_names[cj_idx]
+            key = f"{ci}x{cj}"
+            if key not in safe_features.columns:
+                safe_features[key] = svd_factors[ci].values * svd_factors[cj].values
 
-        if ALT_REGRESSOR_NAME == "bayes":
-            alt_model = alt_result.get("fitted_model")
-            coeff_df = None
-            if alt_model is not None:
-                coeff_df = _summarize_bayes_model(alt_model, alt_result.get("selected_features", []),
-                                                    alt_result=alt_result)
-            if coeff_df is not None:
-                coeff_df.to_csv(os.path.join(out_dir, "alt_bayesian_ridge_feature_importance.csv"), index=False)
-
-        alt_pred_df = pd.DataFrame({
-            ID_COL: imputed_df[ID_COL].values if ID_COL in imputed_df.columns else np.arange(len(alt_filled)),
-            "alt_actual": pd.to_numeric(df[ALT_TARGET], errors="coerce").values,
-            "alt_predicted": alt_result["predicted"].values,
-            "alt_feature_used": alt_filled.values,
-        })
-        alt_pred_df.to_csv(os.path.join(out_dir, "alt_imputed_values.csv"), index=False)
-        diag = {
-            "selected_features": alt_result["selected_features"],
-            "fallback_value": alt_result["fallback_value"],
-            "n_known": alt_result["n_known"],
-            "model": ALT_REGRESSOR_NAME,
-            "calibration": alt_result.get("calibration_summary"),
-        }
-        with open(os.path.join(out_dir, "alt_imputation_summary.json"), "w") as f:
-            json.dump(diag, f, indent=2)
-
-    # Snapshot safe_features BEFORE adding trajectory (for ALT CV search later)
-    _safe_features_pre_traj = safe_features.copy()
-
-    # Add imputation trajectory features to target model (if available)
-    if args.traj_in_target and imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
+    # Add trajectory features from imputer if available
+    if imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
         for col in imputer.trajectory_features_.columns:
-            safe_features[col] = imputer.trajectory_features_[col].values
+            if col not in safe_features.columns:
+                safe_features[col] = imputer.trajectory_features_[col].values
 
-    target_base_features = safe_features.copy()
+    # Exclude target columns from feature matrix
+    knn_feature_cols = [c for c in safe_features.columns
+                        if c != ALT_TARGET and c != TARGET]
+    knn_X = safe_features[knn_feature_cols].values
+    print(f"  KNN features: {len(knn_feature_cols)} (including SVD/traj)")
 
-    # Style-only final: restrict to lmarena + style/tone columns
-    if STYLE_ONLY_FINAL:
-        style_cols = [c for c in target_base_features.columns
-                      if c.startswith("style_") or c.startswith("tone_")
-                      or c == ALT_TARGET]
-        dropped = len(target_base_features.columns) - len(style_cols)
-        target_base_features = target_base_features[style_cols]
-        print(f"Style-only final: kept {len(style_cols)} columns, dropped {dropped}")
-
-    # --- ALT uncertainty features (conformal, LOO profile, adversarial) ---
-    if ALT_TARGET in target_base_features.columns:
-        alt_pred_std = alt_result.get("pred_std", pd.Series(dtype=float))
-        alt_known = pd.to_numeric(df[ALT_TARGET], errors="coerce")
-        alt_known_mask = alt_known.notna()
-
-        # (A) Conformal ALT: calibrate ALT pred_std using split conformal
-        if getattr(args, "conformal_alt_feature", False) and alt_pred_std.notna().any():
-            alt_predicted = alt_result["predicted"]
-            alt_residuals = (alt_known[alt_known_mask] - alt_predicted[alt_known_mask]).abs().values
-            # Calibration: q_hat = quantile of |residual| / pred_std
-            cal_std = alt_pred_std[alt_known_mask].values
-            cal_std = np.maximum(cal_std, 1e-6)
-            normed_resid = alt_residuals / cal_std
-            q90 = float(np.percentile(normed_resid, 90))
-            conformal_width = q90 * alt_pred_std.values
-            # Zero for known models, real width for imputed
-            conformal_width[alt_known_mask.values] = 0.0
-            target_base_features["_alt_conformal_width"] = conformal_width
-            _LMARENA_STYLE_ONLY_PARTNERS.add("_alt_conformal_width")
-            print(f"Conformal ALT feature: q90={q90:.1f}, max_width={conformal_width.max():.1f}")
-
-        # (B) LOO residual profile: predict expected ALT imputation error
-        if getattr(args, "loo_residual_profile", False):
-            from sklearn.model_selection import LeaveOneOut
-            from sklearn.neighbors import KNeighborsRegressor
-            alt_predicted = alt_result["predicted"]
-            loo_errors = np.abs(alt_known[alt_known_mask].values - alt_predicted[alt_known_mask].values)
-            # Features for meta-model: pred_std, PCA distance, style extremity
-            meta_feats_names = []
-            meta_feats_all = []
-            if alt_pred_std.notna().any():
-                meta_feats_all.append(alt_pred_std.values)
-                meta_feats_names.append("pred_std")
-            if alt_committee_result is not None:
-                meta_feats_all.append(alt_committee_result["d_support"].values)
-                meta_feats_names.append("d_support")
-                meta_feats_all.append(alt_committee_result["u_total"].values)
-                meta_feats_names.append("u_total")
-            if meta_feats_all:
-                meta_X_all = np.column_stack(meta_feats_all)
-                meta_X_known = meta_X_all[alt_known_mask.values]
-                # KNN regressor to predict |error| from meta features
-                knn_meta = KNeighborsRegressor(n_neighbors=min(7, len(loo_errors) - 1))
-                knn_meta.fit(meta_X_known, loo_errors)
-                expected_error = knn_meta.predict(meta_X_all)
-                expected_error[alt_known_mask.values] = 0.0
-                target_base_features["_alt_expected_error"] = expected_error
-                _LMARENA_STYLE_ONLY_PARTNERS.add("_alt_expected_error")
-                print(f"LOO residual profile: mean_expected_error={expected_error[~alt_known_mask.values].mean():.1f}")
-
-        # (C) Adversarial imputation: sample K lmarena values, measure prediction spread
-        # This is computed after the target model is fit (needs model coefficients)
-        # Flag is checked later in the pipeline
-
-    # Piecewise style interaction: above threshold, style delta has weaker effect.
-    # style_predicted_delta correlates r=-0.55 with Arena ELO below 1400 but
-    # r=-0.03 above 1400 — style stops predicting human preference at the top tier.
-    # This feature lets the model learn that transition.
-    if ALT_TARGET in target_base_features.columns and "style_predicted_delta" in target_base_features.columns:
-        alt_vals = target_base_features[ALT_TARGET].values
-        delta_vals = target_base_features["style_predicted_delta"].values
-        pw_threshold = TOP_TIER_THRESHOLD if TOP_TIER_THRESHOLD > 0 else 1400.0
-        target_base_features["_pw_top_style"] = np.maximum(alt_vals - pw_threshold, 0) * delta_vals
-        print(f"Piecewise style feature: _pw_top_style (threshold={pw_threshold})")
-
-        # Regime-split: replace single style_predicted_delta with two orthogonal
-        # features that let ARD assign independent coefficients above/below threshold.
-        if getattr(args, "style_regime_split", False):
-            is_above = alt_vals > pw_threshold
-            target_base_features["_style_delta_low"] = delta_vals * (~is_above)
-            target_base_features["_style_delta_high"] = delta_vals * is_above
-            target_base_features.drop(columns=["style_predicted_delta"], inplace=True)
-            n_low = int((~is_above).sum())
-            n_high = int(is_above.sum())
-            print(f"Style regime split: _style_delta_low (n={n_low}) + _style_delta_high (n={n_high}), "
-                  f"dropped style_predicted_delta")
-
-    # Add PCA components of benchmark columns as target model features
-    pca_in_target = getattr(args, 'pca_in_target', 0)
-    if pca_in_target > 0:
-        from sklearn.decomposition import PCA
-        # Use benchmark columns only (exclude ALT target, trajectory, SVD factors)
-        pca_source_cols = [c for c in feature_cols
-                          if c != ALT_TARGET
-                          and not c.startswith("_svd_f")
-                          and not c.startswith("traj_")]
-        pca_source = _safe_features_pre_traj[pca_source_cols]
-        n_comp = min(pca_in_target, pca_source.shape[1], pca_source.shape[0] - 1)
-        pca_scaler = StandardScaler()
-        pca_model = PCA(n_components=n_comp)
-        pca_vals = pca_model.fit_transform(pca_scaler.fit_transform(pca_source.values))
-        for k in range(n_comp):
-            target_base_features[f"_target_pc{k+1}"] = pca_vals[:, k]
-        pca_var = pca_model.explained_variance_ratio_
-        print(f"PCA in target: {n_comp} components, "
-              f"explained variance: {sum(pca_var):.1%} "
-              f"(PC1={pca_var[0]:.1%})")
-
-    to_save = safe_features if id_series is None else pd.concat([id_series, safe_features], axis=1)
-    to_save.to_csv(os.path.join(out_dir, "feature_matrix_used.csv"), index=False)
-
-    mode = args.top_k_features
-    if mode.lower() == "none":
-        mode = "none"
-    elif mode.lower() == "auto":
-        mode = "auto"
-    else:
-        mode = int(mode)
-
-    raw_k_grid = [x.strip() for x in args.selector_k_grid.split(",") if x.strip()]
-    parsed_k_grid: List[Union[int, str]] = []
-    for item in raw_k_grid:
-        if item.lower() == "all":
-            parsed_k_grid.append("all")
-        elif item.isdigit():
-            parsed_k_grid.append(int(item))
-        else:
-            parsed_k_grid.append(item)
-
-    global TARGET_SELECTOR_CFG
-    TARGET_SELECTOR_CFG = {
-        "enabled": args.feature_selector != "none",
-        "model_type": args.feature_selector,
-        "mode": mode,
-        "k_grid": parsed_k_grid,
-        "cv": int(args.selector_cv),
-        "cv_repeats": int(args.feature_cv_repeats),
-        "cv_seed": int(args.cv_seed),
-    }
-
-    poly_cfg = {
-        "enabled": bool(args.poly_interactions),
-        "include_squares": bool(args.poly_include_squares),
-        "limit": int(args.poly_limit) if args.poly_limit else 0,
-        "alt_centric": bool(args.alt_centric_poly),
-        "alt_centric_k": int(args.alt_centric_k),
-    }
-    print('more matrix making')
-    y_all = pd.to_numeric(df[TARGET], errors="coerce").to_numpy()
-    obs_mask = ~np.isnan(y_all)
-    # Build matrix that ALT selector sees (exclude the ALT column itself)
-    if ALT_TARGET in df.columns:
-        X_no_alt_all = alt_feature_matrix if alt_feature_matrix is not None else safe_features.drop(columns=[ALT_TARGET], errors="ignore")
-        # (Do NOT add ALT column here; selector uses only non-ALT columns)
-        # Base features (pre-poly, no ALT) for inner greedy search —
-        # matches the search space used by the global greedy selector
-        X_base_no_alt = _safe_features_pre_traj.drop(columns=[ALT_TARGET], errors="ignore")
-        alt_cv_metrics = _alt_cv_report(
-            X_no_alt_all,
-            df[ALT_TARGET],
-            ALT_SELECTOR_CFG,
-            out_dir,
-            repeats=args.alt_cv_repeats,
-            seed=args.cv_seed,
-            X_base_for_search=X_base_no_alt,
-        )
-        if alt_cv_metrics:
-            print(f"ALT nested-CV RMSE: {alt_cv_metrics['rmse']:.2f}  (95% CI: {alt_cv_metrics['ci_lo']:.2f} – {alt_cv_metrics['ci_hi']:.2f}, RMSE/SD: {alt_cv_metrics['rmse_over_sd']:.3f})")
-            # Append cv_rmse to interaction diagnostics JSON (if it exists)
-            diag_json_path = os.path.join(out_dir, "alt_interaction_pairs_selected.json")
-            if os.path.exists(diag_json_path):
-                with open(diag_json_path, "r", encoding="utf-8") as fh:
-                    diag_data = json.load(fh)
-                diag_data["cv_rmse"] = alt_cv_metrics["rmse"]
-                diag_data["cv_rmse_over_sd"] = alt_cv_metrics["rmse_over_sd"]
-                with open(diag_json_path, "w", encoding="utf-8") as fh:
-                    json.dump(diag_data, fh, indent=2)
-
-        # Optional: global ranking snapshot for inspection (not used in training)
-        if ALT_SELECTOR_CFG.get("enabled", False):
-            # rank using all known ALT rows (for a human-readable report)
-            known = df[ALT_TARGET].notna()
-            _, alt_ranking, _ = select_features_tree(
-                X_no_alt_all.loc[known],
-                pd.to_numeric(df.loc[known, ALT_TARGET], errors="coerce"),
-                model_type=ALT_SELECTOR_CFG["model_type"],
-                mode="none",  # full ranking
-                k_grid=ALT_SELECTOR_CFG["k_grid"],
-                cv=ALT_SELECTOR_CFG["cv"],
-                cv_repeats=ALT_SELECTOR_CFG.get("cv_repeats", 1),
-                random_state=ALT_SELECTOR_CFG.get("cv_seed", SEED),
-            )
-            alt_ranking.to_csv(os.path.join(out_dir, "alt_feature_ranking_gain.csv"), index=False)
-
+    # =========================================================================
+    # 6. Identify train/pred indices
+    # =========================================================================
     train_idx = np.where(~y_missing_mask)[0]
-    pred_idx = np.where(y_missing_mask)[0]
+    pred_idx = np.arange(len(y_all))  # predict ALL models
 
     if len(train_idx) < 3:
-        raise ValueError("Not enough rows with observed {} to train models.".format(TARGET))
+        raise ValueError(f"Not enough rows with observed {TARGET} to train models.")
 
-    # Note: `X_train`, `y_train`, etc. are defined right before fit_and_predict_all
-
-    specs = build_model_specs()
-
+    # =========================================================================
+    # 7. Build CV splits
+    # =========================================================================
     preprocess_end = time.time()
     print(f"preprocessing:    {mmss(preprocess_end - impute_end)}")
-    
-    X_cv = target_base_features.loc[~y_missing_mask].copy()
-    weights_cv = sample_weights_all[~y_missing_mask]
-    dense_cv = dense_mask_all[~y_missing_mask]
+
     target_cv_splits = None
-    top_k_loo = getattr(args, 'top_k_loo', 0)
-    if top_k_loo > 0:
-        # LOO only on top K models by target score
-        y_cv = y_all[~y_missing_mask]
-        top_k_idx = np.argsort(-y_cv)[:top_k_loo]
-        all_idx = np.arange(len(y_cv))
-        target_cv_splits = [
-            (np.delete(all_idx, i), np.array([i]))
-            for i in top_k_idx
-        ]
-        args.outer_cv = len(target_cv_splits)
-        args.cv_repeats_outer = 1
-        print(f"Top-{top_k_loo} LOO: {len(target_cv_splits)} folds, "
-              f"score range {y_cv[top_k_idx[-1]]:.1f} - {y_cv[top_k_idx[0]]:.1f}")
-    elif args.group_cv:
+    if args.group_cv:
         train_model_names = imputed_df[ID_COL].values[~y_missing_mask]
         group_labels_cv = _extract_model_groups(pd.Series(train_model_names))
         group_counts = dict(pd.Series(group_labels_cv).value_counts())
-        # Merge groups with < 4 training models into "Other"
         small_groups = {g for g, c in group_counts.items() if c < 4 and g != "Other"}
         if small_groups:
             group_labels_cv = np.array([
                 "Other" if g in small_groups else g for g in group_labels_cv
             ])
-            group_counts = dict(pd.Series(group_labels_cv).value_counts())
-        print(f"GroupKFold: {len(set(group_labels_cv))} groups, "
-              f"sizes: {group_counts}")
+        print(f"GroupKFold: {len(set(group_labels_cv))} groups")
         target_cv_splits = _build_group_splits(
-            len(X_cv), args.outer_cv, group_labels_cv,
+            len(train_idx), args.outer_cv, group_labels_cv,
             args.cv_repeats_outer, args.cv_seed)
     elif args.cv_splits_path:
         target_cv_splits = get_or_create_splits(
-            len(X_cv),
+            len(train_idx),
             args.outer_cv,
             args.cv_splits_path,
             repeats=args.cv_repeats_outer,
             seed=args.cv_seed,
         )
-    best_spec, eval_df, oof_preds, oof_folds = choose_best_model_with_alt(
-        specs,
-        X_cv,
-        y_all[~y_missing_mask],
-        ALT_TARGET,
-        n_splits=args.outer_cv,
-        model_n_jobs=args.model_n_jobs,
-        cv_n_jobs=args.cv_n_jobs,
-        selector_cfg=TARGET_SELECTOR_CFG,
-        poly_cfg=poly_cfg,
-        splits=target_cv_splits,
+
+    # =========================================================================
+    # 8. KNN prediction
+    # =========================================================================
+    print("Using adaptive KNN prediction pipeline")
+    knn_result = fit_and_predict_knn(
+        knn_X,
+        y_all,
+        train_idx,
+        pred_idx,
+        cv_splits=target_cv_splits,
         cv_repeats=args.cv_repeats_outer,
-        seed=args.cv_seed,
-        oof_repeats=args.cv_repeats_inner,
-        sample_weight=weights_cv,
-        dense_mask=dense_cv,
+        cv_seed=args.cv_seed,
+        dist_mult=args.knn_dist_mult,
+        max_k=args.knn_max_k,
+        min_k=args.knn_min_k,
+        bw_pct=args.knn_bw_pct,
     )
-    model_summary = ", ".join(
-        f"{r['model']}: {r['rmse_mean']:.2f} \u00b1 {r['rmse_std']:.2f}"
-        for _, r in eval_df.iterrows()
-    )
-    cv_winner = eval_df.iloc[0]["model"]
-    print(f"Model comparison: {model_summary} -> {cv_winner}")
+    mu = knn_result["mu"]
+    std = knn_result["std"]
+    lower = knn_result["lower"]
+    upper = knn_result["upper"]
+    oof_preds = knn_result["oof_preds"]
+    oof_folds = knn_result["oof_folds"]
 
-    # --- Multiple imputation: average OOF predictions across K perturbed matrices ---
-    n_imputations = getattr(args, 'n_imputations', 1)
-    sigma2_mat = getattr(imputer, 'sigma2_matrix_', None) if imputer is not None else None
-    if n_imputations > 1 and sigma2_mat is not None:
-        all_oof_preds = [oof_preds.copy()]
-        y_train = y_all[~y_missing_mask]
-        base_rmse = float(np.sqrt(np.nanmean((y_train - oof_preds) ** 2)))
-        print(f"Multiple imputation: K={n_imputations}, base RMSE={base_rmse:.2f}")
+    train_end = time.time()
+    print(f"train:     {mmss(train_end - preprocess_end)}")
 
-        for k_imp in range(1, n_imputations):
-            # Perturb the imputed matrix
-            perturbed_df = _perturb_imputed_matrix(
-                imputed_df, sigma2_mat, feature_cols, seed=SEED + k_imp * 1000
-            )
-            # Rebuild safe_features from perturbed data
-            sf_k = perturbed_df[feature_cols].replace([np.inf, -np.inf], np.nan)
-            sf_k = sf_k.fillna(medians)
-            sf_k = sf_k.fillna(0.0)
-
-            # Add SVD row factors and trajectory features (same as base — not perturbed)
-            if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
-                for col in imputer.svd_row_factors_.columns:
-                    if col not in sf_k.columns:
-                        sf_k[col] = imputer.svd_row_factors_[col].values
-            if args.traj_in_target and imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
-                for col in imputer.trajectory_features_.columns:
-                    sf_k[col] = imputer.trajectory_features_[col].values
-
-            # Use same feature columns as base run
-            sf_k = sf_k.reindex(columns=target_base_features.columns, fill_value=0.0)
-            X_cv_k = sf_k.loc[~y_missing_mask].copy()
-
-            _, _, oof_k, _ = choose_best_model_with_alt(
-                [best_spec],  # only re-run winning model
-                X_cv_k,
-                y_train,
-                ALT_TARGET,
-                n_splits=args.outer_cv,
-                model_n_jobs=1,
-                cv_n_jobs=args.cv_n_jobs,
-                selector_cfg=TARGET_SELECTOR_CFG,
-                poly_cfg=poly_cfg,
-                splits=target_cv_splits,
-                cv_repeats=args.cv_repeats_outer,
-                seed=args.cv_seed,
-                oof_repeats=args.cv_repeats_inner,
-                sample_weight=weights_cv,
-                dense_mask=dense_cv,
-            )
-            all_oof_preds.append(oof_k)
-            k_rmse = float(np.sqrt(np.nanmean((y_train - oof_k) ** 2)))
-            print(f"  MI run {k_imp+1}/{n_imputations}: RMSE={k_rmse:.2f}")
-
-        # Average OOF predictions across all K runs
-        stacked = np.column_stack(all_oof_preds)
-        oof_preds = np.nanmean(stacked, axis=1)
-        mi_rmse = float(np.sqrt(np.nanmean((y_train - oof_preds) ** 2)))
-        mi_spread = float(np.std([
-            np.sqrt(np.nanmean((y_train - p) ** 2)) for p in all_oof_preds
-        ]))
-        print(f"  MI averaged RMSE: {mi_rmse:.2f} (spread: ±{mi_spread:.2f})")
-
-    # Store full features for cross-domain ALT (before target feature selection drops cols)
-    global _CROSS_DOMAIN_FULL_FEATURES
-    if CROSS_DOMAIN_ALT_ENABLED:
-        _CROSS_DOMAIN_FULL_FEATURES = target_base_features.copy()
-
-    # Apply global target feature selection for final training/prediction
-    ranking_df = None
-    safe_features = target_base_features.copy()
-    if TARGET_SELECTOR_CFG.get("enabled", False):
-        selected_cols, ranking_df, diags = select_features_tree(
-            safe_features,
-            y_all,
-            model_type=TARGET_SELECTOR_CFG["model_type"],
-            mode=TARGET_SELECTOR_CFG["mode"],
-            k_grid=TARGET_SELECTOR_CFG["k_grid"],
-            cv=TARGET_SELECTOR_CFG["cv"],
-            cv_repeats=TARGET_SELECTOR_CFG.get("cv_repeats", 1),
-            random_state=TARGET_SELECTOR_CFG.get("cv_seed", SEED),
-        )
-        ranking_df.to_csv(os.path.join(out_dir, "feature_ranking_gain.csv"), index=False)
-        pd.Series(selected_cols, name="selected_feature").to_csv(
-            os.path.join(out_dir, "selected_features.csv"), index=False
-        )
-        with open(os.path.join(out_dir, "feature_selection_diag.json"), "w") as f:
-            json.dump(diags, f, indent=2)
-        n_dropped = diags.get("collinearity", {}).get("n_dropped", 0)
-        print(f"Feature selection: {diags.get('chosen_K', len(selected_cols))}/{len(target_base_features.columns)} features kept"
-              f" (dropped {n_dropped} collinear), method={TARGET_SELECTOR_CFG['model_type']}")
-        safe_features = safe_features[selected_cols]
-    else:
-        selected_cols = list(safe_features.columns)
-
-    # Force specific features back in (after selection, before poly)
-    force_features_str = getattr(args, "force_features", "")
-    if force_features_str:
-        forced = [f.strip() for f in force_features_str.split(",") if f.strip()]
-        added = []
-        for f in forced:
-            if f not in safe_features.columns and f in target_base_features.columns:
-                safe_features[f] = target_base_features[f]
-                added.append(f)
-            elif f in safe_features.columns:
-                pass  # already selected
-            else:
-                print(f"  WARNING: forced feature '{f}' not found in target_base_features")
-        if added:
-            print(f"Forced {len(added)} feature(s) into selected set: {added}")
-
-    if poly_cfg.get("enabled", False):
-        if poly_cfg.get("alt_centric", False) and ALT_TARGET in safe_features.columns:
-            safe_features = expand_alt_centric_interactions(
-                safe_features, y_all, alt_col=ALT_TARGET,
-                top_k=poly_cfg.get("alt_centric_k", 6),
-            )
-        else:
-            safe_features = expand_poly_interactions(
-                safe_features,
-                include_squares=poly_cfg["include_squares"],
-                limit=poly_cfg["limit"],
-            )
-
-    # Drop specific main-effect features (after poly expansion, so interactions
-    # involving them are still created — drops only the standalone term)
-    drop_features_str = getattr(args, "drop_features", "")
-    if drop_features_str:
-        to_drop = [f.strip() for f in drop_features_str.split(",") if f.strip()]
-        dropped = [f for f in to_drop if f in safe_features.columns]
-        if dropped:
-            safe_features = safe_features.drop(columns=dropped)
-            print(f"Dropped {len(dropped)} main-effect feature(s): {dropped}")
-        missing = [f for f in to_drop if f not in dropped]
-        if missing:
-            print(f"  WARNING: drop_features not found (already absent): {missing}")
-
-    X_for_pred = safe_features.copy()
-    used_feature_names = list(X_for_pred.columns)
-
-    # --- KNN prediction path (adaptive KNN + kernel Ridge + jackknife VI) ---
-    knn_mode = getattr(args, "knn_predict", False)
-    if knn_mode:
-        print("Using adaptive KNN prediction pipeline")
-        # Use full feature matrix — KNN needs all features including SVD/traj
-        # for distance computation and local Ridge fitting
-        _knn_features = target_base_features.copy()
-        # Add SVD factors if available (they're added to safe_features in the ALT block,
-        # but KNN may skip that block)
-        if imputer is not None and hasattr(imputer, 'svd_row_factors_') and imputer.svd_row_factors_ is not None:
-            svd_factors = imputer.svd_row_factors_
-            for col in svd_factors.columns:
-                if col not in _knn_features.columns:
-                    _knn_features[col] = svd_factors[col].values
-                    _knn_features[f"{col}_sq"] = svd_factors[col].values ** 2
-            import itertools as _it_knn
-            n_int = min(4, len(svd_factors.columns))
-            for ci_idx, cj_idx in _it_knn.combinations(range(n_int), 2):
-                ci = svd_factors.columns[ci_idx]; cj = svd_factors.columns[cj_idx]
-                key = f"{ci}x{cj}"
-                if key not in _knn_features.columns:
-                    _knn_features[key] = svd_factors[ci].values * svd_factors[cj].values
-        # Add trajectory features if available
-        if imputer is not None and hasattr(imputer, 'trajectory_features_') and imputer.trajectory_features_ is not None:
-            for col in imputer.trajectory_features_.columns:
-                if col not in _knn_features.columns:
-                    _knn_features[col] = imputer.trajectory_features_[col].values
-        _knn_feature_cols = [c for c in _knn_features.columns
-                            if c != ALT_TARGET and c != TARGET]  # exclude targets
-        _knn_X = _knn_features[_knn_feature_cols].values
-        print(f"  KNN features: {len(_knn_feature_cols)} (including SVD/traj)")
-        # Predict ALL models (train + inference) so training models also get predictions
-        _knn_pred_idx = np.arange(len(y_all))
-        knn_result = fit_and_predict_knn(
-            _knn_X,
-            y_all,
-            train_idx,
-            _knn_pred_idx,
-            cv_splits=target_cv_splits,
-            cv_repeats=args.cv_repeats_outer,
-            cv_seed=args.cv_seed,
-            dist_mult=getattr(args, "knn_dist_mult", KNN_DIST_MULT),
-            max_k=getattr(args, "knn_max_k", KNN_MAX_K),
-            min_k=getattr(args, "knn_min_k", KNN_MIN_K),
-            bw_pct=getattr(args, "knn_bw_pct", KNN_BW_PCT),
-        )
-        mu = knn_result["mu"]
-        std = knn_result["std"]
-        lower = knn_result["lower"]
-        upper = knn_result["upper"]
-        oof_preds = knn_result["oof_preds"]
-        oof_folds = knn_result["oof_folds"]
-        fitted = None
-        predictions_by_model = {"KNN": {"mu": mu, "std": std, "lower": lower, "upper": upper, "fitted": None, "model": None}}
-        best_spec = specs[0] if specs else None
-        eval_df = pd.DataFrame([{"model": "KNN", "rmse_mean": float(np.sqrt(np.nanmean((oof_preds - y_all[train_idx])**2))), "rmse_std": 0.0}])
-        eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
-        train_end = time.time()
-        print(f"train:     {mmss(train_end - preprocess_end)}")
-        cv_winner = "KNN"
-    else:
-        # --- Standard ALT-based prediction path ---
-        predictions_by_model = fit_and_predict_all_with_alt(
-            specs,
-            X_for_pred,
-            y_all,
-            train_idx,
-            pred_idx,
-            ALT_TARGET,
-            cv_n_jobs=args.cv_n_jobs,
-            model_n_jobs=args.model_n_jobs,
-            selector_cfg=TARGET_SELECTOR_CFG,
-            poly_cfg=poly_cfg,
-            cv_base_features=target_base_features,
-            cv_splits=target_cv_splits,
-            cv_repeats=args.cv_repeats_outer,
-            cv_seed=args.cv_seed,
-            oof_repeats=args.cv_repeats_inner,
-            sample_weight=sample_weights_all,
-        )
-        eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
-        train_end = time.time()
-        print(f"train:     {mmss(train_end - preprocess_end)}")
-
-    # If a blend or delta model won CV, handle final predictions accordingly
-    if not knn_mode:
-        cv_winner = eval_df.iloc[0]["model"]
-    model_names = list(predictions_by_model.keys())
-    if knn_mode:
-        # mu, std, lower, upper already set from KNN result
-        fitted = None
-    elif cv_winner.startswith("Blend") and len(predictions_by_model) >= 2:
-        # Compute weights
-        if cv_winner == "BlendWeighted":
-            rmses_arr = np.array([eval_df.loc[eval_df["model"] == m, "rmse_mean"].iloc[0]
-                                  for m in model_names if m in eval_df["model"].values])
-            inv_w = 1.0 / rmses_arr
-            weights = inv_w / inv_w.sum()
-        else:
-            weights = np.ones(len(model_names)) / len(model_names)
-        mu = sum(w * predictions_by_model[m]["mu"] for w, m in zip(weights, model_names))
-        std = np.max([predictions_by_model[m]["std"] for m in model_names], axis=0)
-        lower = mu - 1.96 * std
-        upper = mu + 1.96 * std
-        fitted = predictions_by_model[model_names[0]]["fitted"]
-        w_str = ", ".join(f"{m}={w:.2f}" for m, w in zip(model_names, weights))
-        print(f"{cv_winner} active: {w_str}")
-    else:
-        # Use best individual spec (or fallback for Delta_ winners)
-        use_name = best_spec.name
-        best = predictions_by_model[use_name]
-        mu = best["mu"]
-        std = best["std"]
-        lower = best["lower"]
-        upper = best["upper"]
-        fitted = best["fitted"]
-
-    # Tiered target model: fit per-tier models on Arena ELO directly
-    if getattr(args, "tiered_target", False):
-        n_target_tiers = getattr(args, "tiered_target_n_tiers", 4)
-        target_select = getattr(args, "tiered_target_select", "corr")
-        target_k = getattr(args, "tiered_target_k", 5)
-        target_model_type = getattr(args, "tiered_target_model", "ridge")
-        target_alpha = getattr(args, "tiered_target_alpha", 1.0)
-
-        # Use lmarena (real or imputed) for tier assignment
-        alt_for_tiers = safe_features[ALT_TARGET].values if ALT_TARGET in safe_features.columns else mu.copy()
-
-        # OOF tier assignment for training models (use oof_preds to avoid leakage)
-        tier_assign = np.full(len(mu), np.nan)
-        tier_assign[train_idx] = oof_preds  # OOF Arena predictions for tier splits
-        # For test models, use the global model's mu
-        test_mask = np.ones(len(mu), dtype=bool)
-        test_mask[train_idx] = False
-        tier_assign[test_mask] = mu[test_mask]
-
-        # Compute tier boundaries from training OOF predictions
-        train_scores = oof_preds[~np.isnan(oof_preds)]
-        sorted_train = np.sort(train_scores)[::-1]
-        tier_size = len(train_scores) // n_target_tiers
-        t_boundaries = []
-        for t in range(1, n_target_tiers):
-            t_boundaries.append(sorted_train[min(t * tier_size, len(sorted_train) - 1)])
-
-        def assign_target_tier(score):
-            for t, b in enumerate(t_boundaries):
-                if score >= b:
-                    return t
-            return n_target_tiers - 1
-
-        all_target_tiers = np.array([assign_target_tier(s) for s in tier_assign])
-
-        # Build raw feature matrix for tier models (all numeric, no SVD/traj junk)
-        tier_feat_cols = [c for c in X_for_pred.columns if not c.startswith("_svd_f")
-                         and not c.startswith("_traj")]
-        X_tier_raw = X_for_pred[tier_feat_cols].values
-
-        mu_tiered = mu.copy()
-        tier_target_info = []
-
-        for t in range(n_target_tiers):
-            tier_train = train_idx[all_target_tiers[train_idx] == t]
-            tier_all_mask = all_target_tiers == t
-            n_t_train = len(tier_train)
-
-            if n_t_train < 10:
-                tier_target_info.append(f"t{t}:n={n_t_train}(global)")
-                continue
-
-            tier_y = y_all[tier_train]
-            tier_k = min(target_k, n_t_train - 2, X_tier_raw.shape[1])
-            if tier_k < 1:
-                tier_target_info.append(f"t{t}:n={n_t_train}(skip)")
-                continue
-
-            # Feature selection within tier training data
-            Xtr_tier = X_tier_raw[tier_train]
-            if target_select == "mrmr":
-                feat_idx = _select_features_mrmr(Xtr_tier, tier_y, tier_k)
-            elif target_select == "forward":
-                feat_idx = _select_features_forward(Xtr_tier, tier_y, tier_k, alpha=target_alpha)
-            else:
-                feat_idx = _select_features_corr(Xtr_tier, tier_y, tier_k)
-
-            sc_t = StandardScaler()
-            Xtr_s = sc_t.fit_transform(Xtr_tier[:, feat_idx])
-            X_all_tier = X_tier_raw[tier_all_mask]
-            Xte_s = sc_t.transform(X_all_tier[:, feat_idx])
-
-            if target_model_type == "br":
-                m_t = BayesianRidge(compute_score=False)
-                m_t.fit(Xtr_s, tier_y)
-                tier_pred = m_t.predict(Xte_s)
-            else:
-                from sklearn.linear_model import Ridge as _Rdg_t
-                m_t = _Rdg_t(alpha=target_alpha)
-                m_t.fit(Xtr_s, tier_y)
-                tier_pred = m_t.predict(Xte_s)
-
-            mu_tiered[tier_all_mask] = tier_pred
-            tier_range = tier_y
-            tier_target_info.append(
-                f"t{t}:n={n_t_train},[{tier_range.min():.0f}-{tier_range.max():.0f}]"
-            )
-
-        mu = mu_tiered
-        lower = mu - 1.96 * std
-        upper = mu + 1.96 * std
-        print(f"  Tiered target ({n_target_tiers}t, {target_select}-{target_k}, {target_model_type}): "
-              f"{', '.join(tier_target_info)}")
-
-    # Adversarial imputation: sample K lmarena values, re-predict, average
-    adversarial_k = getattr(args, "adversarial_k", 0)
-    if adversarial_k > 0 and alt_result is not None:
-        alt_pred_std = alt_result.get("pred_std", pd.Series(dtype=float))
-        # Use committee u_total if available, else pred_std
-        if alt_committee_result is not None:
-            alt_u = alt_committee_result["u_total"].values
-        elif alt_pred_std.notna().any():
-            alt_u = alt_pred_std.values
-        else:
-            alt_u = None
-        if alt_u is not None:
-            alt_known_mask = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna().values
-            imputed_idx = np.where(~alt_known_mask)[0]
-            if len(imputed_idx) > 0:
-                # Find the ALT column index in X_for_pred
-                alt_col_idx = list(X_for_pred.columns).index(ALT_TARGET) if ALT_TARGET in X_for_pred.columns else -1
-                if alt_col_idx >= 0:
-                    rng = np.random.RandomState(42)
-                    sampled_preds = []
-                    X_vals = X_for_pred.values.copy()
-                    base_alt = X_vals[:, alt_col_idx].copy()
-                    # Get the model that produced mu
-                    _pred_model = None
-                    for _mn, _mr in predictions_by_model.items():
-                        _mo = _mr.get("model")
-                        if _mo is not None and hasattr(_mo, "predict"):
-                            _pred_model = _mo
-                            break
-                    if _pred_model is not None:
-                        for k in range(adversarial_k):
-                            X_sample = X_vals.copy()
-                            # Sample lmarena for imputed models only
-                            noise = rng.randn(len(X_vals)) * alt_u
-                            X_sample[:, alt_col_idx] = base_alt + noise
-                            # Keep real lmarena unchanged
-                            X_sample[alt_known_mask, alt_col_idx] = base_alt[alt_known_mask]
-                            # Update interaction columns involving ALT
-                            for ci, cname in enumerate(X_for_pred.columns):
-                                if "*" in cname and ALT_TARGET in cname:
-                                    parts = cname.split("*")
-                                    partner = parts[0] if parts[1] == ALT_TARGET else parts[1]
-                                    if partner in X_for_pred.columns:
-                                        pi = list(X_for_pred.columns).index(partner)
-                                        X_sample[:, ci] = X_sample[:, alt_col_idx] * X_sample[:, pi]
-                            sampled_preds.append(_pred_model.predict(X_sample))
-                        sampled_arr = np.array(sampled_preds)  # (K, n_models)
-                        mu_adversarial = np.mean(sampled_arr, axis=0)
-                        spread = np.std(sampled_arr, axis=0)
-                        # Only override imputed models
-                        mu[imputed_idx] = mu_adversarial[imputed_idx]
-                        # Widen intervals for imputed models based on spread
-                        lower[imputed_idx] = mu[imputed_idx] - 1.96 * np.sqrt(std[imputed_idx]**2 + spread[imputed_idx]**2)
-                        upper[imputed_idx] = mu[imputed_idx] + 1.96 * np.sqrt(std[imputed_idx]**2 + spread[imputed_idx]**2)
-                        print(f"Adversarial imputation: K={adversarial_k}, mean_spread={spread[imputed_idx].mean():.1f}, "
-                              f"max_spread={spread[imputed_idx].max():.1f}")
-
-    # (A) Dual-model: fit a backup model WITHOUT lmarena, use it for imputed models
-    if getattr(args, "dual_model", False):
-        alt_known_mask_a = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna().values
-        imputed_idx_a = np.where(~alt_known_mask_a)[0]
-        if len(imputed_idx_a) > 0:
-            # Build feature set without lmarena and any lmarena interactions
-            no_alt_cols = [c for c in X_for_pred.columns
-                          if ALT_TARGET not in c]
-            if no_alt_cols:
-                X_no_alt = X_for_pred[no_alt_cols].values
-                y_train_a = y_all[train_idx]
-                X_train_no_alt = X_no_alt[train_idx]
-                # Fit ARD on non-lmarena features
-                from sklearn.linear_model import ARDRegression as _ARD_A
-                backup_model = _ARD_A(threshold_lambda=1e4, n_iter=500)
-                backup_model.fit(X_train_no_alt, y_train_a)
-                mu_backup = backup_model.predict(X_no_alt)
-                # For imputed models: use backup predictions
-                mu_full = mu.copy()
-                mu[imputed_idx_a] = mu_backup[imputed_idx_a]
-                lower[imputed_idx_a] = mu[imputed_idx_a] - 1.96 * std[imputed_idx_a]
-                upper[imputed_idx_a] = mu[imputed_idx_a] + 1.96 * std[imputed_idx_a]
-                print(f"Dual-model: {len(no_alt_cols)} features (no lmarena), "
-                      f"{len(imputed_idx_a)} models use backup. "
-                      f"Example shift: {mu_full[imputed_idx_a].mean():.0f} -> {mu[imputed_idx_a].mean():.0f}")
-
-    # (B) Downstream-optimal latent: learn z = f(benchmarks) that minimizes Arena error
-    #     weakly anchored to real lmarena. Replace lmarena in predictions.
-    if getattr(args, "optimal_latent", False):
-        alt_known_mask_b = pd.to_numeric(df[ALT_TARGET], errors="coerce").notna().values
-        imputed_idx_b = np.where(~alt_known_mask_b)[0]
-        if len(imputed_idx_b) > 0:
-            # For training models with known lmarena AND known Arena:
-            # Fit Ridge: benchmarks -> Arena, but regularized toward lmarena
-            bench_cols_b = [c for c in safe_features.columns
-                           if c != ALT_TARGET and not c.startswith("_svd_f")
-                           and not c.startswith("_traj")]
-            X_bench_b = safe_features[bench_cols_b].values
-            from sklearn.preprocessing import StandardScaler as _SSb
-            sc_b = _SSb()
-            X_bench_scaled = sc_b.fit_transform(X_bench_b)
-            # Train: minimize ||Arena - X@w||^2 + lambda * ||X@w - lmarena||^2
-            # This is equivalent to Ridge on augmented target
-            lam_b = float(getattr(args, "optimal_latent_lambda", 0.5))
-            both_known = alt_known_mask_b & (~y_missing_mask)
-            X_tr_b = X_bench_scaled[both_known]
-            y_arena_tr = y_all[both_known]
-            y_lmarena_tr = alt_known.values[both_known]
-            # Augmented target: [y_arena; sqrt(lambda) * y_lmarena]
-            # Augmented X: [X; sqrt(lambda) * X]
-            X_aug = np.vstack([X_tr_b, np.sqrt(lam_b) * X_tr_b])
-            y_aug = np.concatenate([y_arena_tr, np.sqrt(lam_b) * y_lmarena_tr])
-            from sklearn.linear_model import Ridge as _Ridge_B
-            z_model = _Ridge_B(alpha=10.0)
-            z_model.fit(X_aug, y_aug)
-            # Predict z for all models
-            z_all = z_model.predict(X_bench_scaled)
-            # For imputed models, use z as the prediction directly
-            mu[imputed_idx_b] = z_all[imputed_idx_b]
-            lower[imputed_idx_b] = mu[imputed_idx_b] - 1.96 * std[imputed_idx_b]
-            upper[imputed_idx_b] = mu[imputed_idx_b] + 1.96 * std[imputed_idx_b]
-            # Check OOF for known models
-            z_known = z_all[both_known]
-            z_rmse = float(np.sqrt(np.mean((z_known - y_arena_tr)**2)))
-            print(f"Optimal latent: lambda={lam_b}, train RMSE={z_rmse:.1f}, "
-                  f"{len(imputed_idx_b)} models use latent prediction")
-
-    # Save OOF predictions from model selection CV (moved up — needed for conformal)
-    train_names = imputed_df[ID_COL].values[~y_missing_mask]
-    oof_df = pd.DataFrame({
-        "model_name": train_names,
-        "actual_score": y_all[~y_missing_mask],
-        "oof_predicted_score": oof_preds,
-        "fold": oof_folds,
-    })
-    oof_df = oof_df.dropna(subset=["oof_predicted_score"])
-
-    # --- Top-tier residual correction (second-stage) ---
-    if TOP_CORRECTION_ENABLED and len(oof_df) > TOP_CORRECTION_N:
-        _top_n = TOP_CORRECTION_N
-        # Sort by actual score, get top-N indices
-        top_mask = oof_df["actual_score"].rank(ascending=False) <= _top_n
-        top_idx = oof_df.index[top_mask]
-
-        # Get features for these models from the safe_features matrix
-        top_model_names = oof_df.loc[top_idx, "model_name"].values
-        train_names_list = list(train_names)
-        top_positions = [train_names_list.index(n) for n in top_model_names if n in train_names_list]
-
-        if len(top_positions) >= 10:
-            from sklearn.linear_model import RidgeCV
-            top_X = safe_features.iloc[top_positions].values
-            top_residuals = (oof_df.loc[top_idx, "actual_score"].values -
-                             oof_df.loc[top_idx, "oof_predicted_score"].values)
-
-            # LOO correction to avoid leakage
-            corrections = np.zeros(len(top_positions))
-            for i in range(len(top_positions)):
-                loo_mask = np.ones(len(top_positions), dtype=bool)
-                loo_mask[i] = False
-                ridge = RidgeCV(alphas=np.logspace(-2, 4, 20))
-                ridge.fit(top_X[loo_mask], top_residuals[loo_mask])
-                corrections[i] = ridge.predict(top_X[i:i+1])[0]
-
-            # Apply corrections to OOF predictions
-            for i, pos in enumerate(top_positions):
-                model_name = train_names_list[pos]
-                oof_mask = oof_df["model_name"] == model_name
-                oof_df.loc[oof_mask, "oof_predicted_score"] += corrections[i]
-
-            corrected_rmse = float(np.sqrt(((oof_df["oof_predicted_score"] - oof_df["actual_score"]) ** 2).mean()))
-            top_corrected = oof_df[top_mask]
-            top_rmse = float(np.sqrt(((top_corrected["oof_predicted_score"] - top_corrected["actual_score"]) ** 2).mean()))
-            print(f"Top-{_top_n} correction: overall RMSE -> {corrected_rmse:.2f}, top-{_top_n} RMSE -> {top_rmse:.2f}")
-
-            # Also update the oof_preds array for conformal
-            for i, pos in enumerate(top_positions):
-                oof_preds[pos] += corrections[i]
-
-    oof_df.to_csv(os.path.join(out_dir, "oof_predictions.csv"), index=False)
-    print(f"OOF predictions: {len(oof_df)} rows saved")
-
-    # --- Normalized conformal prediction intervals ---
+    # =========================================================================
+    # 9. Conformal intervals
+    # =========================================================================
     conformal_start = time.time()
 
-    # Build feature_gains aligned to feature_cols (pre-imputation columns)
-    if ranking_df is not None:
-        gain_map = dict(zip(ranking_df["feature"], ranking_df["mean_gain"]))
-        feature_gains = np.array([gain_map.get(c, 0.0) for c in feature_cols], dtype=float)
-    else:
-        # Uniform gains when feature selection is disabled
-        feature_gains = np.ones(len(feature_cols), dtype=float)
+    pre_imputation_missing = df[feature_cols].isna().values
 
-    # Pre-imputation missing mask (aligned to feature_cols)
-    pre_imputation_missing = df[feature_cols].isna().values  # shape (n_all, n_raw_features)
-
-    # Filter to valid OOF predictions
     oof_valid_mask = ~np.isnan(oof_preds)
     oof_preds_valid = oof_preds[oof_valid_mask]
     y_train_valid = y_all[~y_missing_mask][oof_valid_mask]
-    # Map valid OOF positions back to global indices
     train_idx_all = np.where(~y_missing_mask)[0]
     train_idx_valid = train_idx_all[oof_valid_mask]
 
@@ -7909,82 +1577,31 @@ def main():
         pre_imputation_missing=pre_imputation_missing,
         feature_names=list(feature_cols),
         target_coverage=0.95,
-        top_threshold=TOP_TIER_THRESHOLD if TOP_TIER_THRESHOLD > 0 else 1400.0,
+        top_threshold=1400.0,
         min_group_size=10,
     )
 
-    # Overwrite intervals with heteroscedastic conformal intervals
+    # Overwrite intervals with conformal calibration
     std = conformal["std"]
     lower = conformal["lower"]
     upper = conformal["upper"]
 
-    # Propagated variance inflation (Exp 3): inflate intervals for models
-    # with uncertain imputed lmarena, using analytic sensitivity dy/dlmarena
-    if getattr(args, "propagate_alt_variance", False) and alt_committee_result is not None:
-        u_alt = alt_committee_result["u_total"].values  # per-model ALT uncertainty
-        # Compute sensitivity: g_x = dy/d(lmarena) from the linear model coefficients
-        # = coeff(lmarena) + sum(coeff(lmarena*partner_j) * partner_j)
-        # Use first model with coef_ (ARDRegression from blend, or standalone)
-        best_model_obj = None
-        for _mn, _mr in predictions_by_model.items():
-            _mo = _mr.get("model")
-            if _mo is not None and hasattr(_mo, "coef_"):
-                best_model_obj = _mo
-                break
-        if best_model_obj is not None:
-            coefs = best_model_obj.coef_
-            feat_names = used_feature_names
-            if hasattr(best_model_obj, '_poly_feature_names'):
-                feat_names = best_model_obj._poly_feature_names
-            elif len(coefs) != len(feat_names):
-                # Interaction-expanded names
-                feat_names = list(X_for_pred.columns) if len(coefs) == X_for_pred.shape[1] else feat_names
-            alt_key = ALT_TARGET
-            # Base lmarena coefficient
-            g_x = np.zeros(len(mu))
-            for i, fname in enumerate(feat_names):
-                if i >= len(coefs):
-                    break
-                if fname == alt_key:
-                    g_x += coefs[i]
-                elif alt_key in fname and "*" in fname:
-                    parts = fname.split("*")
-                    if alt_key in parts:
-                        partner = parts[0] if parts[1] == alt_key else parts[1]
-                        if partner in X_for_pred.columns:
-                            g_x += coefs[i] * X_for_pred[partner].values
-            # Inflate: v_total = v_conformal + g_x² × u_alt²
-            v_conformal = conformal["sigma_hat"] ** 2
-            v_alt_prop = (g_x ** 2) * (u_alt ** 2)
-            sigma_inflated = np.sqrt(v_conformal + v_alt_prop)
-            # Only inflate for imputed models (real lmarena has u_alt ≈ 0)
-            alt_known = pd.to_numeric(df[ALT_TARGET], errors="coerce")
-            imputed_mask = alt_known.isna().values
-            n_inflated = int(imputed_mask.sum())
-            avg_inflation = float(np.mean(sigma_inflated[imputed_mask] / (conformal["sigma_hat"][imputed_mask] + 1e-12))) if n_inflated else 1.0
-            lower = mu - sigma_inflated
-            upper = mu + sigma_inflated
-            std = sigma_inflated / 1.96
-            conformal["sigma_hat"] = sigma_inflated
-            print(f"  Propagated ALT variance: inflated {n_inflated} models, avg inflation={avg_inflation:.2f}x")
-
     # Fit t-distribution df from final calibrated OOF residuals
-    # Use the final sigma_hat (not cross-fitted OOF sigma) for stable estimation
     q_hat = conformal["q_hat"]
     sigma_hat_arr = conformal["sigma_hat"]
     cal_sigma_final = q_hat * sigma_hat_arr[train_idx_valid]
     oof_residuals = y_all[train_idx_valid] - oof_preds_valid
     oof_valid = ~np.isnan(oof_residuals)
     z_final = oof_residuals[oof_valid] / np.where(cal_sigma_final[oof_valid] < 1e-12, 1e-12, cal_sigma_final[oof_valid])
+    t_df = None
     try:
         from scipy.stats import t as t_dist  # type: ignore
-        t_df, _t_loc, _t_scale = t_dist.fit(z_final)
-        t_df = float(np.clip(t_df, 3.0, 200.0))  # floor at 3 (variance exists for df>2)
-        # Recompute std as t-distribution scale so that prob_above_threshold is calibrated
+        t_df_fit, _t_loc, _t_scale = t_dist.fit(z_final)
+        t_df = float(np.clip(t_df_fit, 3.0, 200.0))
         t_crit = float(t_dist.ppf(0.975, t_df))
         std = q_hat * sigma_hat_arr / t_crit
     except Exception:
-        t_df = None  # Gaussian fallback
+        t_df = None
 
     conformal_end = time.time()
     print(f"conformal: {mmss(conformal_end - conformal_start)}")
@@ -7992,15 +1609,19 @@ def main():
     print(f"  q_hat={conformal['q_hat']:.3f}  sigma_floor={conformal['sigma_floor']:.3f}  "
           f"sigma_cv={conformal['sigma_cv']:.1%}  oof_coverage={conformal['oof_coverage']:.1%}  {t_df_str}")
 
-    # Compute probabilities with t-distribution for better tail calibration
-    max_observed = float(np.nanmax(y_all[train_idx])) # Use y_train equivalent
+    # =========================================================================
+    # 10. Compute probabilities
+    # =========================================================================
+    max_observed = float(np.nanmax(y_all[train_idx]))
     num_one_prob = prob_above_threshold(mu, std, threshold=max_observed, t_df=t_df)
-
-    # Probability of exceeding threshold by margin (only for models without actual scores)
     top_by_margin_prob = prob_above_threshold(mu, std, threshold=max_observed + args.margin, t_df=t_df)
-    # Set to NaN for models that have actual scores (training rows)
     top_by_margin_prob[train_idx] = np.nan
 
+    # =========================================================================
+    # 11. Save outputs
+    # =========================================================================
+
+    # -- predictions_best_model.csv --
     pred_df = pd.DataFrame({
         ID_COL: imputed_df[ID_COL].values,
         "predicted_score": mu,
@@ -8011,11 +1632,27 @@ def main():
         "num_one_prob": num_one_prob,
         "top_by_margin_prob": top_by_margin_prob,
     })
-    # Sort by predicted_score descending (highest on top)
     pred_df = pred_df.sort_values("predicted_score", ascending=False)
     pred_df.to_csv(os.path.join(out_dir, "predictions_best_model.csv"), index=False)
 
-    # Save conformal diagnostics (1 row)
+    # -- oof_predictions.csv --
+    train_names = imputed_df[ID_COL].values[~y_missing_mask]
+    oof_df = pd.DataFrame({
+        "model_name": train_names,
+        "actual_score": y_all[~y_missing_mask],
+        "oof_predicted_score": oof_preds,
+        "fold": oof_folds,
+    })
+    oof_df = oof_df.dropna(subset=["oof_predicted_score"])
+    oof_df.to_csv(os.path.join(out_dir, "oof_predictions.csv"), index=False)
+    print(f"OOF predictions: {len(oof_df)} rows saved")
+
+    # -- model_eval_rmse.csv --
+    oof_rmse_val = float(np.sqrt(np.nanmean((oof_preds[oof_valid_mask] - y_all[train_idx][oof_valid_mask]) ** 2)))
+    eval_df = pd.DataFrame([{"model": "KNN", "rmse_mean": oof_rmse_val, "rmse_std": 0.0}])
+    eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
+
+    # -- conformal_diagnostics.csv --
     diag_row = {
         "q_hat": conformal["q_hat"],
         "sigma_floor": conformal["sigma_floor"],
@@ -8027,153 +1664,116 @@ def main():
         diag_row[f"scale_model_coef_{k}"] = v
     pd.DataFrame([diag_row]).to_csv(os.path.join(out_dir, "conformal_diagnostics.csv"), index=False)
 
-    # Save per-model uncertainty features
+    # -- conformal_uncertainty_features.csv --
     uf = conformal["uncertainty_features"].copy()
     uf.insert(0, ID_COL, imputed_df[ID_COL].values)
     uf["is_train"] = False
     uf.loc[train_idx, "is_train"] = True
     uf.to_csv(os.path.join(out_dir, "conformal_uncertainty_features.csv"), index=False)
 
-    rows = []
-    for mname, bundle in predictions_by_model.items():
-        for i, mdl in enumerate(imputed_df[ID_COL].values):
-            rows.append({
-                "model": mname,
-                ID_COL: mdl,
-                "mu": float(bundle["mu"][i]),
-                "lower": float(bundle["lower"][i]),
-                "upper": float(bundle["upper"][i]),
-                "std": float(bundle["std"][i]),
-            })
-    pd.DataFrame(rows).to_csv(os.path.join(out_dir, "predictions_all_models_long.csv"), index=False)
+    # -- run_config.json --
+    run_config = {
+        "csv_path": args.csv_path,
+        "passes": int(args.passes),
+        "alpha": float(args.alpha),
+        "imputer_type": args.imputer_type,
+        "use_feature_selector": bool(args.use_feature_selector),
+        "selector_tau": float(args.selector_tau),
+        "selector_k_max": int(args.selector_k_max),
+        "imputer_n_jobs": int(args.imputer_n_jobs),
+        "categorical_threshold": int(args.categorical_threshold),
+        "tolerance_percentile": float(args.tolerance_percentile),
+        "tolerance_relaxation_factor": float(args.tolerance_relaxation_factor),
+        "tolerance_multiplier": float(args.tolerance_multiplier),
+        "tier_quantiles": tier_quantiles or [],
+        "cv_repeats_outer": int(args.cv_repeats_outer),
+        "cv_seed": int(args.cv_seed),
+        "outer_cv": int(args.outer_cv),
+        "max_workers": int(args.max_workers),
+        "cv_splits_path": args.cv_splits_path,
+        "group_cv": bool(args.group_cv),
+        "eb_parent": bool(getattr(args, 'eb_parent', False)),
+        "coherence_lambda": float(getattr(args, 'coherence_lambda', 1.0)),
+        "coherence_shape": str(getattr(args, 'coherence_shape', 'exp')),
+        "confidence_threshold": float(args.confidence_threshold),
+        "knn_predict": True,
+        "knn_dist_mult": float(args.knn_dist_mult),
+        "knn_max_k": int(args.knn_max_k),
+        "knn_min_k": int(args.knn_min_k),
+        "knn_bw_pct": float(args.knn_bw_pct),
+        "svd_in_features": bool(args.svd_in_features),
+        "used_cache": bool(_cache_hit),
+        "cache_key": imp_key,
+        "output_dir": out_dir,
+    }
+    with open(os.path.join(out_dir, "run_config.json"), "w", encoding="utf-8") as fh:
+        json.dump(run_config, fh, indent=2)
 
-    # This call now works because used_feature_names has the same length as the model's coefficients
-    summary = summarize_model(fitted, used_feature_names)
-    summary.to_csv(os.path.join(out_dir, "best_model_feature_importance.csv"), index=False)
+    # -- metadata.json --
+    from sklearn.metrics import mean_squared_error  # type: ignore
+    oof_rmse = float(np.sqrt(mean_squared_error(y_train_valid, oof_preds_valid)))
+    rng = np.random.RandomState(SEED)
+    residuals_sq = (y_train_valid - oof_preds_valid) ** 2
+    n_boot = len(residuals_sq)
+    boot_rmses = np.array([np.sqrt(np.mean(residuals_sq[rng.randint(0, n_boot, size=n_boot)])) for _ in range(2000)])
+    ci_lo, ci_hi = np.percentile(boot_rmses, [2.5, 97.5])
 
-    # Compute variance contributions for filtering dependency graph
-    X_train_arr = X_for_pred.values[train_idx]
-    var_contrib_df = compute_variance_contributions(fitted, X_train_arr, used_feature_names)
-    var_contrib_df.to_csv(os.path.join(out_dir, "best_model_variance_contributions.csv"), index=False)
+    meta = {
+        "timestamp": stamp,
+        "timezone": "America/Los_Angeles",
+        "csv_path": os.path.abspath(args.csv_path),
+        "n_rows": int(df.shape[0]),
+        "n_features_numeric": int(len(numeric_cols)),
+        "n_knn_features": len(knn_feature_cols),
+        "target": TARGET,
+        "best_model": "KNN",
+        "oof_rmse": round(oof_rmse, 4),
+        "oof_rmse_ci_lo": round(ci_lo, 4),
+        "oof_rmse_ci_hi": round(ci_hi, 4),
+        "cv_repeats_outer": int(args.cv_repeats_outer),
+        "notes": [
+            "Safety-filled any residual NaNs/Infs in features post-imputation with column medians, then 0 if still NaN.",
+            "num_one_prob compares to current max observed lmarena_Score among training rows.",
+            f"top_by_margin_prob = P(score > max_observed + {args.margin}), only for models without actual scores.",
+            "predictions_best_model.csv is sorted by predicted_score descending (highest on top).",
+        ]
+    }
+    with open(os.path.join(out_dir, "metadata.json"), "w") as f:
+        json.dump(meta, f, indent=2)
 
-    # Filter to features with >= 1% grouped variance contribution
-    importance_threshold = 0.01
-    important_features = filter_features_by_importance(
-        used_feature_names, var_contrib_df, threshold=importance_threshold
-    )
-    print(f"Dependency graph: {len(important_features)}/{len(used_feature_names)} features above {importance_threshold:.0%} variance threshold")
+    # =========================================================================
+    # 12. Column dependency graph
+    # =========================================================================
+    dependency_graph: Dict[str, set] = defaultdict(set)
 
-    # ---------------- Column dependency reporting ----------------
-    dependency_graph: Dict[str, set[str]] = defaultdict(set)
-
-    def register(source: str, targets: List[str], filter_by_importance: bool = False) -> None:
+    def register(source: str, targets: List[str]) -> None:
         if not source:
             return
         dep_set = dependency_graph.setdefault(source, set())
         for tgt in targets:
             if tgt and tgt != source:
-                # Optionally filter by importance
-                if filter_by_importance and tgt not in important_features:
-                    continue
                 dep_set.add(tgt)
 
     root_node = "__target_model__"
-    # Register only important features for the target model
-    register(root_node, used_feature_names, filter_by_importance=True)
-
-    # Track filtered features for summary
-    filtered_final_features = sorted(dependency_graph.get(root_node, set()))
-
-    used_feature_set = set(used_feature_names)
-    base_feature_set = set(feature_cols)
-    alt_selected_features = []
-    if alt_result is not None:
-        raw = alt_result.get("selected_features")
-        if isinstance(raw, (list, tuple)):
-            alt_selected_features = [str(r) for r in raw]
+    register(root_node, knn_feature_cols)
 
     # Register feature components (interactions -> base features)
-    # Also register base components directly as deps of __target_model__ so they're 1 hop away
     for feat in list(dependency_graph.get(root_node, [])):
         dependency_graph.setdefault(feat, set())
         components = _feature_components(feat)
         if components != [feat]:
             register(feat, components)
-            # Also add base components directly to root so both bases are 1 hop
             for comp in components:
                 dependency_graph[root_node].add(comp)
 
-    # ALT model variance contributions and filtering
-    # With the post-PCA interaction architecture, the model is a plain BayesianRidge
-    # whose features are [PC1..PCn | interaction1..interactionM].  We project PCA
-    # contributions back to original base features and report interactions directly.
-    alt_important_features = set(alt_selected_features)  # Default: all
-    if ALT_TARGET in df.columns and alt_result is not None:
-        dependency_graph.setdefault(ALT_TARGET, set())
-        alt_model = alt_result.get("fitted_model")
-        if alt_model is not None and alt_selected_features:
-            try:
-                alt_known_mask = df[ALT_TARGET].notna()
-                # Reconstruct combined feature matrix using stored transforms
-                alt_base_features = alt_result.get("base_features", alt_selected_features)
-                # Get the raw base feature data (may need poly expansion)
-                missing_base = [c for c in alt_selected_features if c not in imputed_df.columns]
-                if missing_base and alt_base_features:
-                    X_alt_base = imputed_df[alt_base_features].loc[alt_known_mask]
-                    saved_core = alt_result.get("poly_core")
-                    X_alt_raw = expand_poly_interactions(
-                        X_alt_base,
-                        include_squares=alt_result.get("poly_include_squares", True),
-                        limit=alt_result.get("poly_limit", 0),
-                        preset_core=saved_core,
-                    )
-                else:
-                    valid_base = [c for c in alt_selected_features if c in imputed_df.columns]
-                    X_alt_raw = imputed_df.loc[alt_known_mask, valid_base]
-
-                # Use compute_variance_contributions with alt_info for PCA projection
-                # X is not directly used when alt_info is provided (projection uses PCA internals)
-                int_names = alt_result.get("interaction_names", [])
-                all_report_names = list(X_alt_raw.columns) + list(int_names)
-                alt_var_contrib = compute_variance_contributions(
-                    alt_model, X_alt_raw.values, list(X_alt_raw.columns),
-                    alt_info=alt_result,
-                )
-                alt_var_contrib.to_csv(os.path.join(out_dir, "alt_model_variance_contributions.csv"), index=False)
-                alt_important_features = filter_features_by_importance(
-                    all_report_names, alt_var_contrib, threshold=importance_threshold
-                )
-                print(f"ALT dependency graph: {len(alt_important_features)}/{len(all_report_names)} features above {importance_threshold:.0%} variance threshold")
-            except Exception as e:
-                print(f"Warning: Could not compute ALT variance contributions: {e}")
-                import traceback; traceback.print_exc()
-                # Keep default: all features are important
-
-        # Register only important ALT features (base features + interactions)
-        int_names = alt_result.get("interaction_names", [])
-        all_alt_features = list(alt_selected_features) + list(int_names)
-        important_alt_list = [f for f in all_alt_features if f in alt_important_features]
-        register(ALT_TARGET, important_alt_list)
-        for feat in important_alt_list:
-            parts = _feature_components(feat)
-            if parts != [feat]:
-                register(feat, parts)
-
     def _col_has_missing(col: str) -> bool:
-        # Only treat columns with observed missing values as imputation targets.
-        # Unknown columns default to fully observed (no missing).
         return missing_count_by_col.get(col, 0) > 0
 
     imputation_targets = {
         col for col in imputer_predictors_map.keys()
         if _col_has_missing(col)
     }
-    # Register imputer dependencies, filtered by 1% variance contribution.
-    # Also exclude same-suite predictor links (e.g. livebench → livebench)
-    # which are selected by the imputer but produce circular dependencies
-    # when an entire suite is missing for a model. The availability filter
-    # already zeros these out at imputation time, so the graph should reflect
-    # what actually contributes.
+
     _get_suite = None
     try:
         from column_imputer import get_benchmark_suite
@@ -8181,51 +1781,36 @@ def main():
     except Exception:
         pass
 
-    imputer_total_deps = 0
-    imputer_filtered_deps = 0
-    imputer_same_suite_dropped = 0
     for col, preds in imputer_predictors_map.items():
         if not _col_has_missing(col):
             continue
         dependency_graph.setdefault(col, set())
-        # Use importance-filtered predictors if available, else all
         important_preds = imputer_important_predictors.get(col)
         if important_preds is not None:
             filtered_preds = [p for p in (preds or []) if p in important_preds]
         else:
             filtered_preds = list(preds or [])
-        imputer_total_deps += len(preds or [])
-
-        # Drop same-suite links from the graph
+        # Drop same-suite links
         if _get_suite is not None:
             col_suite = _get_suite(col)
-            clean_preds = []
-            for p in filtered_preds:
-                if col_suite != '_other' and _get_suite(p) == col_suite:
-                    imputer_same_suite_dropped += 1
-                else:
-                    clean_preds.append(p)
-            filtered_preds = clean_preds
-
-        imputer_filtered_deps += len(filtered_preds)
+            filtered_preds = [
+                p for p in filtered_preds
+                if col_suite == '_other' or _get_suite(p) != col_suite
+            ]
         register(col, filtered_preds)
-    if imputer_total_deps > 0:
-        print(f"Imputer dependency graph: {imputer_filtered_deps}/{imputer_total_deps} predictor links kept (>= 1% contribution)")
-        if imputer_same_suite_dropped > 0:
-            print(f"  Dropped {imputer_same_suite_dropped} same-suite links from dependency graph")
 
-    # Ensure every dependency node exists in the graph
+    # Ensure every dependency node exists
     for deps in list(dependency_graph.values()):
         for dep in deps:
             dependency_graph.setdefault(dep, set())
-
+    base_feature_set = set(feature_cols)
     for col in base_feature_set:
         dependency_graph.setdefault(col, set())
 
+    _transform_suffix = re.compile(r"(.+)_([A-Za-z0-9]+)~$")
+
     def _is_missingness_flag_name(col: str) -> bool:
         return str(col).endswith("__was_missing")
-
-    _transform_suffix = re.compile(r"(.+)_([A-Za-z0-9]+)~$")
 
     def _transform_base_name(col: str) -> Optional[str]:
         if _is_missingness_flag_name(col):
@@ -8253,12 +1838,11 @@ def main():
                 queue.append((dep, depth + 1))
 
     reachable_nodes = set(reachable_depth.keys())
-    transforms_used_by_base: Dict[str, set[str]] = defaultdict(set)
+    transforms_used_by_base: Dict[str, set] = defaultdict(set)
     for tcol, base in transform_base_map.items():
         if tcol in reachable_nodes and base in base_feature_set and not _is_missingness_flag_name(base):
             transforms_used_by_base[base].add(tcol)
 
-    transform_used_cols = sorted([base for base, used in transforms_used_by_base.items() if base not in reachable_depth and used])
     contributing_cols = sorted([c for c in base_feature_set if c in reachable_depth])
     dead_weight_cols = sorted([c for c in base_feature_set if c not in reachable_depth and c not in transforms_used_by_base])
 
@@ -8271,16 +1855,11 @@ def main():
         json.dump({node: sorted(deps) for node, deps in dependency_graph.items()}, fh, indent=2)
 
     dep_summary_payload = {
-        "important_features": filtered_final_features,  # Features with >= 1% variance contribution
-        "all_model_features": used_feature_names,  # All features used by model (before filtering)
-        "alt_model_inputs": alt_selected_features,
+        "all_model_features": knn_feature_cols,
         "contributing_columns": contributing_cols,
-        "transform_used_columns": transform_used_cols,
         "dead_weight_columns": dead_weight_cols,
         "total_base_columns": len(feature_cols),
-        "important_count": len(filtered_final_features),
         "contributing_count": len(contributing_cols),
-        "transform_used_count": len(transform_used_cols),
         "dead_weight_count": len(dead_weight_cols),
     }
     with open(dep_summary_path, "w", encoding="utf-8") as fh:
@@ -8294,10 +1873,9 @@ def main():
         })
     pd.DataFrame(degrees_rows).to_csv(degrees_path, index=False)
 
-    alt_selected_set = set(alt_selected_features)
+    used_feature_set = set(knn_feature_cols)
     rows = []
-    all_nodes = sorted(dependency_graph.keys())
-    for col in all_nodes:
+    for col in sorted(dependency_graph.keys()):
         deps_sorted = sorted(dependency_graph[col])
         rows.append({
             "column": col,
@@ -8305,12 +1883,8 @@ def main():
             "min_hops_from_target": reachable_depth.get(col, ""),
             "direct_dependencies": ";".join(deps_sorted),
             "is_final_feature": col in used_feature_set,
-            "is_alt_target_column": col == ALT_TARGET,
-            "is_alt_model_input": col in alt_selected_set,
             "is_imputation_target": col in imputation_targets,
             "is_base_feature": col in base_feature_set,
-            "is_transform_used_base": col in transform_used_cols,
-            "used_transform_columns": ";".join(sorted(transforms_used_by_base.get(col, []))),
         })
     pd.DataFrame(rows).to_csv(dep_table_path, index=False)
     print("column dependency outputs:")
@@ -8319,68 +1893,15 @@ def main():
     print(f"  table:   {dep_table_path}")
     print(f"  degrees: {degrees_path}")
 
-    oof_rmse = float(np.sqrt(mean_squared_error(y_train_valid, oof_preds_valid)))
-    rng = np.random.RandomState(SEED)
-    residuals_sq = (y_train_valid - oof_preds_valid) ** 2
-    n_boot = len(residuals_sq)
-    boot_rmses = np.array([np.sqrt(np.mean(residuals_sq[rng.randint(0, n_boot, size=n_boot)])) for _ in range(2000)])
-    ci_lo, ci_hi = np.percentile(boot_rmses, [2.5, 97.5])
-
-    meta = {
-        "timestamp": stamp,
-        "timezone": "America/Los_Angeles",
-        "csv_path": os.path.abspath(args.csv_path),
-        "n_rows": int(df.shape[0]),
-        "n_features_numeric": int(len(numeric_cols)),
-        "target": TARGET,
-        "alt_target": ALT_TARGET,
-        "best_model": best_spec.name,
-        "oof_rmse": round(oof_rmse, 4),
-        "oof_rmse_ci_lo": round(ci_lo, 4),
-        "oof_rmse_ci_hi": round(ci_hi, 4),
-        "cv_repeats_outer": int(args.cv_repeats_outer),
-        "cv_repeats_inner": int(args.cv_repeats_inner),
-        "traj_in_alt": bool(args.traj_in_alt),
-        "traj_in_target": bool(args.traj_in_target),
-        "group_cv": bool(args.group_cv),
-        "notes": [
-            "Safety-filled any residual NaNs/Infs in features post-imputation with column medians, then 0 if still NaN.",
-            "num_one_prob compares to current max observed lmarena_Score among training rows.",
-            f"top_by_margin_prob = P(score > max_observed + {args.margin}), only for models without actual scores.",
-            "predictions_best_model.csv is sorted by predicted_score descending (highest on top).",
-        ]
-    }
-    with open(os.path.join(out_dir, "metadata.json"), "w") as f:
-        json.dump(meta, f, indent=2)
-
-    with open(os.path.join(out_dir, "README.txt"), "w") as f:
-        f.write(
-            "LMSYS ELO Prediction Run (v6)\n"
-            "=============================\n\n"
-            f"Input CSV: {os.path.abspath(args.csv_path)}\n"
-            f"Target: {TARGET}\n"
-            f"Alt target present: {ALT_TARGET in df.columns}\n"
-            f"Rows: {df.shape[0]}  | Numeric features (incl. targets): {len(numeric_cols)}\n"
-            f"Margin for top_by_margin_prob: {args.margin}\n\n"
-            "Outputs:\n"
-            "  - imputed_full.csv\n"
-            "  - post_imputation_nan_report.csv\n"
-            "  - imputation_quality_per_column.csv\n"
-            "  - model_eval_rmse.csv\n"
-            "  - best_model_feature_importance.csv\n"
-            "  - predictions_best_model.csv (sorted by predicted_score desc)\n"
-            "      Columns: model_name, predicted_score, actual_score, lower_bound,\n"
-            "               upper_bound, num_one_prob, top_by_margin_prob\n"
-            "      - num_one_prob: P(score > max_observed)\n"
-            "      - top_by_margin_prob: P(score > max_observed + margin), NaN for known models\n"
-            "  - predictions_all_models_long.csv\n"
-            "  - feature_matrix_used.csv\n"
-        )
+    # =========================================================================
+    # 13. Summary
+    # =========================================================================
     print(f"OOF RMSE:  {oof_rmse:.2f}  (95% CI: {ci_lo:.2f} \u2013 {ci_hi:.2f})")
     print(f"Done. Results saved to: {out_dir}")
     end = time.time()
     print(f"total:     {mmss(end - start)}")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
