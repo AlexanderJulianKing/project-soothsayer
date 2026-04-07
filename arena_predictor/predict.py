@@ -66,7 +66,6 @@ TARGETS = {TARGET, ALT_TARGET}  # exclude both to avoid leakage
 EXCLUDE = TARGETS | {ID_COL}
 
 DENSE_THRESHOLD = 0.508  # original threshold for dense-only CV evaluation
-COMPLETENESS_WEIGHT_POWER = 0  # 0 = disabled (all weights 1.0)
 
 # KNN prediction hyperparameters
 KNN_POWER_ALPHA = 0.7  # exponent for sublinear distance cutoff (1.0 = linear)

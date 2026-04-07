@@ -205,13 +205,6 @@ def get_llm_response(
 
                     try:
                         for mode in modes:
-                            # req_payload = dict(payload)
-                            # if mode == "forced" and forced_provider:
-                            #     req_payload["provider"] = {"order": [forced_provider], "allow_fallbacks": False}
-                            # elif mode == "fallbacks" and forced_provider:
-                            #     req_payload["provider"] = {"order": [forced_provider], "allow_fallbacks": True}
-                            # else: no provider key (no-override)
-
                             req_payload = dict(payload)
                             kind, prov, allow_fb = mode  # mode is a tuple
 

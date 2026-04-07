@@ -31,7 +31,6 @@ N_RUNS = 4 # Number of times to run each model per question
 # --- Parallelism & API Settings ---
 # Adjust based on your machine and rate limits. For I/O bound tasks, more workers can be beneficial.
 # os.cpu_count() is a good starting point.
-MAX_PARALLEL_WORKERS = os.cpu_count() - 1 # type: ignore
 MAX_PARALLEL_WORKERS = 20
 SAVE_BATCH_SIZE = 10      # Flush partial results after this many completions
 
@@ -170,31 +169,6 @@ def load_existing_results(filename: str) -> Set[Tuple[str, str, str]]:
         print(f"Warning: Could not properly read existing results from {filename}: {e}. May re-run some tasks.")
     
     return completed_runs
-
-
-def save_results(results: List[Dict[str, Any]], filename: str):
-    """Appends a list of results to the CSV file, writing a header if the file is new."""
-    if not results:
-        print("\nNo new results to save.")
-        return
-
-    fieldnames = [
-        'question_id', 'prompt', 'reference_answer', 'model_name', 'model_id',
-        'run_number', 'model_response', 'judge_model_id', 'judge_response'
-    ]
-    
-    file_exists = os.path.exists(filename)
-    
-    try:
-        with open(filename, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
-            if not file_exists:
-                writer.writeheader()
-            writer.writerows(results)
-        print(f"\nSuccessfully appended {len(results)} new results to {filename}")
-    except IOError as e:
-        print(f"Error writing to output file {filename}: {e}")
-
 
 
 def save_results(results: List[Dict[str, Any]], filename: str):

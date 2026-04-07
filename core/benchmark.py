@@ -6,7 +6,6 @@ them uniformly: discover completed models, run stages, collect results.
 
 import os
 import subprocess
-import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Set

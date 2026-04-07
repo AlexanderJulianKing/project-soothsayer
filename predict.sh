@@ -78,24 +78,6 @@ python3 predict.py \
     --eb_parent \
     --cv_repeats_outer 10
 
-# Old two-stage pipeline (deprecated — was predicting lmsys via lmarena imputation):
-# python3 predict.py \
-#     --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
-#     --imputer_type model_bank \
-#     --coherence_lambda 1.0 \
-#     --coherence_shape exp \
-#     --eb_parent \
-#     --poly_interactions \
-#     --poly_limit 7 \
-#     --no_residual_head \
-#     --no_traj_in_alt \
-#     --top_tier_boost 2 \
-#     --top_tier_threshold 1400 \
-#     --cv_repeats_outer 10 \
-#     --cv_repeats_inner 5 \
-#     --feature_cv_repeats 1 \
-#     --alt_cv_repeats 1
-
 # The virtual environment is automatically deactivated when the script finishes.
 echo ""
 echo "--- Process complete ---"

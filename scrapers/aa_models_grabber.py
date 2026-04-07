@@ -141,8 +141,7 @@ def main():
     parser.add_argument(
         "-k",
         "--api-key",
-        #default=os.getenv("ARTIFICIAL_ANALYSIS_API_KEY"),
-        default="REDACTED_ROTATE_THIS_KEY",
+        default=os.getenv("ARTIFICIAL_ANALYSIS_API_KEY"),
         help="API key for Artificial Analysis (or set ARTIFICIAL_ANALYSIS_API_KEY env var).",
     )
     parser.add_argument(
