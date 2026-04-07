@@ -22,7 +22,7 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from core.utils import load_models, discover_openbench_csv
 
-from llm_client import API_KEY, get_llm_response
+from core.llm_client import API_KEY, get_llm_response
 
 # ==============================================================================
 # --- CONFIGURATION ---

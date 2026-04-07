@@ -21,7 +21,7 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from core.utils import extract_json_payload, discover_openbench_csv, load_models, normalize_reasoning_flag
 
-from llm_client import get_llm_response
+from core.llm_client import get_llm_response
 
 SCRIPT_DIR = Path(__file__).parent
 RESPONSES_CSV = SCRIPT_DIR / "responses.csv"

@@ -19,16 +19,15 @@ from typing import Dict, List, Optional, Set, Tuple
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from core.utils import (
-    get_latest_file,
-    load_models,
-    normalize_reasoning_flag,
-    extract_json_payload,
-    discover_openbench_csv,
-)
+from core.utils import extract_json_payload
 from core.trueskill_arena import TrueSkillArena, ArenaConfig
-
-from llm_client import get_llm_response
+from core.llm_client import get_llm_response
+from core.super_bench_utils import (
+    resolve_judge_model,
+    augment_trueskill_columns,
+    save_trueskill_csv,
+    normalize_judge_names,
+)
 
 # --- CONFIGURATION ---
 SCRIPT_DIR = Path(__file__).parent
@@ -93,22 +92,6 @@ def load_pairwise_template() -> str:
         with open(PAIRWISE_PROMPT_FILE, 'r', encoding='utf-8') as f:
             return f.read()
     raise FileNotFoundError(f"Pairwise prompt template not found: {PAIRWISE_PROMPT_FILE}")
-
-
-def resolve_judge_model(judge_name: str) -> Dict[str, str]:
-    """Resolve judge model details from OpenBench CSV."""
-    model_csv = discover_openbench_csv(str(SCRIPT_DIR))
-
-    for model in load_models(model_csv):
-        if model["name"].strip() == judge_name.strip():
-            if not model.get("id"):
-                raise ValueError(f"Judge '{judge_name}' is missing an openbench_id.")
-            return {
-                "name": model["name"],
-                "id": model["id"],
-                "Reasoning": normalize_reasoning_flag(model.get("Reasoning", False)),
-            }
-    raise ValueError(f"Judge '{judge_name}' not found in {model_csv}.")
 
 
 MAX_TURN_RESPONSE_CHARS = 50_000   # skip scenarios with degenerate (repetitive) output
@@ -447,30 +430,6 @@ def build_paired_results(history_df: pd.DataFrame, judge_name: str) -> pd.DataFr
     return pd.DataFrame(pair_records)
 
 
-def augment_eqbench_columns(df: pd.DataFrame, ratings: dict, judge_name: str) -> None:
-    """Add TrueSkill rating columns for a single judge to the DataFrame (in-place)."""
-    rating_col = f"{judge_name} TrueSkill"
-    sigma_col = f"{judge_name} Sigma"
-
-    def model_stats(model: str) -> pd.Series:
-        rating = ratings.get(model)
-        if rating is None:
-            return pd.Series({rating_col: None, sigma_col: None})
-        return pd.Series({rating_col: rating.mu, sigma_col: rating.sigma})
-
-    df[[rating_col, sigma_col]] = df["model"].apply(model_stats)
-
-
-def save_results(combined_df: pd.DataFrame, sort_by_col: Optional[str] = None) -> str:
-    """Save the combined multi-judge TrueSkill ratings to CSV."""
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    if sort_by_col and sort_by_col in combined_df.columns:
-        combined_df.sort_values(by=sort_by_col, ascending=False, inplace=True, na_position='last')
-    out_path = RESULTS_DIR / f"{BENCH_PREFIX}{dt.datetime.now().strftime('%Y%m%d')}.csv"
-    combined_df.to_csv(out_path, index=False, float_format="%.4f")
-    return str(out_path)
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Run EQBenchFree head-to-head judging and export TrueSkill scores.")
     parser.add_argument("--judge", default=DEFAULT_JUDGE_NAME, help="Judge model display name from OpenBench CSV.")
@@ -482,7 +441,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    judge = resolve_judge_model(args.judge)
+    judge = resolve_judge_model(str(SCRIPT_DIR), args.judge)
 
     # Load pairwise comparison template
     template = load_pairwise_template()
@@ -521,14 +480,7 @@ def main():
     else:
         print("No new battle records were added this run.")
 
-    # Find all unique judges in the battle history
-    # Normalize whitespace in judge names to prevent duplicate columns
-    if "judge_model" in history_df.columns:
-        history_df["judge_model"] = history_df["judge_model"].str.strip().str.replace(r'\s+', ' ', regex=True)
-        all_judges = sorted(history_df["judge_model"].dropna().unique())
-    else:
-        all_judges = []
-
+    all_judges = normalize_judge_names(history_df)
     if not all_judges:
         print("No judges found in battle history.")
         return
@@ -550,12 +502,12 @@ def main():
         if not pair_df.empty:
             all_pair_dfs.append(pair_df)
         ratings = arena.compute_trueskill_ratings(pair_df)
-        augment_eqbench_columns(combined_df, ratings, judge_name)
+        augment_trueskill_columns(combined_df, ratings, judge_name, model_col="model")
         if first_judge_col is None:
             first_judge_col = f"{judge_name} TrueSkill"
 
     # Save combined results
-    out_path = save_results(combined_df, sort_by_col=first_judge_col)
+    out_path = save_trueskill_csv(combined_df, str(RESULTS_DIR), BENCH_PREFIX, sort_by_col=first_judge_col)
 
     # Save combined paired results
     if all_pair_dfs:

@@ -30,8 +30,7 @@ except ValueError:
 # ── imports ─────────────────────────────────────────────────────────────
 import pandas as pd
 
-sys.path.insert(0, os.path.join(SCRIPT_DIR, "core"))
-from llm_client import get_llm_response, API_KEY
+from core.llm_client import get_llm_response, API_KEY
 
 # ── load models ─────────────────────────────────────────────────────────
 df = pd.read_csv(csv_path)
