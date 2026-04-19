@@ -103,8 +103,8 @@
   "ministral-8b-2512": "",
   "ministral-3b-2512": "",
   "nemotron-3-nano-30b-a3b (Reasoning)": "Nemotron 3 Nano 30B A3B (Reasoning)",
-  "gemini-3.1-pro-preview:medium (Reasoning)": "Gemini 3.1 Pro Preview (2026-02-19)",
-  "gemini-3.1-pro-preview:low (Reasoning)": "Gemini 3.1 Pro Preview (2026-02-19)",
+  "gemini-3.1-pro-preview:medium (Reasoning)": "",
+  "gemini-3.1-pro-preview:low (Reasoning)": "",
   "gemini-3.1-pro-preview:high (Reasoning)": "Gemini 3.1 Pro Preview (2026-02-19)",
   "kimi-k2.5 (Reasoning)": "Kimi K2.5"
 }

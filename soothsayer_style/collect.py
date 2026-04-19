@@ -16,13 +16,19 @@ import time
 import concurrent.futures
 from typing import Any, Dict, List, Set, Tuple
 
+# Some responses (esp. long thinking-model outputs) exceed the default
+# 131072-char csv field limit. Raise to sys.maxsize so resume-loading
+# reads the full file — a short read would mask completed rows and
+# trigger duplicate work.
+csv.field_size_limit(sys.maxsize)
+
 import pandas as pd
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from core.utils import load_models, discover_openbench_csv, normalize_reasoning_flag
 
-from llm_client import get_llm_response, APIError
+from core.llm_client import get_llm_response, APIError
 
 # ==============================================================================
 # --- CONFIGURATION ---

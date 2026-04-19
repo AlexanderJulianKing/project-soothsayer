@@ -16,7 +16,7 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from core.utils import get_latest_file, load_models, discover_openbench_csv
 
-from llm_client import get_llm_response
+from core.llm_client import get_llm_response, APIError
 from scenario_parser import parse_scenarios, get_initial_scenarios
 
 # --- CONFIGURATION ---
@@ -171,7 +171,7 @@ def generate_scenario_response(
                     name=model['name'],
                     reasoning=model.get('Reasoning', False),
                 )
-            except Exception as e:
+            except APIError as e:
                 print(f"  Retry {tries+1}/{MAX_RETRIES} for {model_name} turn {turn_num}: {e}")
                 time.sleep(INITIAL_RETRY_DELAY * (tries + 1))
                 tries += 1

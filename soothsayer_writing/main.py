@@ -14,7 +14,7 @@ import pingouin as pg
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from core.utils import get_latest_file, load_models, discover_openbench_csv
 
-from llm_client import get_llm_response
+from core.llm_client import get_llm_response, APIError
 
 # --- CONFIGURATION ---
 
@@ -168,8 +168,7 @@ def judge_story_task(task_args):
                 f.write(raw_judgement)
             return f"✓ Saved judgement by {judge_name} for {writer_name} on prompt {prompt_info['id']}"
 
-        except Exception as e:
-            # This catches both API errors from get_llm_response and our format ValueErrors
+        except (APIError, ValueError) as e:
             last_error = e
             print(f"✗ Attempt {attempt + 1}/{MAX_RETRIES} failed for judge {judge_name} on {writer_name}'s story. Error: {e}")
             

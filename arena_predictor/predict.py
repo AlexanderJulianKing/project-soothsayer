@@ -3,16 +3,20 @@
 Arena ELO Predictor — KNN Pipeline.
 
 Predicts lmarena_Score (style-controlled Chatbot Arena ELO) from benchmark data
-using adaptive KNN (sublinear power cutoff) + kernel Ridge + jackknife VI (R²=0.924).
+using ModelBankImputer plus adaptive KNN (sublinear power cutoff), optional
+fold-internal PLS hybrid features, local kernel Ridge, and grouped conformal
+prediction intervals.
 
 Pipeline:
     1. Load benchmark CSV, identify numeric columns
     2. Low-variance filtering
     3. Impute missing values (ModelBankImputer default)
     4. Build feature matrix (imputed cols + SVD factors + trajectory features)
-    5. Adaptive KNN prediction with OOF cross-validation
-    6. Grouped conformal calibration of prediction intervals
-    7. Save predictions, OOF, metadata, dependency graph
+    5. Optionally drop style_/tone_ columns before KNN distance calculation
+    6. Adaptive KNN prediction with OOF cross-validation
+    7. Optionally append fold-internal PLS components to the KNN feature space
+    8. Grouped conformal calibration of prediction intervals
+    9. Save predictions, OOF, metadata, run config, dependency graph
 """
 from __future__ import annotations
 
@@ -74,6 +78,11 @@ KNN_MAX_K = 80
 KNN_MIN_K = 20
 KNN_BW_PCT = 0.15      # kernel bandwidth at this percentile of neighbor distances
 KNN_VI_CLIP = (1.0, 1.5)
+
+# Diagnostic sidecar: if set to a list, predict_adaptive_knn appends dicts with
+# per-call (b_raw, b_clipped, k, mu_nb, p, p_corrected). Used for one-shot
+# analyses (e.g. jackknife compression distribution). Off by default.
+_JACKKNIFE_LOG = None
 
 # Learned distance + local feature selection defaults
 KNN_LOCAL_CORR_K = 0     # 0 = disabled (use all features); >0 = select top-K per neighborhood
@@ -289,7 +298,7 @@ def run_imputation(
     coherence_shape: str = "linear",
     coherence_gate: str = "fixed",
     iterative_coherence: bool = False,
-    eb_parent: bool = False,
+    predictor_selection: str = "corr",
     use_svd_predictors: bool = False,
     n_expansion_passes: int = 1,
     max_confident_extras: int = 1,
@@ -333,7 +342,7 @@ def run_imputation(
             coherence_shape=coherence_shape,
             coherence_gate=coherence_gate,
             iterative_coherence=iterative_coherence,
-            eb_parent=eb_parent,
+            predictor_selection=predictor_selection,
             use_svd_predictors=use_svd_predictors,
             n_expansion_passes=n_expansion_passes,
             max_confident_extras=max_confident_extras,
@@ -620,56 +629,6 @@ def compute_grouped_conformal_intervals(
 # KNN PREDICTION
 # ==============================================================================
 
-def _local_corr_select(X_nb: np.ndarray, y_nb: np.ndarray, w: np.ndarray, top_k: int) -> np.ndarray:
-    """Select top_k features by weighted |correlation with y| in the neighborhood."""
-    n_feat = X_nb.shape[1]
-    corrs = np.zeros(n_feat)
-    for j in range(n_feat):
-        col = X_nb[:, j]
-        if np.std(col) < 1e-10:
-            continue
-        wm_x = np.average(col, weights=w)
-        wm_y = np.average(y_nb, weights=w)
-        cov = np.average((col - wm_x) * (y_nb - wm_y), weights=w)
-        std_x = np.sqrt(np.average((col - wm_x) ** 2, weights=w))
-        std_y = np.sqrt(np.average((y_nb - wm_y) ** 2, weights=w))
-        corrs[j] = abs(cov / (std_x * std_y + 1e-10))
-    return np.argsort(-corrs)[:top_k]
-
-
-def compute_learned_dist_weights(
-    X_tr: np.ndarray, y_tr: np.ndarray, resid_weight: float = 0.3,
-) -> np.ndarray:
-    """Compute per-feature distance weights: base importance + residual importance.
-
-    Returns sqrt(weights) suitable for multiplying into feature matrices.
-    """
-    n_feat = X_tr.shape[1]
-    base_imp = np.zeros(n_feat)
-    for j in range(n_feat):
-        col = X_tr[:, j]
-        if np.std(col) < 1e-10:
-            continue
-        base_imp[j] = abs(np.corrcoef(col, y_tr)[0, 1])
-
-    if resid_weight > 0:
-        global_mdl = Ridge(alpha=50)
-        global_mdl.fit(X_tr, y_tr)
-        residuals = y_tr - global_mdl.predict(X_tr)
-        resid_corrs = np.zeros(n_feat)
-        for j in range(n_feat):
-            col = X_tr[:, j]
-            if np.std(col) < 1e-10:
-                continue
-            resid_corrs[j] = abs(np.corrcoef(col, residuals)[0, 1])
-        combined = base_imp + resid_weight * resid_corrs
-    else:
-        combined = base_imp
-
-    combined = combined / (combined.sum() + 1e-10)
-    return np.sqrt(combined)
-
-
 def predict_adaptive_knn(
     Xtr: np.ndarray,
     y_tr: np.ndarray,
@@ -680,8 +639,6 @@ def predict_adaptive_knn(
     min_k: int = KNN_MIN_K,
     bw_pct: float = KNN_BW_PCT,
     vi_clip: tuple = KNN_VI_CLIP,
-    dist_weights: Optional[np.ndarray] = None,
-    local_corr_k: int = 0,
 ) -> Tuple[float, float, int]:
     """Predict a single test point using adaptive KNN + kernel Ridge + jackknife VI.
 
@@ -690,26 +647,11 @@ def predict_adaptive_knn(
     This gives tighter neighborhoods in dense regions (top models) while keeping
     adequate coverage in sparse regions, naturally adapting to feature sign flips.
 
-    Args:
-        power_alpha: exponent for distance cutoff (0.7 default, 1.0 = linear).
-        power_C: coefficient for distance cutoff (3.0 default).
-        dist_weights: per-feature sqrt(weights) for distance computation. If provided,
-            distances are computed in weighted space but regression uses original features.
-        local_corr_k: if >0, select this many features by local correlation before Ridge.
-
     Returns (prediction, std_estimate, k_used).
     """
-    # Find neighbors (optionally in weighted feature space)
-    if dist_weights is not None:
-        Xtr_dist = Xtr * dist_weights
-        Xte_dist = Xte * dist_weights
-    else:
-        Xtr_dist = Xtr
-        Xte_dist = Xte
-
     nn = NearestNeighbors(n_neighbors=max_k)
-    nn.fit(Xtr_dist)
-    dists, idx = nn.kneighbors(Xte_dist)
+    nn.fit(Xtr)
+    dists, idx = nn.kneighbors(Xte)
     d, ix = dists[0], idx[0]
 
     # Sublinear power cutoff: tighter neighborhoods for dense regions
@@ -726,21 +668,13 @@ def predict_adaptive_knn(
     bw = max(bw, 1e-6)
     w = np.exp(-0.5 * (d[:k] / bw) ** 2)
 
-    # Local feature selection
-    if local_corr_k > 0:
-        sel = _local_corr_select(Xtr_nb, y_nb, w, local_corr_k)
-        Xtr_nb = Xtr_nb[:, sel]
-        Xte_reg = Xte[:, sel]
-    else:
-        Xte_reg = Xte
-
     # Adaptive alpha = score spread of neighbors
     alpha = max(10.0, float(np.std(y_nb)))
 
     # Fit weighted Ridge
     mdl = Ridge(alpha=alpha)
     mdl.fit(Xtr_nb, y_nb, sample_weight=w)
-    p = float(mdl.predict(Xte_reg)[0])
+    p = float(mdl.predict(Xte)[0])
 
     # Jackknife variance inflation
     mu_nb = float(np.mean(y_nb))
@@ -756,11 +690,31 @@ def predict_adaptive_knn(
     pc = jack_preds - mu_nb
     denom = float(np.dot(pc, pc))
     if denom > 1e-8:
-        b = float(np.clip(np.dot(yc, pc) / denom, vi_clip[0], vi_clip[1]))
+        b_raw = float(np.dot(yc, pc) / denom)
+        b = float(np.clip(b_raw, vi_clip[0], vi_clip[1]))
     else:
+        b_raw = 1.0
         b = 1.0
 
     p_corrected = mu_nb + b * (p - mu_nb)
+
+    if _JACKKNIFE_LOG is not None:
+        _JACKKNIFE_LOG.append({
+            'b_raw': b_raw,
+            'b_clipped': b,
+            'k': int(k),
+            'mu_nb': mu_nb,
+            'y_nb_min': float(np.min(y_nb)),
+            'y_nb_max': float(np.max(y_nb)),
+            'y_nb_std': float(np.std(y_nb)),
+            'p_pre': p,
+            'p_corrected': p_corrected,
+            'd0': float(d[0]),
+            'coef': mdl.coef_.copy(),
+            'intercept': float(mdl.intercept_),
+            'x_test': Xte[0].copy(),
+            'x_nb_mean': Xtr_nb.mean(axis=0),
+        })
 
     # Rough std estimate from jackknife residuals
     jack_resid = y_nb - jack_preds
@@ -782,27 +736,15 @@ def fit_and_predict_knn(
     max_k: int = KNN_MAX_K,
     min_k: int = KNN_MIN_K,
     bw_pct: float = KNN_BW_PCT,
-    learned_dist: bool = False,
-    resid_weight: float = 0.3,
-    local_corr_k: int = 0,
+    pls_hybrid_k: int = 0,
 ) -> Dict[str, np.ndarray]:
     """Fit adaptive KNN on training data and predict all rows.
-
-    Args:
-        power_alpha: exponent for sublinear distance cutoff (0.7 default, 1.0 = linear).
-        power_C: coefficient for distance cutoff (3.0 default).
-        learned_dist: if True, weight distance metric by feature importance + residual correlation.
-        resid_weight: weight for residual-based component of distance weighting (0 = correlation only).
-        local_corr_k: if >0, select this many features per neighborhood before Ridge.
 
     Returns dict with keys: mu, std, lower, upper, oof_preds, oof_folds, ks_used.
     """
     n_all = len(y_all)
     n_train = len(train_idx)
     y_train = y_all[train_idx]
-
-    if learned_dist:
-        print(f"  Learned distance: resid_weight={resid_weight}, local_corr_k={local_corr_k}")
 
     # --- OOF predictions via CV splits ---
     if cv_splits is None:
@@ -818,19 +760,27 @@ def fit_and_predict_knn(
         Xva = sc.transform(X_all[train_idx[va]])
         ytr = y_train[tr]
 
-        # Compute distance weights from training fold only (no leakage)
-        dw = compute_learned_dist_weights(Xtr, ytr, resid_weight) if learned_dist else None
+        # PLS hybrid: fit PLS on training fold only, concatenate components to features
+        if pls_hybrid_k > 0:
+            from sklearn.cross_decomposition import PLSRegression as _PLS
+            n_comp = min(pls_hybrid_k, Xtr.shape[1], Xtr.shape[0] - 1)
+            pls_f = _PLS(n_components=n_comp).fit(Xtr, ytr)
+            Xtr = np.hstack([Xtr, pls_f.transform(Xtr)])
+            Xva = np.hstack([Xva, pls_f.transform(Xva)])
 
         for vi, va_i in enumerate(va):
             p, _, _ = predict_adaptive_knn(
                 Xtr, ytr, Xva[vi:vi + 1],
                 power_alpha=power_alpha, power_C=power_C,
                 max_k=max_k, min_k=min_k, bw_pct=bw_pct,
-                dist_weights=dw, local_corr_k=local_corr_k,
             )
             oof_preds_sum[va_i] += p
             oof_counts[va_i] += 1
             oof_folds[va_i] = fold_idx % 5
+            if _JACKKNIFE_LOG is not None and _JACKKNIFE_LOG:
+                _JACKKNIFE_LOG[-1]['is_oof'] = True
+                _JACKKNIFE_LOG[-1]['train_row_idx'] = int(va_i)
+                _JACKKNIFE_LOG[-1]['fold'] = int(fold_idx)
 
     oof_preds = np.where(oof_counts > 0, oof_preds_sum / oof_counts, np.nan)
     oof_valid = oof_counts > 0
@@ -842,8 +792,13 @@ def fit_and_predict_knn(
     X_train_sc = sc_final.fit_transform(X_all[train_idx])
     X_all_sc = sc_final.transform(X_all)
 
-    # Distance weights from full training set
-    dw_final = compute_learned_dist_weights(X_train_sc, y_train, resid_weight) if learned_dist else None
+    # PLS hybrid: fit on full training set for final predictions
+    if pls_hybrid_k > 0:
+        from sklearn.cross_decomposition import PLSRegression as _PLS
+        n_comp = min(pls_hybrid_k, X_train_sc.shape[1], X_train_sc.shape[0] - 1)
+        pls_final = _PLS(n_components=n_comp).fit(X_train_sc, y_train)
+        X_train_sc = np.hstack([X_train_sc, pls_final.transform(X_train_sc)])
+        X_all_sc = np.hstack([X_all_sc, pls_final.transform(X_all_sc)])
 
     mu = np.full(n_all, np.nan)
     std = np.full(n_all, np.nan)
@@ -854,11 +809,13 @@ def fit_and_predict_knn(
             X_train_sc, y_train, X_all_sc[i:i + 1],
             power_alpha=power_alpha, power_C=power_C,
             max_k=max_k, min_k=min_k, bw_pct=bw_pct,
-            dist_weights=dw_final, local_corr_k=local_corr_k,
         )
         mu[i] = p
         std[i] = s
         ks_used[i] = k
+        if _JACKKNIFE_LOG is not None and _JACKKNIFE_LOG:
+            _JACKKNIFE_LOG[-1]['is_final'] = True
+            _JACKKNIFE_LOG[-1]['row_idx'] = int(i)
 
     lower = mu - 1.96 * std
     upper = mu + 1.96 * std
@@ -1206,15 +1163,16 @@ def main():
     """Main entry point for the KNN prediction pipeline.
 
     Orchestrates:
-    1. Argument parsing (imputation + KNN + output flags)
-    2. Parallelism configuration
-    3. Data loading and numeric column identification
-    4. Low-variance filtering
-    5. Imputation (ModelBankImputer via run_imputation, with caching)
-    6. Feature matrix construction (imputed cols + SVD factors + trajectory)
-    7. KNN prediction (fit_and_predict_knn)
-    8. Grouped conformal interval calibration
-    9. Output saving (predictions CSV, OOF CSV, metadata JSON, dependency graph)
+        1. Argument parsing (imputation + KNN + output flags)
+        2. Parallelism configuration
+        3. Data loading and numeric column identification
+        4. Low-variance filtering
+        5. Imputation (ModelBankImputer via run_imputation, with caching)
+        6. Feature matrix construction (imputed cols + SVD factors + trajectory)
+        7. Optional style_/tone_ removal before KNN distance calculation
+        8. KNN prediction (fit_and_predict_knn, with optional fold-internal PLS hybrid)
+        9. Grouped conformal interval calibration
+       10. Output saving (predictions CSV, OOF CSV, metadata JSON, run config, dependency graph)
     """
     ap = argparse.ArgumentParser(description="KNN Arena ELO Predictor")
     # -- Data I/O --
@@ -1230,8 +1188,10 @@ def main():
     ap.add_argument("--coherence_lambda", type=float, default=1.0)
     ap.add_argument("--coherence_shape", type=str, default="exp",
                     choices=["linear", "squared", "power3", "exp", "step"])
-    ap.add_argument("--eb_parent", action="store_true",
-                    help="Enable empirical-Bayes parent shrinkage in imputation.")
+    ap.add_argument("--predictor_selection", type=str, default="corr",
+                    choices=["corr", "loo_forward"],
+                    help="Predictor selection method: 'corr' (default CLI behavior, |corr|*sqrt(n)) or "
+                         "'loo_forward' (greedy forward selection by leave-one-out RMSE).")
     # -- Tolerance config --
     ap.add_argument("--tolerance_percentile", type=float, default=91.1553)
     ap.add_argument("--tolerance_relaxation_factor", type=float, default=1.2704)
@@ -1272,12 +1232,10 @@ def main():
     ap.add_argument("--knn_max_k", type=int, default=80)
     ap.add_argument("--knn_min_k", type=int, default=20)
     ap.add_argument("--knn_bw_pct", type=float, default=0.15)
-    ap.add_argument("--learned_dist", action="store_true",
-                    help="Weight KNN distance metric by feature importance + residual correlation.")
-    ap.add_argument("--resid_weight", type=float, default=0.3,
-                    help="Residual importance weight for learned distance (default 0.3).")
-    ap.add_argument("--local_corr_k", type=int, default=0,
-                    help="Select top-K features per neighborhood before Ridge (0=disabled).")
+    ap.add_argument("--drop_style_tone", action="store_true",
+                    help="Remove style_/tone_ columns from KNN feature set (imputer can still use them).")
+    ap.add_argument("--pls_hybrid_k", type=int, default=0,
+                    help="Append K PLS components (fit per-fold on train) to KNN features (0=disabled).")
     # -- Misc --
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Margin for 'top_by_margin_prob' column (default 20 points).")
@@ -1408,12 +1366,11 @@ def main():
     if args.imputer_type == "model_bank":
         coh_lam = getattr(args, 'coherence_lambda', 1.0)
         coh_shape = getattr(args, 'coherence_shape', 'linear')
-        eb = int(getattr(args, 'eb_parent', False))
         imp_key = (
             f"imputed_modelbank_{csv_hash}_alpha{args.alpha:.6f}_"
             f"skmax{args.selector_k_max}_conf{args.confidence_threshold:.2f}_"
             f"coh{coh_lam:.2f}{coh_shape[0]}_gfixed_ic0_svdp0_exp1x1_"
-            f"eb{eb}_catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt3.0.csv"
+            f"catthr{args.categorical_threshold}_catovr{len(categorical_numeric_cols)}_skt3.0.csv"
         )
     else:
         imp_key = (
@@ -1503,7 +1460,7 @@ def main():
             confidence_threshold=args.confidence_threshold,
             coherence_lambda=getattr(args, 'coherence_lambda', 1.0),
             coherence_shape=getattr(args, 'coherence_shape', 'linear'),
-            eb_parent=getattr(args, 'eb_parent', False),
+            predictor_selection=getattr(args, 'predictor_selection', 'corr'),
         )
         # Save imputation cache as pickle for exact float round-trip
         import pickle as _pkl
@@ -1601,7 +1558,13 @@ def main():
     # Exclude target columns from feature matrix
     knn_feature_cols = [c for c in safe_features.columns
                         if c != ALT_TARGET and c != TARGET]
+    if getattr(args, 'drop_style_tone', False):
+        before = len(knn_feature_cols)
+        knn_feature_cols = [c for c in knn_feature_cols
+                            if not c.startswith('style_') and not c.startswith('tone_')]
+        print(f"  drop_style_tone: {before} -> {len(knn_feature_cols)} features")
     knn_X = safe_features[knn_feature_cols].values
+    globals()['_LAST_KNN_FEATURE_COLS'] = list(knn_feature_cols)
     print(f"  KNN features: {len(knn_feature_cols)} (including SVD/traj)")
 
     # =========================================================================
@@ -1663,9 +1626,7 @@ def main():
         max_k=args.knn_max_k,
         min_k=args.knn_min_k,
         bw_pct=args.knn_bw_pct,
-        learned_dist=args.learned_dist,
-        resid_weight=args.resid_weight,
-        local_corr_k=args.local_corr_k,
+        pls_hybrid_k=args.pls_hybrid_k,
     )
     mu = knn_result["mu"]
     std = knn_result["std"]
@@ -1793,44 +1754,13 @@ def main():
     uf.to_csv(os.path.join(out_dir, "conformal_uncertainty_features.csv"), index=False)
 
     # -- run_config.json --
-    run_config = {
-        "csv_path": args.csv_path,
-        "passes": int(args.passes),
-        "alpha": float(args.alpha),
-        "imputer_type": args.imputer_type,
-        "use_feature_selector": bool(args.use_feature_selector),
-        "selector_tau": float(args.selector_tau),
-        "selector_k_max": int(args.selector_k_max),
-        "imputer_n_jobs": int(args.imputer_n_jobs),
-        "categorical_threshold": int(args.categorical_threshold),
-        "tolerance_percentile": float(args.tolerance_percentile),
-        "tolerance_relaxation_factor": float(args.tolerance_relaxation_factor),
-        "tolerance_multiplier": float(args.tolerance_multiplier),
-        "tier_quantiles": tier_quantiles or [],
-        "cv_repeats_outer": int(args.cv_repeats_outer),
-        "cv_seed": int(args.cv_seed),
-        "outer_cv": int(args.outer_cv),
-        "max_workers": int(args.max_workers),
-        "cv_splits_path": args.cv_splits_path,
-        "group_cv": bool(args.group_cv),
-        "eb_parent": bool(getattr(args, 'eb_parent', False)),
-        "coherence_lambda": float(getattr(args, 'coherence_lambda', 1.0)),
-        "coherence_shape": str(getattr(args, 'coherence_shape', 'exp')),
-        "confidence_threshold": float(args.confidence_threshold),
-        "knn_predict": True,
-        "knn_power_alpha": float(args.knn_power_alpha),
-        "knn_power_c": float(args.knn_power_c),
-        "knn_max_k": int(args.knn_max_k),
-        "knn_min_k": int(args.knn_min_k),
-        "knn_bw_pct": float(args.knn_bw_pct),
-        "learned_dist": bool(args.learned_dist),
-        "resid_weight": float(args.resid_weight),
-        "local_corr_k": int(args.local_corr_k),
-        "svd_in_features": bool(args.svd_in_features),
+    run_config = dict(vars(args))
+    run_config.update({
+        "tier_quantiles_parsed": tier_quantiles or [],
         "used_cache": bool(_cache_hit),
         "cache_key": imp_key,
         "output_dir": out_dir,
-    }
+    })
     with open(os.path.join(out_dir, "run_config.json"), "w", encoding="utf-8") as fh:
         json.dump(run_config, fh, indent=2)
 

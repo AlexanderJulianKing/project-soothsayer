@@ -1,5 +1,225 @@
 # Findings: Alt-Target Prediction Pipeline
 
+## Reference numbers (current as of 2026-04-18, post-CritPT rerun, n=127)
+
+| Config | OOF RMSE | R² | ρ |
+|---|---:|---:|---:|
+| Baseline (no sem) | 15.39 | — | — |
+| Sem v4 @ 32 dims | 14.12 | — | — |
+| Sem + PLS hybrid + drop_style_tone (2026-04-18 ship, pre-CritPT n=126) | 13.48 | 0.943 | 0.971 |
+| **Sem + PLS hybrid + drop_style_tone (SHIPPED, post-CritPT n=127)** | **13.61** | **0.941** | **0.971** |
+
+**Honest walk-forward (2026-04-18, n=23 newest):** RMSE 14.69, R² 0.900, Spearman ρ 0.940. Re-fits ModelBankImputer + PCA-32 + PLS-3 at every step — see `docs/WALKFORWARD_ANALYSIS.md`.
+
+**Shipped 7-flag config** (from `predict.sh`, lift verbatim for any new sweep):
+
+```bash
+python3 predict.py \
+    --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches_with_sem_v4_d32.csv \
+    --imputer_type model_bank \
+    --coherence_lambda 8.0 --coherence_shape exp \
+    --predictor_selection loo_forward \
+    --drop_style_tone \
+    --pls_hybrid_k 3 \
+    --cv_repeats_outer 10
+```
+
+**Note on pre-/post-fix numbers:** The 15.39 / 14.12 reference points were 15.48 / 14.19 before fixing a combine.py glob tie-break that had been dropping Writing TrueSkill columns for about a week (see "Combine.py writing glob fix" section below). All ablations written before 2026-04-15 used the pre-fix reference; where we contrast against a baseline, the Δ values remain comparable since the bug affected both arms equally.
+
+## Response-Embedding Features (2026-04-14 / 2026-04-15)
+
+Added `sem_f*` PCA-compressed response-embedding fingerprints as a derived feature set alongside `style_` and `tone_`. Best config cuts OOF RMSE from 15.48 → **14.19** (Δ −1.29) on n=124 arena-known rows, 10-repeat outer CV, same predict.py flags as **2026-04-15 production at the time** (`--imputer_type model_bank --coherence_lambda 1.0 --coherence_shape exp --eb_parent`). Post-fix reference: 15.39 → **14.12** (Δ −1.27 preserves the gain). *Historical context: `--eb_parent` and `coherence_lambda 1.0` were retired in the 2026-04-18 PLS cleanup; current shipped config is in the 2026-04-18 section at the end of this doc.*
+
+### Ablation ladder
+
+| Version | Pooling | Raw dims | PCA | OOF RMSE | Δ vs baseline (15.48) |
+|---|---|---|---|---|---|
+| v1 (2026-04-14) | cross-bench mean | 384 | 16 | 14.96 | −0.52 |
+| v2 | per-bench concat (eq/logic/style/writing) | 1536 | 24 | 14.74 | −0.75 |
+| v3 | per-bench + chunk-and-pool | 1536 | 24 | 15.01 | −0.47 |
+| v4 @ 24 | per-bench + EQ split into t1/t3 | 1920 | 24 | 14.52 | −0.97 |
+| v5 @ 24 | v4 + Style split into tech/casual | 2304 | 24 | 14.84 | −0.64 |
+| v6 @ 24 | v4 + 9 per-prompt Style slots | 4992 | 24 | 14.64 | −0.84 |
+| **v4 @ 32** | **v4 with wider PCA budget (champion)** | **1920** | **32** | **14.19** | **−1.29** |
+| v4 @ 48 | v4 with oversized PCA | 1920 | 48 | 14.73 | −0.75 |
+| v6 @ 32 | v6 with wider PCA | 4992 | 32 | 14.78 | −0.70 |
+| v6 @ 48 | v6 with widest PCA | 4992 | 48 | 14.55 | −0.93 |
+
+### Key findings
+
+- **Truncation was an accidental signal filter (v3 < v2).** Chunk-and-pool preserves the full response but dilutes the fingerprint; the first 512 tokens carry the model-identity signal, and later chunks are prompt-driven content that averages toward a topic centroid. Top PCA components stayed aligned between truncated and chunked (|r|>0.7); later components diverged, confirming the early tokens carry the load.
+- **EQ per-turn split helps (v4 > v2).** Splitting EQ into t1 (first-turn) and t3 (last-turn) slots and dropping t2 exposed multi-turn escalation signal that the cross-turn pool was averaging away. Consistent with the prior validated feature `first_person_delta_t3`.
+- **Style splits HURT (v5, v6).** Splitting Style's 9 prompts into tech/casual (v5) or per-prompt (v6) sub-slots regressed below v4. Diagnostic Mantel r on between-model distance matrices: EQ t1/t3 = **0.69** (correlated views of shared signal), Style tech/casual = **0.39** (decorrelated noisy views). PCA sweep confirmed v6 cannot be rescued with more PCA dims — the problem isn't compression but that per-prompt slots contain prompt-topic variance that becomes nuisance variance in PCA's top components.
+- **Pooling does pre-PCA denoising that PCA cannot replicate.** Averaging 9 per-prompt slots cancels prompt-topic (same topic mix across models → identical constant → removed by centering) while preserving model-identity (same signature across slots → accumulates coherently). Splitting keeps topic visible in each slot, PCA sees topic as "high variance" and spends top components on it, and the predictor distance function is contaminated with topic-axes that don't correlate with ELO.
+- **PCA budget sweet spot at 32 dims (d/n ≈ 0.26).** v4 @ 24 undersizes — real signal axes exist past component 24. v4 @ 48 oversizes — components 33-48 are noise-dominated and hurt KNN distance. 32 dims is the bias-variance elbow. Curse of dimensionality starts to bite around d/n ≈ 0.4 (n=124 training rows).
+
+### Design rule
+
+> Before splitting a benchmark into sub-slots, ask whether the split-axis carries **per-model variance** or **per-prompt content variance**. Split on per-model axes (EQ turn escalation — shared topic, different behavior). Pool across per-prompt axes (Style's 9 topics — different topic, shared behavior). Embedding models encode topic; PCA can't separate topic variance from model variance when both are present.
+
+### Artifacts
+
+- Champion augmented CSV: `benchmark_combiner/benchmarks/clean_combined_all_benches_with_sem_v4_d32.csv`
+- Fingerprint source: `embeddings/cache/model_fingerprints_v4_d32.csv`
+- Reproducers: `embeddings/run_ablation_v{2,4,5,6}.bash`, `embeddings/run_pca_sweep.bash`
+
+### Embedder capacity sweep (2026-04-15)
+
+Tested whether a larger-capacity embedder beats bge-small on the same v4 (per_bench_eq_split) fingerprint pipeline. Downloaded candidates: bge-base (109M, 768d, 512 ctx), bge-large (335M, 1024d, 512 ctx), nomic-embed-v1.5 (137M, 768d, 8192 ctx), gte-large-v1.5 (434M, 1024d, 8192 ctx). Only bge-base run so far; others queued.
+
+**bge-base PCA sweep (same embeddings, v4 pooling, varying only n_components):**
+
+| dims | OOF RMSE | Δ vs baseline (15.48) | Δ vs bge-small champion (14.19) |
+|------|----------|-----------------------|----------------------------------:|
+| 16   | 14.83    | −0.65 | +0.64 |
+| **24** | **14.40** | **−1.08** | **+0.21** |
+| 32   | 14.59    | −0.89 | +0.40 |
+| 48   | 15.48    | 0.00  | +1.29 |
+| 64   | 16.20    | +0.72 | +2.01 |
+
+**Key findings:**
+
+- **bge-base at its own optimum loses to bge-small at its own optimum by only 0.21 RMSE** (14.40 vs 14.19) — within CV noise territory. Fixed-d=32 comparison overstated the gap (0.40). Each embedder must be swept at its own PCA budget before comparison.
+- **Compression ratio — not absolute PCA dim count — determines the optimum.** bge-small champion: 32/1920 ≈ **1.7%** retention. bge-base optimum: 24/3840 ≈ **0.6%** retention. The sweet spot drops in absolute dims as raw dim goes up, not up. Components beyond a small fraction of the raw space are noise-dominated regardless of embedder choice.
+- **Bigger embedder ≠ better fingerprint.** bge-base's extra 384 dims relative to bge-small are spent on finer-grained **content distinctions** (MTEB training objective), not finer-grained **voice distinctions**. The averaging trick we use to extract model identity benefits from an embedder that aggressively compresses into the top statistical axes (where voice lives) rather than one that expressively encodes content across many axes. This predicts bge-large will lose even at its own optimum, and reframes the nomic comparison — if nomic wins, the gain will come from 8192-ctx fixing the 55% truncation rate, not from extra capacity.
+- **Monotonic curve beyond optimum.** Past d=24, bge-base's RMSE rises monotonically (14.40 → 14.59 → 15.48 → 16.20). Past d=32, bge-small's RMSE rose too (14.19 → 14.73). Both embedders sit in the "less is more" regime for this task at the current n=124 training rows.
+
+**Artifacts:**
+
+- Per-dim augmented CSVs: `benchmark_combiner/benchmarks/clean_combined_all_benches_with_sem_bge_base_d{16,24,32,48,64}.csv`
+- Per-dim fingerprints: `embeddings/cache/model_fingerprints_bge_base_d{16,24,32,48,64}.csv` (d=32 saved as `model_fingerprints_bge_base.csv`)
+- Per-dim predict.py outputs: `arena_predictor/analysis_output/_sem_embedder_sweep_bge_base{,_d16,_d24,_d48,_d64}/`
+- Reproducer: `embeddings/run_embedder_sweep.bash bge_base` (fresh embedding + fingerprint + predict) and `embeddings/run_bge_base_pca_sweep.bash` (reuses cached embeddings for dim sweep)
+
+### Embedder + PCA + fingerprint-mode sweep (2026-04-16)
+
+Completed the embedder capacity test queued on 2026-04-15 (bge-large, nomic @ 2048 ctx,
+gte-large @ 2048 ctx) and extended it with a PCA sweep on bge-large and a fingerprint-mode
+sweep on bge-small. All runs on post-fix baseline (n=160, 15.39 OOF RMSE); champion is the
+bge-small d=32 per_bench_eq_split model at 14.12.
+
+**Note on nomic/gte-large context:** original plan was 8192 ctx. On MPS this blows up: the
+attention matrix is O(L²), so at L=8192 a single forward pass needs ~20-40 GB of peak memory
+(model-dependent), which on Apple Silicon Unified Memory quickly hits swap and the encoder
+rate collapses from ~2 s/it → 240 s/it around batch 88 of a 23k-response run. Capping
+max_seq_length=2048 drops peak attention memory by 16× and still captures ~99% of responses
+in a single chunk (EQ p95 is ~2200 tokens; no benchmark's p90 exceeds 2048). We also added
+incremental checkpointing to `embed_responses.py` (flush pooled responses to the output
+parquet every N, atomic-rename write) so any thrash never costs more than 500 responses.
+
+**Embedder sweep at d=32 (fixed champion PCA budget):**
+
+| Embedder | Raw dims | Context | OOF RMSE | vs champion |
+|---|---:|---:|---:|---:|
+| **bge-small** (champion) | 384 | 512 | **14.12** | — |
+| bge-large | 1024 | 512 | 14.30 | +0.18 |
+| gte-large @ 2048 | 1024 | 2048 | 14.35 | +0.23 |
+| nomic @ 2048 | 768 | 2048 | 14.45 | +0.33 |
+
+**bge-large PCA sweep** (per_bench_eq_split mode, 5120 raw-dim concat):
+
+| d | OOF RMSE | compression | note |
+|---:|---:|---:|---|
+| 8 | 14.86 | 0.16% | underfit |
+| 16 | 14.56 | 0.31% | |
+| **24** | **14.23** | **0.47%** | bge-large optimum |
+| 32 | 14.30 | 0.63% | |
+| 48 | 14.30 | 0.94% | plateau |
+| 64 | 14.87 | 1.25% | overfit cliff |
+| 96 | 15.03 | 1.88% | |
+| 128 | 16.84 | 2.50% | severe overfit |
+
+**bge-small PCA sweep** (post-fix baseline — extends d=32/48 from 2026-04-15):
+
+| d | OOF RMSE |
+|---:|---:|
+| 16 | 14.61 |
+| 24 | 14.40 |
+| **32** | **14.12** (champion) |
+| 48 | 14.82 |
+
+**bge-small fingerprint-mode sweep** (all at d=32):
+
+| Mode | Slots | OOF RMSE |
+|---|---:|---:|
+| `per_bench_eq_split` (champion) | 5 | **14.12** |
+| `per_bench_eq_and_style_split` | 6 | 14.41 |
+| `per_bench_eq_split_style_per_prompt` | 13 | 14.60 |
+
+**Key findings:**
+
+- **bge-small d=32 + 5-slot is a narrow global optimum** across all three axes (embedder choice,
+  PCA dim, fingerprint-mode granularity). Every variant we tried loses by ≥Δ+0.11.
+- **Bigger embedder ≠ better fingerprint, even at its own PCA optimum.** bge-large's U-curve
+  minimum (d=24, 14.23) is still Δ+0.11 behind bge-small's d=32 minimum (14.12). Pushing
+  bge-large toward bge-small's 1.67% compression ratio — i.e. d≈85 — hits the overfit cliff
+  hard (d=96 → 15.03; d=128 → 16.84). The 2026-04-15 compression-ratio hypothesis is only
+  *partly* right: both embedders have a narrow sweet spot in compression-ratio space, but
+  bge-small's sweet spot produces strictly better fingerprints than bge-large's.
+- **Long context is neutral-to-harmful.** nomic @ 2048 — where ~99% of responses fit
+  unchunked — regressed Δ+0.33 vs bge-small's 512-with-chunking. gte-large @ 2048 regressed
+  Δ+0.23. Interpretation: the arena-predictive signal lives in roughly the first 512 tokens
+  of a response (the voice/identity signature), so extending context adds content variance
+  without adding predictive signal. Consistent with the earlier "chunk-and-pool hurts" (v3)
+  result — the opening is what matters.
+- **Adding pooling slots hurts.** 6-slot (split Style by register) and 13-slot (per-prompt
+  Style) both regressed vs 5-slot. Reconfirms the 2026-04-15 Mantel diagnostic: Style prompts
+  contribute per-prompt content variance, not per-model variance. Splitting injects nuisance
+  variance that PCA's top components can't filter away.
+
+**Design rule (upgraded to global)**: bge-small at 512 ctx, 5-slot `per_bench_eq_split`, d=32
+PCA is the global optimum for this task at n=160. No laptop hours should be spent on bigger
+embedders, longer context, or finer-grained pooling without first changing the task structure
+(more models, different benchmarks, different prediction target, etc.).
+
+**Artifacts:**
+
+- Embedder queue driver: `embeddings/_run_embedder_queue.bash` (with 2048-ctx caps and
+  `--checkpoint_every 500` flag on `embed_responses.py`)
+- PCA + mode sweep driver: `embeddings/_run_pca_and_mode_sweep.bash`
+- Per-run predict.py outputs: `arena_predictor/analysis_output/_sem_embedder_sweep_{bge_large,nomic_2k,gte_large_2k}/`
+  and `_pca_mode_sweep_{bgeL_pb5_d*,bgeS_pb5_d*,bgeS_pb6_d32,bgeS_pb13_d32}/`
+- Response-embedding parquets: `embeddings/cache/response_embeddings_{bge_large,nomic_2k,gte_large_2k}.parquet`
+
+---
+
+### Combine.py writing glob fix (2026-04-15)
+
+Late in the judge-bias work we noticed `clean_combined_all_benches.csv` had
+no Writing TrueSkill columns. Root cause: `benchmark_combiner/combine.py`
+line 591 used `pattern="benchmarks/writing_*.csv"`, which matched both
+`writing_20260407.csv` (has TrueSkill) and `writing_direct_20260407.csv`
+(score-vs-reference only). `get_latest_file` picks by date; both files
+tied on `20260407`, and the glob tie-break silently picked the `_direct`
+variant. As a result Writing TrueSkill hadn't been in the pipeline since
+those two files started coexisting (roughly a week).
+
+**Fix**: narrow the pattern to `benchmarks/writing_[0-9]*.csv`, mirroring
+the EQ pattern on line 593. Excludes `_direct` variants entirely.
+
+**Impact on reference numbers** (via full `combine.bash` regeneration, not
+hand-edit):
+
+| Config | Pre-fix | Post-fix | Δ |
+|---|---:|---:|---:|
+| Baseline (no sem) | 15.48 | **15.39** | **−0.09** |
+| Sem v4 d32 champion | 14.19 | **14.12** | **−0.07** |
+
+The post-fix n changed too (159 → 160) because one model was in
+`writing_20260407.csv` but missing from `_direct_20260407.csv`, so the
+comparison isn't strictly apples-to-apples. Directionally: the fix is
+a permanent free gain, and sem-champion stays ahead by ~Δ −1.27 over
+post-fix baseline (vs −1.29 pre-fix; same story).
+
+Not fixed here but worth noting for later: `correlations.py` around line
+1387 has a drop-list with double-space typos in several writing column
+names (e.g. `writing_Gemini 3.0 Flash Preview (2025-12-17)  TrueSkill`
+with two spaces). The real column has one space, so the drop rule fails
+to match. Happens to work out (we want TS kept) but the Sigma drops
+should be audited next time someone touches that file.
+
+---
+
 ## Verified Results (2026-03-09, post-leakage fix)
 
 All numbers below use honest OOF predictions for `style_predicted_delta` (cross_val_predict, OOF r=0.870). Prior results used in-sample predictions (r=1.000) due to a leakage bug in `soothsayer_style/score.py`.
@@ -14,7 +234,7 @@ All numbers below use honest OOF predictions for `style_predicted_delta` (cross_
 | 4 | ModelBank + coherence + trajectory in target | **21.69** | ARDRegression | Best verified config |
 | 5 | ModelBank + coherence + trajectory in both | **21.69** | ARDRegression | ALT trajectory irrelevant |
 
-All runs: `--poly_interactions --poly_limit 7 --no_residual_head --cv_repeats_outer 10 --cv_repeats_inner 5 --feature_cv_repeats 1 --alt_cv_repeats 1`
+All runs (**historical, pre-KNN era**): `--poly_interactions --poly_limit 7 --no_residual_head --cv_repeats_outer 10 --cv_repeats_inner 5 --feature_cv_repeats 1 --alt_cv_repeats 1`. These flags were retired in the 2026-04-18 cleanup — see the section at the end of this doc for the current shipped config.
 
 ### Verified Improvement Deltas
 
@@ -25,21 +245,13 @@ All runs: `--poly_interactions --poly_limit 7 --no_residual_head --cv_repeats_ou
 | ModelBank+coherence vs Specialized | **-0.57** | 22.74 → 22.17 |
 | ALT trajectory features | **0.00** | No effect on final RMSE |
 
-### Best Production Config (updated 2026-03-29)
+### Best Production Config (shipped 2026-04-18)
 
-**Target changed from lmsys_Score to lmarena_Score** — lmsys is leakage (derived from same Arena voting process). lmarena (style-controlled) is much more predictable from benchmarks (R²=0.924 vs ~0.90).
+**Target:** `lmarena_Score` (style-controlled). `lmsys_Score` is leakage (derived from the same Arena voting process).
 
-```bash
-# KNN prediction with sublinear power cutoff (production default):
-python3 predict.py \
-    --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
-    --imputer_type model_bank \
-    --coherence_lambda 1.0 --coherence_shape exp \
-    --eb_parent \
-    --cv_repeats_outer 10
-```
+See the reference block at the top of this doc for the canonical 7-flag invocation. The 2026-03-29 config (`--coherence_lambda 1.0 --eb_parent`) was superseded on 2026-04-18 when the PLS hybrid ablation showed EB parent was over-shrinking once PLS was on. Historical intermediate results below are preserved for lineage.
 
-**Results:** RMSE 15.63 (LOO), 16.03 (10×5-fold), R²=0.924, Spearman=0.962. Walk-forward RMSE: 14.86.
+**Intermediate reference (2026-03-29 config, pre-sem, pre-PLS):** RMSE 15.63 (LOO), 16.03 (10×5-fold), R²=0.924, Spearman=0.962. Walk-forward RMSE: 14.86. Historical — not the current shipped config.
 
 <details>
 <summary>Legacy ALT pipeline config (deprecated)</summary>
@@ -632,7 +844,7 @@ Baseline: **19.76** (existing pipeline, 10×10-fold)
 
 ### Key Discovery: lmsys_Score is leakage
 
-lmsys_Score (raw Arena ELO) and lmarena_Score (style-controlled Arena ELO) are both derived from the same Chatbot Arena voting process. Using lmarena as a feature to predict lmsys was circular — the high correlation (r=0.95) was because they measure the same thing, not because lmarena adds independent signal. The gap between them is driven by subjective style preference that benchmarks can't capture.
+lmsys_Score (raw Arena ELO) and lmarena_Score (style-controlled Arena ELO) are both derived from the same Arena (arena.ai) voting process. Using lmarena as a feature to predict lmsys was circular — the high correlation (r=0.95) was because they measure the same thing, not because lmarena adds independent signal. The gap between them is driven by subjective style preference that benchmarks can't capture.
 
 **Decision:** Switch target from lmsys_Score to lmarena_Score. Drop lmsys_Score from clean CSV entirely.
 
@@ -796,3 +1008,46 @@ Swept 2,700 configs across: power exponent (0.5-1.0), coefficient (2.0-4.0), ban
 4. **Fixed alpha=20 vs adaptive alpha**: fixed helps walk-forward slightly but hurts LOO. Adaptive alpha (`max(10, std)`) naturally scales with neighborhood diversity and is the better default.
 5. **Jackknife clip is not the bottleneck**: Opus 4.6's natural b=1.49 (not hitting the 1.5 clip). The error is because it's 26 points above its max neighbor — genuine extrapolation beyond training data.
 6. **Remaining residuals correlate with hard reasoning benchmarks** (AIME ρ=-0.64, LiveCodeBench ρ=-0.55). Models that crush hard benchmarks get overpredicted — humans don't reward hard reasoning proportionally at the frontier.
+
+---
+
+## PLS Hybrid + drop_style_tone (2026-04-18, SHIPPED)
+
+### Summary
+
+Two flags added on the same day after an ablation cycle on the `_sweep_*` branch:
+
+- `--drop_style_tone` — drop every `style_*` and `tone_*` column before the KNN feature matrix is built. These features still inform the `style_predicted_delta` feature, the judge-bias analysis, and the imputer's correlation-based predictor selection; they just hurt the KNN distance once PLS supervision is introduced.
+- `--pls_hybrid_k 3` — inside each CV fold, fit `PLSRegression(n_components=3)` on `(Xtr, y[tr])` and append the 3 transformed components to both `Xtr` and `Xte` before the adaptive-KNN call. No leakage: PLS is fit only on training rows in each fold.
+
+At the same time, `--eb_parent` (and its sidecars `--eb_parent_tier_n`, `--redundancy_threshold`, `--rank_by_corr_only`) was **removed** from the shipped invocation. The ablation showed EB parent over-shrunk once PLS was on.
+
+### Result
+
+| Config | 10×5 OOF RMSE | Top-15 RMSE | Opus 4.7 err |
+|---|---:|---:|---:|
+| Sem v4 @ 32, pre-PLS (earlier baseline) | 14.45 | 15.53 | −24.24 |
+| **Sem + PLS hybrid + drop_style_tone (SHIPPED)** | **13.48** | **13.44** | **−19.38** |
+| Δ | −0.97 | −2.09 | +4.86 ELO |
+
+Biggest honest-4.7 gain of the 2026-04-18 session. Top-tier error dropped disproportionately (−2.09) — PLS supervises the distance toward "the direction of ELO," which is most helpful where neighborhood structure was weakest.
+
+**Post-CritPT rerun (2026-04-18 PM, n=127):** Same SHIPPED config on the CritPT-augmented CSV lands at RMSE 13.61 / R² 0.941 / ρ 0.971 / top-15 RMSE 14.26 / Opus 4.7 Thinking err −17.78 (+1.60 ELO vs ship time). The ship-event delta above is preserved as historical.
+
+### Why drop_style_tone now
+
+The style/tone columns were added specifically to give the KNN distance a style-aware axis. Once PLS-3 is appended, the top PLS component captures style-relevant variance better than the raw style_ / tone_ columns, and the raw columns start diluting the distance with redundant dimensions. Ablation isolated the effect: dropping alone was worth −0.25 RMSE on top of the PLS gain, vs keeping them on was +0.25 RMSE lost.
+
+### Why EB parent was removed
+
+Pre-PLS, EB parent shrunk uncertain cells toward the column mean, and the `--rank_by_corr_only` / `--redundancy_threshold` flags governed which predictors survived the EB filter. Once PLS is appended to the KNN features, it already absorbs the coarse column-mean effect that EB parent was providing. Keeping EB parent on led to measurable over-shrinking at the frontier (Opus/Sonnet thinking variants).
+
+### Flags removed from predict.py (post-cleanup sweep)
+
+`--local_corr_k`, `--learned_dist`, `--resid_weight`, `--coherence_fade_pct`, `--coherence_disagreement_beta`, `--coherence_tau_cap_pct`, `--redundancy_threshold`, `--rank_by_corr_only`, `--relax_support_escalator`, `--loo_size_fair`, `--eb_parent`, `--eb_parent_sigma_mult`, `--eb_parent_tier_n`. Also: `_eb_parent_shrinkage` method (~100 lines) removed from `column_imputer.py`. Flag count 60 → 46.
+
+### Artifacts
+
+- Sweep scripts: `arena_predictor/run_*_experiments.bash`
+- Honest walk-forward: `arena_predictor/_walkforward_honest.py` → RMSE 14.69 / R² 0.900 / ρ 0.940 on n=23 newest
+- Per-step walk-forward results: `/tmp/walkforward_honest_80.csv`

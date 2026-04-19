@@ -12,13 +12,267 @@ import requests
 API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 if not API_KEY:
     raise RuntimeError("OPENROUTER_API_KEY environment variable is required")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MAX_RETRIES = 5
 INITIAL_RETRY_DELAY = 5
+
+# Claude models routed through the native Anthropic API instead of OpenRouter
+# to access the full output_config.effort system (incl. "max"). OpenRouter
+# currently flattens effort on 4.7's adaptive thinking — the direct path
+# gives real effort differentiation and access to the thinking content block.
+ANTHROPIC_NATIVE_MODELS = {
+    "anthropic/claude-opus-4.7":   "claude-opus-4-7",
+    "anthropic/claude-opus-4.6":   "claude-opus-4-6",
+    "anthropic/claude-sonnet-4.6": "claude-sonnet-4-6",
+}
 
 
 class APIError(Exception):
     """Custom exception for API-related errors."""
     pass
+
+
+def _call_anthropic_direct(
+    prompt: str,
+    model: str,
+    effort: str,
+    system_prompt: Optional[str],
+    include_usage: bool,
+) -> Union[str, Tuple[str, Dict[str, Any]]]:
+    """Call Claude via the native Anthropic /v1/messages endpoint (streaming).
+
+    Uses output_config.effort to control adaptive thinking depth. Streaming
+    is mandatory here — at effort="max" on hard prompts the model can think
+    for >10min, which blows past any sane non-streaming read timeout.
+    Anthropic's docs require streaming for any request that may exceed 10min.
+    """
+    anth_model = ANTHROPIC_NATIVE_MODELS[model]
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "accept": "text/event-stream",
+    }
+    payload: Dict[str, Any] = {
+        "model": anth_model,
+        # 16k is plenty of headroom for a benchmark response + its thinking
+        # trace. 64k burned ~$5/call at Opus pricing on runaway thinking —
+        # and retrying didn't help because the model deterministically
+        # thinks to the cap on hard prompts.
+        "max_tokens": 16000,
+        "messages": [{"role": "user", "content": prompt}],
+        "output_config": {"effort": effort},
+        # Must be explicit — without this 4.7 won't emit thinking blocks even
+        # at max effort for open-ended prompts (the model chooses to inline
+        # deliberation into visible text instead).
+        "thinking": {"type": "adaptive"},
+        "stream": True,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+
+    delay = INITIAL_RETRY_DELAY
+    last_exc: Optional[Exception] = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            time.sleep(random.uniform(0.02, 0.12))
+            # Read timeout is per-event. Streaming resets it on every SSE
+            # event so thinking can run indefinitely as long as the server
+            # keeps emitting deltas (it emits thinking_deltas / pings often).
+            r = requests.post(
+                url, json=payload, headers=headers,
+                timeout=(10, 300), stream=True,
+            )
+            if not r.ok:
+                try:
+                    err = r.json().get("error", r.text[:500])
+                except ValueError:
+                    err = (r.text or "")[:500]
+                last_exc = APIError(f"Anthropic HTTP {r.status_code}: {err}")
+                r.close()
+                if r.status_code == 429:
+                    retry_after = r.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            delay = max(delay, float(retry_after))
+                        except ValueError:
+                            pass
+                if 400 <= r.status_code < 500 and r.status_code not in (408, 409, 429):
+                    raise last_exc
+            else:
+                # SSE parse: accumulate text/thinking deltas per content block,
+                # capture usage from message_start and message_delta.
+                blocks: Dict[int, Dict[str, Any]] = {}
+                input_tok = 0
+                output_tok = 0
+                cache_read = 0
+                cache_write = 0
+                stream_error: Optional[str] = None
+                stop_reason: Optional[str] = None
+
+                try:
+                    for raw_line in r.iter_lines(decode_unicode=True):
+                        if not raw_line:
+                            continue
+                        if not raw_line.startswith("data:"):
+                            continue
+                        data_str = raw_line[5:].strip()
+                        if not data_str:
+                            continue
+                        try:
+                            evt = json.loads(data_str)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        etype = evt.get("type")
+                        if etype == "message_start":
+                            u = (evt.get("message") or {}).get("usage") or {}
+                            input_tok = u.get("input_tokens", 0) or 0
+                            output_tok = u.get("output_tokens", 0) or 0
+                            cache_read = u.get("cache_read_input_tokens", 0) or 0
+                            cache_write = u.get("cache_creation_input_tokens", 0) or 0
+                        elif etype == "content_block_start":
+                            idx = evt.get("index", 0)
+                            cb = evt.get("content_block") or {}
+                            blocks[idx] = {
+                                "type": cb.get("type"),
+                                "text": "",
+                                "thinking": cb.get("thinking", "") or "",
+                            }
+                        elif etype == "content_block_delta":
+                            idx = evt.get("index", 0)
+                            delta = evt.get("delta") or {}
+                            dtype = delta.get("type")
+                            if idx not in blocks:
+                                blocks[idx] = {"type": None, "text": "", "thinking": ""}
+                            if dtype == "text_delta":
+                                blocks[idx]["text"] += delta.get("text", "") or ""
+                                if blocks[idx].get("type") is None:
+                                    blocks[idx]["type"] = "text"
+                            elif dtype == "thinking_delta":
+                                blocks[idx]["thinking"] += delta.get("thinking", "") or ""
+                                if blocks[idx].get("type") is None:
+                                    blocks[idx]["type"] = "thinking"
+                            # signature_delta is 4.7's encrypted thinking — ignore content, just note presence
+                            elif dtype == "signature_delta":
+                                if blocks[idx].get("type") is None:
+                                    blocks[idx]["type"] = "thinking"
+                        elif etype == "message_delta":
+                            u = evt.get("usage") or {}
+                            if "output_tokens" in u:
+                                output_tok = u.get("output_tokens", output_tok) or output_tok
+                            d = evt.get("delta") or {}
+                            if d.get("stop_reason"):
+                                stop_reason = d.get("stop_reason")
+                        elif etype == "error":
+                            err_obj = evt.get("error") or {}
+                            stream_error = f"{err_obj.get('type', 'error')}: {err_obj.get('message', data_str[:300])}"
+                            break
+                        elif etype == "message_stop":
+                            break
+                finally:
+                    r.close()
+
+                if stream_error:
+                    last_exc = APIError(f"Anthropic stream error: {stream_error}")
+                else:
+                    text_parts = []
+                    thinking_block_present = False
+                    thinking_visible = []
+                    for idx in sorted(blocks.keys()):
+                        blk = blocks[idx]
+                        if blk.get("type") == "text":
+                            text_parts.append(blk.get("text", ""))
+                        elif blk.get("type") == "thinking":
+                            thinking_block_present = True
+                            tvis = blk.get("thinking", "")
+                            if tvis:
+                                thinking_visible.append(tvis)
+                    text = "".join(text_parts).strip()
+
+                    # Max-tokens truncation with no visible text: the model
+                    # thought to the cap and never wrote anything. Retrying
+                    # at the same effort is deterministic waste ($5/call at
+                    # Opus pricing). Raise immediately so caller-level
+                    # fallbacks (e.g. collect.py's medium-effort retry) can
+                    # kick in with a lower-cost config.
+                    if stop_reason == "max_tokens" and not text:
+                        raise APIError(
+                            f"Anthropic max_tokens ({output_tok} output tokens) "
+                            f"with no visible text — not retrying at same effort"
+                        )
+
+                    if not text:
+                        last_exc = APIError("Anthropic returned empty text content")
+                    else:
+                        if not include_usage:
+                            return text
+                        # Estimate thinking-token share: total output minus visible
+                        # text (~4 chars/token). If no thinking block present, zero.
+                        if thinking_block_present:
+                            visible_tok = max(1, len(text) // 4)
+                            est_reasoning = max(0, output_tok - visible_tok)
+                        else:
+                            est_reasoning = 0
+                        usage = {
+                            "prompt_tokens": input_tok,
+                            "completion_tokens": output_tok,
+                            "reasoning_tokens": est_reasoning,
+                            "total_tokens": input_tok + output_tok,
+                            "cost": None,
+                            "cost_details": None,
+                            "prompt_tokens_details": {
+                                "cached_tokens": cache_read,
+                                "cache_write_tokens": cache_write,
+                            },
+                            "thinking_content": "\n".join(thinking_visible),
+                            "thinking_present": thinking_block_present,
+                            "raw": {
+                                "input_tokens": input_tok,
+                                "output_tokens": output_tok,
+                                "cache_read_input_tokens": cache_read,
+                                "cache_creation_input_tokens": cache_write,
+                            },
+                        }
+                        return text, usage
+        except requests.RequestException as e:
+            last_exc = e
+
+        if attempt < MAX_RETRIES - 1:
+            print(f"Retrying after error: {last_exc}. Waiting {delay:.2f}s...")
+            time.sleep(delay + random.uniform(0, 0.5))
+            delay *= 2
+
+    raise last_exc or APIError("Anthropic: exhausted retries")
+
+
+def _pick_anthropic_effort(
+    name: str,
+    reasoning: bool,
+    reasoning_effort: Optional[str],
+    tier_lists: Dict[str, list],
+) -> str:
+    """Map a model name + flags to an Anthropic effort level.
+
+    Matches the tier system used by the OpenRouter branch so model
+    routing stays consistent. Bare thinking models (the fallback "else"
+    branch on OpenRouter) default to "max" per user request.
+    """
+    if reasoning_effort is not None:
+        return reasoning_effort
+    if not reasoning or name in tier_lists["nonthinking_variants"] or name in tier_lists["none_models"]:
+        return "low"
+    if name in tier_lists["minimal_models"]:
+        return "low"
+    if name in tier_lists["low_models"]:
+        return "low"
+    if name in tier_lists["medium_models"]:
+        return "medium"
+    if name in tier_lists["high_models"]:
+        return "high"
+    if name in tier_lists["xhigh_models"]:
+        return "xhigh"
+    return "max"
 
 
 def get_llm_response(
@@ -67,7 +321,8 @@ def get_llm_response(
         'deepseek/deepseek-v3.2': 'deepseek',
         'deepseek/deepseek-v3.2-speciale': 'deepseek',
         'z-ai/glm-4.7': 'z-ai',
-        'z-ai/glm-5': 'z-ai'
+        'z-ai/glm-5': 'z-ai',
+        'z-ai/glm-5.1': 'z-ai'
     }
 
     nonthinking_variants = [
@@ -96,6 +351,23 @@ def get_llm_response(
     low_models = ["GPT-5 (low)", "GPT-5 Mini (low)", "GPT-5 Nano (low)", 'Claude Opus 4.5 Thinking (Low)', 'Gemini 3.0 Pro Preview (2025-11-18) (Low)', 'Gemini 3.0 Flash Preview (2025-12-17) (Low)']
     minimal_models = ["GPT-5 (minimal)", "GPT-5 Nano (minimal)", "GPT-5 Mini (minimal)", 'Gemini 3.0 Flash Preview (2025-12-17) (Minimal)']
     none_models = ["GPT-5.1 (Non-reasoning)", "GPT-5.2 (Non-reasoning)"]
+
+    # Route supported Claude models through native Anthropic API for full
+    # effort control (OpenRouter flattens effort on 4.7's adaptive thinking).
+    if ANTHROPIC_API_KEY and model in ANTHROPIC_NATIVE_MODELS:
+        effort = _pick_anthropic_effort(name, reasoning, reasoning_effort, {
+            "nonthinking_variants": nonthinking_variants,
+            "none_models": none_models,
+            "minimal_models": minimal_models,
+            "low_models": low_models,
+            "medium_models": medium_models,
+            "high_models": high_models,
+            "xhigh_models": xhigh_models,
+        })
+        return _call_anthropic_direct(
+            prompt=prompt, model=model, effort=effort,
+            system_prompt=system_prompt, include_usage=include_usage,
+        )
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     payload: Dict[str, Any] = {
@@ -128,9 +400,9 @@ def get_llm_response(
     elif name in high_models:
         payload["reasoning"] = {"effort": "high"}
     elif name in xhigh_models:
-        payload["reasoning"] = {"effort": "xhigh"}
+        payload["reasoning"] = {"effort": "xhigh", "enabled": True}
     else:
-        payload["reasoning"] = {"effort": "xhigh"}
+        payload["reasoning"] = {"effort": "xhigh", "enabled": True}
 
     forced_provider = provider_overrides.get(model)
     delay = INITIAL_RETRY_DELAY

@@ -25,6 +25,8 @@ This document defines the data schemas, column definitions, and file formats use
 
 Each benchmark source provides a dated CSV (e.g., `livebench_20260315.csv`) with model performance scores. All sources share a common pattern: one row per model, with benchmark-specific score columns. The pipeline uses glob patterns to find the latest file per source.
 
+The current shipped `benchmark_combiner/combine.py` consumes 23 CSV patterns total: 17 public/input families and 6 custom/derived internal families.
+
 See [Combined Column Descriptions](#combined-column-descriptions) for detailed descriptions of individual columns as they appear in the combined CSV.
 
 #### External Sources
@@ -32,7 +34,7 @@ See [Combined Column Descriptions](#combined-column-descriptions) for detailed d
 | Source | File Pattern | What It Measures |
 |--------|-------------|-----------------|
 | LMArena | `lmarena_*.csv` | Style-controlled Arena ELO (**prediction target**) |
-| Chatbot Arena | `lmsys_*.csv` | Raw Arena ELO (excluded from clean CSV — leakage) |
+| Arena (arena.ai) | `lmsys_*.csv` | Raw Arena ELO (excluded from clean CSV — leakage) |
 | LiveBench | `livebench_*.csv` | Multi-category: reasoning, coding, math, language, IF |
 | OpenBench | `openbench_*.csv` | Canonical model namespace + AIME, GPQA, SWE-Bench, MMLU |
 | Artificial Analysis | `artificialanalysis_*.csv` | Quality index, pricing, speed |
@@ -47,7 +49,7 @@ See [Combined Column Descriptions](#combined-column-descriptions) for detailed d
 | Yupp | `yupp_text_coding_scores_*.csv` | VIBEScore for text + coding |
 | UGI | `UGI_Leaderboard_*.csv` | Writing quality |
 
-#### Soothsayer Sources
+#### Soothsayer Sources and Derived Internal Features
 
 | Source | File Pattern | What It Measures |
 |--------|-------------|-----------------|
@@ -56,6 +58,13 @@ See [Combined Column Descriptions](#combined-column-descriptions) for detailed d
 | Soothsayer Logic | `logic_*.csv` | Commonsense reasoning (ML-predicted SimpleBench scores) |
 | Soothsayer Style | `style_*.csv` | Writing style metrics (length, formatting, bold, lists) |
 | Soothsayer Tone | `tone_*.csv` | Response quality/tone (TrueSkill pairwise) |
+| EQ multi-turn features | `eq_multiturn_*.csv` | Derived EQ behavioral features extracted from raw multi-turn responses and battle history |
+
+#### Derived Feature Sources
+
+| Source | File Pattern | What It Provides |
+|--------|-------------|------------------|
+| Response-embedding fingerprints | `model_fingerprints_v4_d32.csv` | 32 PCA-compressed `sem_f*` columns derived from bge-small embeddings of raw responses (all 4 benchmarks). Not a benchmark — a derived feature set sibling to `style_` / `tone_` under the response-character family. See [ARCHITECTURE.md](ARCHITECTURE.md) for the pipeline. |
 
 ---
 
@@ -231,11 +240,31 @@ Combined benchmark data from all sources, merged on model name. Models with too 
 |--------|-------------|
 | `eq_* TrueSkill` | EQ TrueSkill rating by named LLM judge |
 
+#### Response-embedding columns (`sem_*`)
+
+`sem_f01` … `sem_f32` are 32 principal components of per-model response-embedding fingerprints. See [ARCHITECTURE.md §embeddings/ — Response-Embedding Pipeline](ARCHITECTURE.md) for the full pipeline. These are *derived features* from the same raw responses that the benchmarks score; they are a sibling feature family to `style_` and `tone_`, not a sub-benchmark.
+
+**The "5-slot" structure.** For each model, we build the fingerprint by grouping its responses into 5 per-source slots (not 5 dimensions — 5 *buckets*, each itself a 384-dim bge-small mean-embedding):
+
+| Slot | What goes in it | Avg responses per model |
+|---|---|---|
+| `eq_t1` | EQ first-turn responses | ~15 |
+| `eq_t3` | EQ last-turn responses (middle turn t2 dropped) | ~15 |
+| `logic` | All Logic responses | ~48 |
+| `style` | All Style responses | ~38 |
+| `writing` | All Writing responses | ~5 |
+
+Dimensional flow: one response → 384 numbers (bge-small) · group into 5 slots · average within each slot → 5 × 384 = 1920 raw numbers per model · PCA across 235 models → top 32 components = `sem_f01`..`sem_f32`. The 5-slot structure preserves per-source response-character (a model can be warm on EQ but terse on logic, which single-pool averaging destroyed — compare v1's Δ −0.52 to v4 @ 32's Δ −1.29 in FINDINGS.md).
+
+| Column pattern | Description |
+|---------------|-------------|
+| `sem_f01` … `sem_f32` | PCA components of the per-model response fingerprint. Unsupervised; no target leakage. Top components capture verbosity/length; subsequent components capture register, reasoning-style, and EQ-turn escalation axes. |
+
 ---
 
 ## Output Data
 
-All outputs are written to a timestamped subdirectory under `analysis_output/` (relative to where `predict.py` is run, typically `arena_predictor/analysis_output/`).
+When you run `predict.sh`, current `predict.py` outputs are written to `arena_predictor/analysis_output/output_YYYYMMDD_HHMMSS/`.
 
 ### imputed_full.csv
 
@@ -266,17 +295,21 @@ Final ELO predictions with confidence intervals.
 | File | Description |
 |------|-------------|
 | `oof_predictions.csv` | Out-of-fold predictions for all training models |
-| `feature_ranking_gain.csv` | Features ranked by tree-based importance |
-| `feature_matrix_used.csv` | Feature matrix fed to the final models |
 | `run_config.json` | Full configuration used for this run |
+| `metadata.json` | Run metadata including OOF RMSE and output notes |
 | `imputation_quality_per_cell.csv` | Per-cell imputation quality metrics |
 | `imputation_quality_per_column.csv` | Per-column imputation quality metrics |
-| `best_model_variance_contributions.csv` | Per-feature variance contributions |
-| `alt_model_variance_contributions.csv` | Per-feature variance contributions (ALT model) |
+| `imputation_quality_by_extrapolation_bin.csv` | Imputation quality summarized by extrapolation bin |
+| `imputation_importance.csv` | Per-target/predictor imputation importance table (when available) |
 | `conformal_diagnostics.csv` | Conformal interval calibration diagnostics |
+| `conformal_uncertainty_features.csv` | Per-model uncertainty feature table used in conformal scaling |
 | `model_eval_rmse.csv` | Per-model CV RMSE comparison |
 | `column_dependency_graph.json` | Column dependency structure |
-| `metadata.json` | Run metadata including OOF RMSE |
+| `column_dependency_summary.json` | Dependency summary payload for final features |
+| `column_dependency_summary.csv` | Per-column dependency table |
+| `column_degrees_of_separation.csv` | Minimum hop count from the target model node |
+
+Older `arena_predictor/analysis_output/` directories in this repo also contain historical experiment artifacts such as `feature_ranking_gain.csv`, `feature_matrix_used.csv`, `best_model_variance_contributions.csv`, and `alt_model_variance_contributions.csv`. Those files are not part of the current default `predict.py` write path.
 
 ---
 
@@ -288,7 +321,7 @@ Final ELO predictions with confidence intervals.
 |--------|--------|
 | `openbench_` | OpenBench suite |
 | `livebench_` | LiveBench benchmark |
-| `lmsys_` | Chatbot Arena |
+| `lmsys_` | Arena (arena.ai) |
 | `lmarena_` | Length-adjusted Arena |
 | `simplebench_` | SimpleBench |
 | `lechmazur_` | Lechmazur benchmarks |
@@ -301,11 +334,12 @@ Final ELO predictions with confidence intervals.
 | `weirdml_` | WeirdML |
 | `yupp_` | Yupp leaderboard |
 | `ugileaderboard_` | UGI leaderboard |
-| `style_` | Soothsayer Style |
+| `style_` | Soothsayer Style (engineered response-character metrics) |
 | `logic_` | Soothsayer Logic |
-| `tone_` | Soothsayer Tone |
+| `tone_` | Soothsayer Tone (engineered response-character metrics) |
 | `writing_` | Soothsayer Writing |
 | `eq_` | Soothsayer EQ |
+| `sem_` | Derived response-embedding fingerprint (PCA on bge-small embeddings of raw responses from all 4 Soothsayer benchmarks). Sibling to `style_` / `tone_` under the response-character family. |
 
 ### Data Types
 

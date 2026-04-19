@@ -29,7 +29,7 @@ from core.utils import (
 )
 from core.trueskill_arena import TrueSkillArena, ArenaConfig
 
-from llm_client import get_llm_response
+from core.llm_client import get_llm_response
 
 # --- CONFIGURATION ---
 SCRIPT_DIR = Path(__file__).parent

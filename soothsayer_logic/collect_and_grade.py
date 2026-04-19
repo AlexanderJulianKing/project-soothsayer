@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from core.utils import get_latest_file, discover_openbench_csv
 
-from llm_client import get_llm_response, APIError, API_KEY
+from core.llm_client import get_llm_response, APIError, API_KEY
 
 
 

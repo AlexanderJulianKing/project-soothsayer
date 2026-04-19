@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Post-hoc analysis suite: 16 charts for benchmark/prediction diagnostics.
+"""Post-hoc analysis suite: 15 chart sections for benchmark/prediction diagnostics.
+
+Some sections emit multiple figure files, so the output figure count is larger
+than the number of chart sections listed here.
 
 Charts produced:
   1. Cost vs Performance + Pareto Frontier
@@ -18,7 +21,7 @@ Charts produced:
  14. Capability Profiles (radar + bars)
  15. Predicted vs Actual Arena ELO (top 50 scatter)
 
-All outputs land in  analysis_output/posthoc_suite/run_YYYYMMDD_HHMMSS/
+All outputs land in arena_predictor/analysis_output/posthoc_suite/run_YYYYMMDD_HHMMSS/
 """
 
 from __future__ import annotations

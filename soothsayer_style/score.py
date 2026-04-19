@@ -1,8 +1,8 @@
-"""Stage 3: Aggregate judge scores, compute markdown features, predict Arena ELO delta.
+"""Stage 3: Aggregate tone TrueSkill outputs, compute style features, predict Arena ELO delta.
 
 Reads:
   - responses.csv   (long-format model responses from collect.py)
-  - judge_results.csv (per-response judge scores from style_analysis.py)
+  - results/tone_*.csv (pairwise tone TrueSkill scores from super_bench.py)
   - combined_all_benches.csv (external benchmarks for ML target)
 
 Outputs (backward-compatible with combine.py df8/df10):
@@ -74,7 +74,9 @@ FEATURE_SELECT_K = 80
 
 
 # ==============================================================================
-# --- JUDGE SCORE AGGREGATION (replaces process_analysis.py) ---
+# --- Legacy judge_results.csv aggregation helper ---
+# style_analysis.py still exists as an auxiliary absolute-scoring path, but the
+# shipped Style pipeline uses results/tone_*.csv from super_bench.py instead.
 # ==============================================================================
 def aggregate_judge_scores(judge_csv: str) -> pd.DataFrame:
     """Read judge_results.csv, normalize each axis per judge, aggregate to one row per model.

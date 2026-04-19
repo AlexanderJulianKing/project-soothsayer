@@ -10,8 +10,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Set
 
-from core.config import BenchmarkConfig
-
 
 @dataclass
 class BenchmarkResult:
@@ -47,7 +45,7 @@ class Benchmark(ABC):
     def get_completed_models(self) -> Set[str]:
         """Return set of model names already fully evaluated."""
 
-    def run_stage(self, stage: str, config: BenchmarkConfig = None) -> BenchmarkResult:
+    def run_stage(self, stage: str) -> BenchmarkResult:
         """Run a single stage of the benchmark pipeline via subprocess."""
         try:
             idx = self.stages.index(stage)
@@ -62,11 +60,11 @@ class Benchmark(ABC):
         output = result.stdout + result.stderr
         return BenchmarkResult(stage=stage, exit_code=result.returncode, log_output=output)
 
-    def run_all(self, config: BenchmarkConfig = None) -> List[BenchmarkResult]:
+    def run_all(self) -> List[BenchmarkResult]:
         """Run all stages sequentially, stopping on first failure."""
         results = []
         for stage in self.stages:
-            result = self.run_stage(stage, config)
+            result = self.run_stage(stage)
             results.append(result)
             if result.exit_code != 0:
                 break
