@@ -164,5 +164,12 @@
   "GPT-5.4 Mini xHigh": "GPT-5.4 Mini",
   "GPT-5.4 Nano xHigh": "GPT-5.4 Nano",
   "Minimax M2.7": "MiniMax M2.7",
-  "GPT-5.4 Mini": ""
+  "GPT-5.4 Mini": "",
+  "Gemma 4 31B": "Gemma 4 31B",
+  "GLM 5V Turbo": "",
+  "Claude 4.7 Opus Thinking High Effort": "",
+  "Claude 4.7 Opus Thinking xHigh Effort": "Claude Opus 4.7 Thinking",
+  "Qwen 3.6 Plus": "",
+  "Elephant Alpha": "",
+  "Nemotron 3 Super 120B A12B": "Nemotron 3 Super"
 }

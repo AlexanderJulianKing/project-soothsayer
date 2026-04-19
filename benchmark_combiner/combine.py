@@ -588,9 +588,13 @@ def combine_benchmarks_with_auto_mapping():
                 "columns": ["model_name", "accuracy", "weighted_accuracy", "physics_acc", "trick_acc",
                              "avg_answer_tokens", "avg_reasoning_tokens", "PC1", "PC2", "PC3", "PC4"]},
         "df10": {"name": "Tone", "pattern": "benchmarks/tone_*.csv", "model_col": "judged_model"},
-        "df12": {"name": "Writing", "pattern": "benchmarks/writing_*.csv", "model_col": "writer_model"},
+        "df12": {"name": "Writing", "pattern": "benchmarks/writing_[0-9]*.csv", "model_col": "writer_model"},
         # EQ uses OpenBench canonical names directly
-        "df20": {"name": "EQ", "pattern": "benchmarks/eq_*.csv", "model_col": "model"}
+        "df20": {"name": "EQ", "pattern": "benchmarks/eq_[0-9]*.csv", "model_col": "model"},
+        # EQ multi-turn behavioral features (draft continuity, back-references, length
+        # dynamics, per-criterion winrates) extracted from raw per-turn responses and
+        # battle_history.csv — see soothsayer_eq/extract_multiturn_features.py
+        "df24": {"name": "EQMT", "pattern": "benchmarks/eq_multiturn_*.csv", "model_col": "model_name"},
     }
 
 
@@ -730,9 +734,29 @@ def combine_benchmarks_with_auto_mapping():
         current_df.rename(columns=columns_to_rename, inplace=True)
 
         # Deduplicate: if multiple source rows map to the same Unified_Name,
-        # keep only the first occurrence to prevent row multiplication in merge
+        # keep only the first occurrence to prevent row multiplication in merge.
+        # The mapping file is authoritative; duplicates mean the mapping is
+        # under-specified and needs curation (e.g. distinct effort levels
+        # collapsing to one canonical name). Report them loudly so they can
+        # be fixed in the mapping JSON rather than hidden here.
         before = len(current_df)
         current_df = current_df[current_df['Unified_Name'].notna() & (current_df['Unified_Name'] != '')]
+        dup_mask = current_df['Unified_Name'].duplicated(keep=False)
+        if dup_mask.any():
+            src_col = None
+            for c in (f'{bench_name_lower}_Model', f'{bench_name_lower}_model',
+                      f'{bench_name_lower}_model_name', f'{bench_name_lower}_name',
+                      f'{bench_name_lower}_display_name', f'{bench_name_lower}_AI System',
+                      f'{bench_name_lower}_judged_model', f'{bench_name_lower}_writer_model',
+                      f'{bench_name_lower}_author/model_name'):
+                if c in current_df.columns:
+                    src_col = c; break
+            print(f"  [WARN] {config['name']}: {dup_mask.sum()} source rows map to duplicate Unified_Names — "
+                  f"keeping first, dropping rest. Fix the mapping file to resolve:")
+            dups = current_df.loc[dup_mask].groupby('Unified_Name', sort=False)
+            for tgt, grp in dups:
+                srcs = grp[src_col].tolist() if src_col else ['<unknown>'] * len(grp)
+                print(f"    {tgt}  <-  {srcs}  (keeping: {srcs[0]})")
         current_df = current_df.drop_duplicates(subset='Unified_Name', keep='first')
         after = len(current_df)
         if before != after:
@@ -914,8 +938,8 @@ if __name__ == "__main__":
             "o3 High": {"input": 2.0, "output": 8.0},
             "GPT-5.2 (high)": {"input": 1.75, "output": 14.00},
             "GPT-5.1 Codex Max": (1.25, 10.0),
-            "DeepSeek R1": (0.55, 2.19)
-
+            "DeepSeek R1": (0.55, 2.19),
+            "Gemma 4 31B": (0.14, 0.40),
 
             # "Unified Model Name": {"input": 0.0, "output": 0.0},
             # "Another Model": (0.12, 0.34),
@@ -942,14 +966,14 @@ if __name__ == "__main__":
                         print(f"Model '{model_name}' not found for manual AA pricing update.")
                         continue
 
-                    aa_input_missing_mask = row_condition_unified_name & df_all[aa_input_col].isna()
+                    aa_input_missing_mask = row_condition_unified_name & (df_all[aa_input_col].isna() | (df_all[aa_input_col] == 0))
                     if aa_input_missing_mask.any() and input_price is not None:
                         df_all.loc[aa_input_missing_mask, aa_input_col] = input_price
                         print(f"Applied manual AA input pricing update for {model_name}.")
                     elif not aa_input_missing_mask.any():
                         print(f"Skipping AA input pricing update for {model_name}: value already present.")
 
-                    aa_output_missing_mask = row_condition_unified_name & df_all[aa_output_col].isna()
+                    aa_output_missing_mask = row_condition_unified_name & (df_all[aa_output_col].isna() | (df_all[aa_output_col] == 0))
                     if aa_output_missing_mask.any() and output_price is not None:
                         df_all.loc[aa_output_missing_mask, aa_output_col] = output_price
                         print(f"Applied manual AA output pricing update for {model_name}.")

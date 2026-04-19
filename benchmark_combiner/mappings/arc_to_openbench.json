@@ -136,5 +136,20 @@
   "GPT-5.4 Pro (xHigh)": "",
   "GPT-5.4 (xHigh)": "GPT-5.4 Thinking",
   "GPT-5.4 (High)": "",
-  "GPT-5.4 (Low)": ""
+  "GPT-5.4 (Low)": "",
+  "GPT-5.4 Nano (Low)": "",
+  "GPT-5.4 Nano (xHigh)": "GPT-5.4 Nano",
+  "GPT-5.4 Nano (High)": "",
+  "Anthropic Opus 4.6 (Max)": "Claude Opus 4.6",
+  "GPT-5.4 Mini (Medium)": "",
+  "GPT-5.4 Nano (Medium)": "",
+  "Grok 4.20 (Reasoning)": "",
+  "GPT-5.4 Mini (xHigh)": "GPT-5.4 Mini",
+  "Grok 4.20 (Beta Reasoning)": "Grok 4.2 beta",
+  "GPT-5.4 Mini (Low)": "",
+  "GPT-5.4 Mini (High)": "",
+  "Claude 4.7 (High)": "",
+  "Claude 4.7 (Low)": "",
+  "Claude 4.7 (Medium)": "",
+  "Claude 4.7 (Max)": "Claude Opus 4.7 Thinking"
 }

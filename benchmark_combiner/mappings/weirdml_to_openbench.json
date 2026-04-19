@@ -105,5 +105,8 @@
   "minimax-m2.7": "MiniMax M2.7",
   "qwen3.5-27b": "Qwen3.5 27B Thinking",
   "gpt-5.4-mini (no thinking)": "GPT-5.4 Mini",
-  "gpt-5.4-nano (high)": "GPT-5.4 Nano"
+  "gpt-5.4-nano (high)": "GPT-5.4 Nano",
+  "gemma4-31b": "Gemma 4 31B",
+  "claude-opus-4.7 (no thinking)": "",
+  "gemma4-26b-a4b": "Gemma 4 26B A4B"
 }

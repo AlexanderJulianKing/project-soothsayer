@@ -2360,13 +2360,12 @@ class ModelBankImputer:
         force_categorical_cols: Optional[List[str]] = None,
         skew_threshold: float = 2.0,
         confidence_threshold: float = 0.4,
-        redundancy_threshold: float = 0.85,
         min_support: int = 10,
         coherence_lambda: float = 1.0,
         coherence_shape: str = "linear",
         coherence_gate: str = "fixed",
+        predictor_selection: str = "corr",
         iterative_coherence: bool = False,
-        eb_parent: bool = False,
         use_svd_predictors: bool = False,
         n_expansion_passes: int = 1,
         max_confident_extras: int = 1,
@@ -2381,13 +2380,12 @@ class ModelBankImputer:
         self.force_categorical_cols = set(force_categorical_cols or [])
         self.skew_threshold = skew_threshold
         self.confidence_threshold = confidence_threshold
-        self.redundancy_threshold = redundancy_threshold
         self.min_support = min_support
         self.coherence_lambda = coherence_lambda
         self.coherence_shape = coherence_shape
         self.coherence_gate = coherence_gate
+        self.predictor_selection = predictor_selection
         self.iterative_coherence = iterative_coherence
-        self.eb_parent = eb_parent
         self.use_svd_predictors = use_svd_predictors
         self.n_expansion_passes = n_expansion_passes
         self.max_confident_extras = max_confident_extras
@@ -2410,6 +2408,7 @@ class ModelBankImputer:
         self.spearman_matrix_: Optional[pd.DataFrame] = None
         self.original_missing_: Dict[str, pd.Series] = {}
         self._candidate_rankings: Dict[str, List[Tuple[str, float, int]]] = {}
+        self._loo_forward_selections: Dict[str, List[str]] = {}
         self._col_sd: Dict[str, float] = {}
         self._svd_rank: Optional[int] = None
         self._svd_anchor: Optional[np.ndarray] = None
@@ -2458,6 +2457,8 @@ class ModelBankImputer:
 
         # ---- Phase 1: per-column candidate rankings ----
         self._build_candidate_rankings(X_df, cols_to_impute)
+        if self.predictor_selection == "loo_forward":
+            self._build_loo_forward_selections(X_df, cols_to_impute)
 
         # ---- Phase 2: pass 1 — observed-only imputation ----
         self.sigma2_matrix_ = pd.DataFrame(
@@ -2469,10 +2470,6 @@ class ModelBankImputer:
             self.sigma2_matrix_.loc[observed_mask, col] = 0.0
 
         self._pass1_observed_only(X_df, cols_to_impute)
-
-        # ---- Phase 2b: EB parent shrinkage (post-pass1, pre-coherence) ----
-        if self.eb_parent:
-            self._eb_parent_shrinkage(X_df, cols_to_impute)
 
         # ---- Phase 3: expansion passes — uncertainty-gated ----
         if self.iterative_coherence:
@@ -2601,48 +2598,6 @@ class ModelBankImputer:
         self.spearman_matrix_ = X_df[numeric_cols].corr(method='spearman')
         if self.verbose:
             print("  Correlation matrices computed")
-
-    # --------------------------------------------------------------------- #
-    #  Phase 4a: empirical-Bayes parent shrinkage                            #
-    # --------------------------------------------------------------------- #
-    def _eb_parent_shrinkage(self, X_df: pd.DataFrame, cols_to_impute: List[str]) -> None:
-        """Shrink uncertain imputed cells toward the column mean (parent model).
-
-        For each missing cell: new = w * prediction + (1-w) * col_mean,
-        where w = parent_var / (parent_var + cell_sigma2).
-
-        Cells with low sigma2 (confident) keep their prediction;
-        cells with high sigma2 get pulled toward the column mean.
-        """
-        for col in cols_to_impute:
-            miss_mask = self.original_missing_.get(col)
-            if miss_mask is None:
-                continue
-            miss_idx = miss_mask[miss_mask].index
-            if len(miss_idx) == 0:
-                continue
-
-            # Parent model: column mean from observed values
-            obs_mask = ~miss_mask
-            obs_vals = X_df.loc[obs_mask, col]
-            if len(obs_vals) < 2:
-                continue
-            parent_mean = float(obs_vals.mean())
-            parent_var = float(obs_vals.var())
-            if parent_var < 1e-12:
-                continue
-
-            # Shrinkage: w = parent_var / (parent_var + sigma2)
-            sigma2_vals = self.sigma2_matrix_.loc[miss_idx, col].values
-            w = parent_var / (parent_var + sigma2_vals)
-            w = np.clip(w, 0.0, 1.0)
-
-            pred_vals = X_df.loc[miss_idx, col].values
-            shrunk = w * pred_vals + (1.0 - w) * parent_mean
-            X_df.loc[miss_idx, col] = shrunk
-
-        if self.verbose:
-            print("  EB parent shrinkage applied")
 
     # --------------------------------------------------------------------- #
     #  Phase 4b: low-rank coherence projection                               #
@@ -2970,6 +2925,77 @@ class ModelBankImputer:
             print(f"  Candidate rankings built for {len(cols_to_impute)} columns")
 
     # --------------------------------------------------------------------- #
+    #  Phase 1b: per-column LOO forward selection                            #
+    # --------------------------------------------------------------------- #
+    def _build_loo_forward_selections(
+        self, X_df: pd.DataFrame, cols_to_impute: List[str]
+    ) -> None:
+        """For each target column, run greedy forward selection driven by LOO MSE.
+
+        Uses the candidate pool from `_candidate_rankings`. At each step, evaluates
+        adding each remaining candidate, computes BayesianRidge LOO MSE on rows
+        where target + selected + candidate are all observed, and accepts the one
+        with lowest LOO MSE. Stops when no candidate strictly improves LOO MSE
+        (with a small margin) or when k_max selected.
+        """
+        k_cap = 8  # global cap on selected count per column
+        rel_tol = 1e-3  # require >0.1% MSE improvement to keep adding
+        for col in cols_to_impute:
+            cands = [n for n, _, _ in self._candidate_rankings.get(col, [])]
+            if not cands:
+                self._loo_forward_selections[col] = []
+                continue
+
+            target = X_df[col].to_numpy(dtype=float)
+            target_obs = ~np.isnan(target)
+
+            selected: List[str] = []
+            best_mse = np.inf
+            remaining = list(cands)
+
+            while remaining and len(selected) < k_cap:
+                best_cand = None
+                best_cand_mse = np.inf
+                for cand in remaining:
+                    pred_list = selected + [cand]
+                    mask = target_obs.copy()
+                    for p in pred_list:
+                        mask &= X_df[p].notna().to_numpy()
+                    n = int(mask.sum())
+                    needed = max(self.min_support, 5 * (len(pred_list) + 1))
+                    if n < needed:
+                        continue
+                    X_tr = X_df.loc[mask, pred_list].to_numpy(dtype=float)
+                    y_tr = target[mask]
+                    try:
+                        scaler = StandardScaler()
+                        X_scaled = scaler.fit_transform(X_tr)
+                        model = BayesianRidge(compute_score=False, fit_intercept=True)
+                        model.fit(X_scaled, y_tr)
+                        mse, ill = self._hat_matrix_loo(model, X_scaled, y_tr)
+                    except Exception:
+                        continue
+                    if ill or not np.isfinite(mse):
+                        continue
+
+                    if mse < best_cand_mse:
+                        best_cand_mse = mse
+                        best_cand = cand
+                if best_cand is None:
+                    break
+                if len(selected) > 0 and best_cand_mse >= best_mse * (1.0 - rel_tol):
+                    break
+                selected.append(best_cand)
+                remaining.remove(best_cand)
+                best_mse = best_cand_mse
+            self._loo_forward_selections[col] = selected
+        if self.verbose:
+            sizes = [len(v) for v in self._loo_forward_selections.values()]
+            avg = float(np.mean(sizes)) if sizes else 0.0
+            print(f"  LOO forward selections built for {len(cols_to_impute)} cols "
+                  f"(avg k={avg:.1f})")
+
+    # --------------------------------------------------------------------- #
     #  Phase 2: pass 1 — observed-only imputation                            #
     # --------------------------------------------------------------------- #
     def _select_cell_predictors(
@@ -2984,6 +3010,35 @@ class ModelBankImputer:
         if extra_cols:
             pool = pool | extra_cols
         pool.discard(col)
+
+        # LOO forward selection branch: use precomputed ordering, no redundancy filter.
+        if self.predictor_selection == "loo_forward":
+            ordered = self._loo_forward_selections.get(col, [])
+            cand_supports = {n: nc for n, _, nc in candidates}
+            sel = [p for p in ordered if p in pool]
+            if not sel:
+                return []
+            approx_support = cand_supports.get(sel[0], 0)
+            if approx_support < 15:
+                k_max = 1
+            elif approx_support < 30:
+                k_max = 2
+            elif approx_support < 50:
+                k_max = 3
+            elif approx_support < 80:
+                k_max = 5
+            else:
+                k_max = 8
+            out: List[str] = []
+            for name in sel:
+                if len(out) >= k_max:
+                    break
+                needed_support = max(self.min_support, 5 * (len(out) + 2))
+                nc = cand_supports.get(name, 0)
+                if nc < needed_support:
+                    continue
+                out.append(name)
+            return out
 
         filtered = [(n, s, nc) for n, s, nc in candidates if n in pool]
         if not filtered:
@@ -3018,7 +3073,7 @@ class ModelBankImputer:
                     if (sel in self.correlation_matrix_.index and
                             name in self.correlation_matrix_.columns):
                         r = self.correlation_matrix_.loc[sel, name]
-                        if not pd.isna(r) and abs(r) > self.redundancy_threshold:
+                        if not pd.isna(r) and abs(r) > 0.85:
                             redundant = True
                             break
             if not redundant:
@@ -3091,9 +3146,37 @@ class ModelBankImputer:
         X_scaled = scaler.fit_transform(X_train)
         model = BayesianRidge(compute_score=False, fit_intercept=True)
         model.fit(X_scaled, y_logit)
-        sigma2, ill = self._hat_matrix_loo(model, X_scaled, y_logit)
-        if ill:
-            return None
+
+        # Compute LOO residuals analytically via hat matrix (in logit space),
+        # then back-transform to ORIGINAL scale before reporting sigma2.
+        # The earlier code reported sigma2 in logit space, which was orders
+        # of magnitude larger than original-scale variance for bounded targets
+        # — that broke EB parent shrinkage and coherence projection (both
+        # consume sigma2 assuming original-scale units).
+        y_hat_logit = model.predict(X_scaled)
+        n, n_pred = X_scaled.shape
+        reg = getattr(model, 'alpha_', 1e-3)
+        XtX = X_scaled.T @ X_scaled
+        try:
+            XtX_reg_inv = np.linalg.solve(XtX + reg * np.eye(n_pred), np.eye(n_pred))
+        except np.linalg.LinAlgError:
+            resid_logit = y_logit - y_hat_logit
+            y_hat_logit_loo = y_hat_logit
+            h_ii = None
+        else:
+            H = X_scaled @ XtX_reg_inv @ X_scaled.T
+            h_ii = np.diag(H)
+            if np.max(h_ii) > 0.95:
+                return None  # ill-conditioned
+            h_ii = np.clip(h_ii, 0, 0.99)
+            e_loo_logit = (y_logit - y_hat_logit) / (1.0 - h_ii)
+            y_hat_logit_loo = y_logit - e_loo_logit
+
+        # Back-transform LOO predictions to original scale
+        p_loo = 1.0 / (1.0 + np.exp(-y_hat_logit_loo))
+        y_hat_loo = p_loo * range_ + lower - eps
+        sigma2 = float(np.mean((y_train - y_hat_loo) ** 2))
+
         coefficients = model.coef_ / scaler.scale_
         return FittedCellModel(
             predictor_names=pred_list, sigma2_loo=sigma2,
@@ -3314,6 +3397,16 @@ class ModelBankImputer:
                         if sp is not None and obs_matrix[rp, sp]:
                             use_fitted = single_fitted
 
+                    rp = idx_to_pos[row_idx]
+                    if not all(
+                        col_to_pos.get(p) is not None
+                        and obs_matrix[rp, col_to_pos[p]]
+                        for p in use_fitted.predictor_names
+                    ):
+                        # Predictor unobserved for this row (can happen when
+                        # `fitted = single_fitted` fallback was chosen group-wide
+                        # but the single predictor isn't observed for every row).
+                        continue
                     X_row = np.array([float(X_df.loc[row_idx, p])
                                       for p in use_fitted.predictor_names])
                     y_pred = self._predict_cell(use_fitted, X_row)

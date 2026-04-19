@@ -1,6 +1,34 @@
 # Environment
 .env
 
+# Large embedding caches — regenerable via embeddings/collect_responses.py + embed_responses.py
+embeddings/cache/
+
+# Scratch embedding sweep drivers
+embeddings/_*.bash
+embeddings/run_*sweep*.bash
+embeddings/run_ablation*.bash
+embeddings/run_embedder_sweep.bash
+
+# Scratch / experiment scripts (arena_predictor) — local only.
+# Exceptions below keep the scripts actually referenced from docs/README.
+arena_predictor/_*.py
+arena_predictor/_*.csv
+arena_predictor/run_*_experiments.bash
+arena_predictor/run_boost_comparison.bash
+arena_predictor/run_force_pw_experiments.bash
+arena_predictor/run_grouping_experiments.bash
+arena_predictor/run_radical_experiments.bash
+arena_predictor/run_svd_sweep.bash
+arena_predictor/run_detection_experiments.bash
+!arena_predictor/_walkforward_honest.py
+!arena_predictor/_walkforward_baselines.py
+
+# Backups / duplicates
+*.bak
+*" copy 2"*
+*" copy"*
+
 # Python
 __pycache__/
 *.py[cod]

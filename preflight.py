@@ -37,7 +37,10 @@ df = pd.read_csv(csv_path)
 df = df.dropna(subset=["openbench_id"])
 df["Model"] = df["Model"].str.strip()
 
-PROMPT = "Reply with exactly one word: hello"
+PROMPT = (
+    "A farmer has 17 sheep. All but 9 die. How many sheep are left? "
+    "Think through this carefully and explain your reasoning before giving the final number."
+)
 MAX_WORKERS = 30
 
 # Judge models used by the actual benchmarks
@@ -118,7 +121,7 @@ def test_call(name, model_id, reasoning):
     if not resp or not resp.strip():
         return False, elapsed, "empty response"
 
-    if len(resp) > 500:
+    if len(resp) > 5000:
         return False, elapsed, f"suspiciously long ({len(resp)} chars)"
 
     reasoning_toks = usage.get("reasoning_tokens", 0) or 0

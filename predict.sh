@@ -69,13 +69,29 @@ echo "Dependencies are up to date."
 echo "Executing Python script"
 
 
-# KNN prediction with sublinear power cutoff (default — predicts lmarena, R²=0.924)
+# Shipped predictor path: ModelBankImputer + coherence projection +
+# drop_style_tone + fold-internal PLS-3 + adaptive KNN + grouped conformal.
+# Prefer the sem-augmented CSV when available. Fall back to the base CSV if
+# combine.bash ran without the embedding stack installed.
+AUGMENTED_CSV="../benchmark_combiner/benchmarks/clean_combined_all_benches_with_sem_v4_d32.csv"
+BASE_CSV="../benchmark_combiner/benchmarks/clean_combined_all_benches.csv"
+
+if [[ -f "$AUGMENTED_CSV" ]]; then
+    CSV_PATH="$AUGMENTED_CSV"
+    echo "Using sem-augmented CSV (champion): $(basename "$CSV_PATH")"
+else
+    CSV_PATH="$BASE_CSV"
+    echo "Sem-augmented CSV not found; falling back to base CSV: $(basename "$CSV_PATH")"
+fi
+
 python3 predict.py \
-    --csv_path ../benchmark_combiner/benchmarks/clean_combined_all_benches.csv \
+    --csv_path "$CSV_PATH" \
     --imputer_type model_bank \
-    --coherence_lambda 1.0 \
+    --coherence_lambda 8.0 \
     --coherence_shape exp \
-    --eb_parent \
+    --predictor_selection loo_forward \
+    --drop_style_tone \
+    --pls_hybrid_k 3 \
     --cv_repeats_outer 10
 
 # The virtual environment is automatically deactivated when the script finishes.

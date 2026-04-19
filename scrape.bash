@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Collect benchmark data from all 13+ sources, then combine.
+# Collect benchmark data from the currently enabled external scrapers.
+# The repo contains 12 grabber scripts; this script currently runs 11 of them,
+# then relies on benchmark_combiner/collect_benchmarks.sh to copy the latest
+# custom benchmark CSVs into benchmark_combiner/benchmarks/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -12,12 +15,11 @@ bash benchmark_combiner/collect_benchmarks.sh
 cd "$ROOT/benchmark_combiner"
 
 START_TIME=$SECONDS
-
-
-python3 ../scrapers/arena_ai_grabber.py
 # python3 ../scrapers/lmarena_grabber.py  # replaced by arena_ai_grabber.py
 # python3 ../scrapers/vectara_grabber.py
 # python3 ../scrapers/lechmazur_grabber.py
+
+python3 ../scrapers/arena_ai_grabber.py
 python3 ../scrapers/livebench_grabber.py
 python3 ../scrapers/aa_models_grabber.py
 python3 ../scrapers/aa_evaluations_grabber.py
