@@ -160,3 +160,52 @@ def test_compute_sigma_fallback_shape():
     # fallback path in predict.py is expected to pass y_nb=ones(n).
     out = compute_sigma(np.ones_like(y_nb_std), shape, m)
     np.testing.assert_allclose(out, np.full(3, m * shape.q_hat))
+
+
+def test_compute_p_above_formula():
+    """P(score > threshold) = 1 - t_cdf((threshold - mu)/sigma, df)."""
+    mu = np.array([1500.0, 1490.0])
+    sigma = np.array([20.0, 20.0])
+    t_df = 200.0  # effectively Gaussian
+    threshold = 1500.0
+    p = compute_p_above(mu, sigma, t_df, threshold)
+    # mu == threshold => P(score > threshold) = 0.5
+    np.testing.assert_allclose(p[0], 0.5, atol=1e-3)
+    # mu 10 below threshold, sigma 20 => P(score > threshold) ≈ norm.sf(0.5)
+    from scipy.stats import norm
+    np.testing.assert_allclose(p[1], float(norm.sf(0.5)), atol=1e-2)
+
+
+def test_compute_p_above_tight_sigma():
+    """Very tight sigma: step function."""
+    mu = np.array([1550.0, 1450.0])
+    sigma = np.array([0.01, 0.01])
+    t_df = 10.0
+    threshold = 1500.0
+    p = compute_p_above(mu, sigma, t_df, threshold)
+    assert p[0] > 0.99  # far above threshold
+    assert p[1] < 0.01  # far below threshold
+
+
+def test_compute_p_beats_leader_nans_training_rows():
+    mu = np.array([1505.0, 1495.0, 1480.0])
+    sigma = np.array([20.0, 20.0, 20.0])
+    t_df = 100.0
+    max_leader = 1500.0
+    train_mask = np.array([True, False, True])  # rows 0 and 2 are training
+    p = compute_p_beats_leader(mu, sigma, t_df, max_leader, train_mask)
+    assert np.isnan(p[0])
+    assert np.isnan(p[2])
+    assert not np.isnan(p[1])
+    # Row 1: mu=1495, sigma=20, leader=1500 => slightly below 0.5
+    assert 0.3 < p[1] < 0.5
+
+
+def test_compute_p_beats_leader_empty_test_set():
+    """All rows are training: returns all-NaN array of correct length."""
+    mu = np.array([1500.0, 1490.0])
+    sigma = np.array([20.0, 20.0])
+    train_mask = np.array([True, True])
+    p = compute_p_beats_leader(mu, sigma, 100.0, 1500.0, train_mask)
+    assert len(p) == 2
+    assert np.all(np.isnan(p))

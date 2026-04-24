@@ -196,6 +196,18 @@ def compute_sigma(
     return m * shape.q_hat * s
 
 
+def compute_p_above(
+    mu: np.ndarray,
+    sigma: np.ndarray,
+    t_df: float,
+    threshold: float,
+) -> np.ndarray:
+    """P(score > threshold) under t-distribution with loc=mu, scale=sigma, df=t_df."""
+    scale = np.where(sigma <= 1e-12, 1e-12, sigma)
+    z = (threshold - mu) / scale
+    return 1.0 - stats.t.cdf(z, df=t_df)
+
+
 def compute_p_beats_leader(
     mu: np.ndarray,
     sigma: np.ndarray,
@@ -203,14 +215,8 @@ def compute_p_beats_leader(
     max_leader: float,
     train_mask: np.ndarray,
 ) -> np.ndarray:
-    raise NotImplementedError
-
-
-def compute_p_above(
-    mu: np.ndarray,
-    sigma: np.ndarray,
-    t_df: float,
-    threshold: float,
-) -> np.ndarray:
-    """Shared t-CDF helper: P(score > threshold) under t(df, loc=mu, scale=sigma)."""
-    raise NotImplementedError
+    """P(score > max_leader), NaN on training rows (where the event is meaningless)."""
+    p = compute_p_above(mu, sigma, t_df, max_leader)
+    p = p.astype(float).copy()
+    p[train_mask] = np.nan
+    return p
