@@ -142,18 +142,16 @@ Rationale: fitting `t_df` directly on `r_i = e_i / s_i` removes the q_hat→t_df
 6. `s_floor_t`, `q_hat_t`, `t_df_t` per component (4)
 7. `sigma_oof_t = q_hat_t × max(y_nb_std_for_row_t, s_floor_t)`
 
-Then `z_t = (y_t − mu_t) / sigma_oof_t`. `m` is fit across all WF steps by MLE. The final production run uses full-training calibration parameters (`q_hat`, `s_floor`, `t_df`, gate decision) combined with the WF-learned `m`.
-
-(Step 4 is the expensive part — a nested LOO inside each WF step. Pragmatic alternative: approximate `y_nb_std_t` for the test row at step *t* using the prefix's adaptive-KNN neighborhood around `x_t`, skipping the nested LOO over the prefix itself. This drops the per-step cost from O(t²) to O(t) and matches how `s(x)` is computed at inference time anyway. The plan should pick one; approximate is probably fine.)
-
-Fit `m` by MLE under the t-distribution at the OOF-fit `t_df`:
+Then `z_t = (y_t − mu_t) / sigma_oof_t`, and each step carries its own `t_df_t`. `m` is fit across all WF steps by MLE using the per-step `t_df_t` in each likelihood term:
 
 ```
-m = argmax_m  Σ_t [ log t_pdf(z_t / m; df=t_df) − log(m) ]
+m = argmax_m  Σ_t [ log t_pdf(z_t / m; df=t_df_t) − log(m) ]
     subject to m ∈ [0.5, 3.0]
 ```
 
-One-dimensional optimization. Ship `sigma(x) = m × q_hat × s(x)`.
+One-dimensional optimization. The final production run uses full-training calibration parameters (`q_hat`, `s_floor`, `t_df`, gate decision) combined with the WF-learned `m`: `sigma(x) = m × q_hat × s(x)`, evaluated with the full-training `t_df` (not per-step).
+
+Step 4 is a strict nested LOO — at each WF step *t*, a LOO pass over the prefix `[0..t-1]` produces the prefix's OOF residuals and `y_nb_std` vector, which together feed the gate, `s_floor_t`, `q_hat_t`, `t_df_t` fits. This is expensive (O(t²) per step, O(n³) total) but the WF script is a separate honest-eval artifact that's run infrequently, and the strict policy is what makes `m` honest. An approximation that skipped the nested LOO would leave t_df_t and q_hat_t without data to fit on, so there is no cheap shortcut here.
 
 Prior: the RMSE ratio 14.69/13.61 ≈ 1.08 suggests `m ≈ 1.08`, but `m` must be fit from z-scores / likelihood directly, not from the RMSE ratio, because once `s(x)` is heteroscedastic the RMSE-based estimate is not a consistent scale correction.
 
@@ -214,8 +212,9 @@ Single-row summary. Columns:
 If `diagnose_scale_signal` returns `pass=False`:
 
 - `s(x) = 1` for all x (constant)
-- `q_hat = quantile(|e|_oof, 0.95) / t_crit(t_df)` — reduces to near-current constant-sigma behavior (without the group split that wasn't buying anything in the 2026-04-24 run)
-- `m` still fit from walk-forward z-scores
+- `t_df` fit via `scipy.stats.t.fit(e_i, floc=0)` on raw OOF residuals; clip to `[3.0, 200.0]`; the `.fit` scale output is discarded (we anchor scale via `q_hat`)
+- `q_hat = np.quantile(np.abs(e_i), 0.95) / scipy.stats.t.ppf(0.975, t_df)` — reduces to near-current constant-sigma behavior (without the group split that wasn't buying anything in the 2026-04-24 run)
+- `m` still fit from walk-forward z-scores (using per-step `t_df_t` per component 5; in the WF fallback path `s=1` is applied at each step, so `r_t = e_t` and `t_df_t` is fit on raw prefix residuals the same way)
 - Loud stderr log: `"local scale gate failed (reason=...); falling back to constant sigma × WF scalar"`
 - `calibration_diagnostics.csv` records `fallback_used=true`
 
@@ -307,7 +306,8 @@ To keep implementation unambiguous:
 - **Coverage at nominal level α.** `α-interval = mu ± t_ppf((1+α)/2, t_df) × sigma`. Empirical coverage = fraction of rows with `y ∈ [lo, hi]`. Reported with exact binomial 90% CI (Clopper-Pearson, `scipy.stats.binomtest(k, n).proportion_ci(0.9, method="exact")`).
 - **Coverage CI column names in `calibration_diagnostics.csv`:** `wf_coverage_50`, `wf_coverage_50_ci_lo`, `wf_coverage_50_ci_hi`, and analogously for 80, 95. Same pattern prefixed `wf_top_` for the `mu ≥ 1400` slice.
 - **t_df fit.** `scipy.stats.t.fit(r_i, floc=0)` → df, _, scale. Clip df to `[3.0, 200.0]`. The `scale` output from `.fit` is discarded; we anchor scale via `q_hat` instead.
-- **m optimization.** `scipy.optimize.minimize_scalar(neg_log_lik, bounds=(0.5, 3.0), method="bounded")`, where `neg_log_lik(m) = -sum(scipy.stats.t.logpdf(z_t / m, df=t_df)) + len(z) × log(m)`. The `len(z) × log(m)` term is the Jacobian of the z → z/m rescaling.
+- **m optimization.** `scipy.optimize.minimize_scalar(neg_log_lik, bounds=(0.5, 3.0), method="bounded")`, where `neg_log_lik(m) = -sum(scipy.stats.t.logpdf(z_t / m, df=t_df_t)) + len(z) × log(m)`. Each term uses **its own step's `t_df_t`**, not a shared value. The `len(z) × log(m)` term is the Jacobian of the z → z/m rescaling.
+- **Top slice empty / degenerate.** If `n_top < 1` for any WF top-slice metric, emit `NaN` for that metric and record `wf_top_n = 0` in diagnostics. If the top slice has all-positive or all-negative `y_t > max_leader_t` outcomes, Brier is still defined (and near 0 or near 1 respectively) but log-loss is degenerate — emit `NaN` for log-loss in that case, not an infinity. Brier uses the clipped probability bounds from the log-loss clipping rule to keep it numerically consistent with log-loss.
 
 ## Open implementation questions
 
