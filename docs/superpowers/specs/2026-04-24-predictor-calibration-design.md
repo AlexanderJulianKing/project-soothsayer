@@ -229,8 +229,9 @@ predict.py main flow:
   (ii)  diagnose_scale_signal() → gate result + metrics
   (iii) if gate pass:  sigma_oof(x) = q_hat × max(y_nb_std(x), floor)
         else:          sigma_oof(x) = q_hat × 1        (fallback)
-  (iv)  if args.walkforward_calibration_path: load WF residuals, fit m
+  (iv)  if args.walkforward_calibration_path: load fitted_m from that file
         else:                                  m = 1.0
+        (m is fit inside walkforward_calibration.py; predict.py only consumes it)
   (v)   sigma(x) = m × sigma_oof(x)
   (vi)  max_leader = max(lmarena_Score over observed-target rows, excluding candidates)
         p_beats_leader = 1 − t_cdf((max_leader − mu) / sigma, t_df); NaN on train rows
