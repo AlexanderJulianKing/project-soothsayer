@@ -71,3 +71,25 @@ def test_diagnose_scale_signal_gate_rule_top_slice_wins():
     assert result.n_top >= 10
     assert result.spearman_top >= 0.20
     assert result.passed is True
+
+
+def test_compute_local_scale_applies_floor():
+    y_nb_std = np.array([0.0, 5.0, 10.0, 20.0, 100.0])
+    s_floor = 10.0
+    out = compute_local_scale(y_nb_std, s_floor)
+    np.testing.assert_array_equal(out, np.array([10.0, 10.0, 10.0, 20.0, 100.0]))
+
+
+def test_compute_local_scale_no_floor_change_above_threshold():
+    y_nb_std = np.array([15.0, 25.0, 35.0])
+    s_floor = 10.0
+    out = compute_local_scale(y_nb_std, s_floor)
+    np.testing.assert_array_equal(out, y_nb_std)
+
+
+def test_compute_local_scale_handles_nan():
+    """NaN y_nb_std rows get the floor."""
+    y_nb_std = np.array([np.nan, 5.0, np.nan, 20.0])
+    s_floor = 10.0
+    out = compute_local_scale(y_nb_std, s_floor)
+    np.testing.assert_array_equal(out, np.array([10.0, 10.0, 10.0, 20.0]))

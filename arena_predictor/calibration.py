@@ -135,7 +135,9 @@ def compute_local_scale(
     y_nb_std: np.ndarray,
     s_floor: float,
 ) -> np.ndarray:
-    raise NotImplementedError
+    """s(x) = max(y_nb_std(x), s_floor). NaN inputs are treated as 0 (i.e. get floored)."""
+    y = np.where(np.isnan(y_nb_std), 0.0, y_nb_std)
+    return np.maximum(y, s_floor)
 
 
 def fit_tail_shape_and_qhat(
