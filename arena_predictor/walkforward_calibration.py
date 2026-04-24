@@ -41,6 +41,101 @@ from predict import ID_COL, TARGET, ALT_TARGET, predict_adaptive_knn, run_imputa
 OUT_DIR = Path(__file__).parent / "analysis_output" / "walkforward_calibration"
 
 
+def fit_m(
+    z: np.ndarray,
+    t_df_t: np.ndarray,
+    bounds: tuple = (0.5, 3.0),
+) -> float:
+    """Fit scalar m by MLE on per-step z = (y_t - mu_t) / sigma_oof_t with per-step t_df_t.
+
+    Minimizes: -sum(t.logpdf(z_t / m, df=t_df_t)) + len(z) * log(m)
+    """
+    z = np.asarray(z, dtype=float)
+    t_df_t = np.asarray(t_df_t, dtype=float)
+    finite = np.isfinite(z) & np.isfinite(t_df_t)
+    z, t_df_t = z[finite], t_df_t[finite]
+
+    def neg_log_lik(m: float) -> float:
+        if m <= 0:
+            return 1e12
+        return -float(np.sum(stats.t.logpdf(z / m, df=t_df_t))) + len(z) * float(np.log(m))
+
+    result = optimize.minimize_scalar(
+        neg_log_lik, bounds=bounds, method="bounded", options={"xatol": 1e-4}
+    )
+    m_fit = float(result.x)
+    # Warn if at boundary
+    if abs(m_fit - bounds[0]) < 1e-3 or abs(m_fit - bounds[1]) < 1e-3:
+        print(f"WARNING: fitted m={m_fit:.3f} is at boundary {bounds}", file=sys.stderr)
+    return m_fit
+
+
+def compute_wf_diagnostics(
+    wf_df: pd.DataFrame,
+    m: float,
+    top_threshold: float = 1400.0,
+) -> dict:
+    """Compute PIT, coverage, Brier, log-loss on WF residuals with fitted m applied.
+
+    Emits both overall and top-slice (mu_t >= top_threshold) variants.
+    """
+    diag = {"fitted_m": m}
+    rows_all = wf_df.copy()
+    rows_all["sigma_t"] = m * rows_all["sigma_oof_t"]
+    rows_all["z"] = (rows_all["y_t"] - rows_all["mu_t"]) / np.where(
+        rows_all["sigma_t"] < 1e-12, 1e-12, rows_all["sigma_t"]
+    )
+
+    def _slice_metrics(df: pd.DataFrame, prefix: str) -> dict:
+        n = len(df)
+        if n < 1:
+            return {f"{prefix}n": 0}
+        out = {f"{prefix}n": int(n)}
+        # PIT
+        try:
+            u = stats.t.cdf(df["z"].values, df=df["t_df_t"].values)
+            out[f"{prefix}pit_ks_pvalue"] = float(stats.kstest(u, "uniform").pvalue)
+        except Exception:
+            out[f"{prefix}pit_ks_pvalue"] = float("nan")
+        # Coverage at 50/80/95%
+        for alpha in (0.50, 0.80, 0.95):
+            pct = int(alpha * 100)
+            t_crit = stats.t.ppf((1 + alpha) / 2, df["t_df_t"].values)
+            lo = df["mu_t"].values - t_crit * df["sigma_t"].values
+            hi = df["mu_t"].values + t_crit * df["sigma_t"].values
+            covered = (df["y_t"].values >= lo) & (df["y_t"].values <= hi)
+            n_cov = int(covered.sum())
+            out[f"{prefix}coverage_{pct}"] = float(n_cov / n) if n > 0 else float("nan")
+            if n > 0:
+                ci = stats.binomtest(n_cov, n).proportion_ci(confidence_level=0.90, method="exact")
+                out[f"{prefix}coverage_{pct}_ci_lo"] = float(ci.low)
+                out[f"{prefix}coverage_{pct}_ci_hi"] = float(ci.high)
+        # Brier + log-loss for stepwise event y_t > max_leader_t
+        p_event = 1.0 - stats.t.cdf(
+            (df["max_leader_t"].values - df["mu_t"].values)
+            / np.where(df["sigma_t"].values < 1e-12, 1e-12, df["sigma_t"].values),
+            df=df["t_df_t"].values,
+        )
+        y_event = (df["y_t"].values > df["max_leader_t"].values).astype(float)
+        eps = 1e-6
+        p_clip = np.clip(p_event, eps, 1 - eps)
+        out[f"{prefix}brier"] = float(np.mean((p_clip - y_event) ** 2))
+        # Log-loss: degenerate if all same class
+        if len(np.unique(y_event)) < 2:
+            out[f"{prefix}log_loss"] = float("nan")
+        else:
+            out[f"{prefix}log_loss"] = float(
+                -np.mean(y_event * np.log(p_clip) + (1 - y_event) * np.log(1 - p_clip))
+            )
+        return out
+
+    diag.update(_slice_metrics(rows_all, prefix="wf_"))
+    top_df = rows_all[rows_all["mu_t"] >= top_threshold].copy()
+    diag.update(_slice_metrics(top_df, prefix="wf_top_"))
+
+    return diag
+
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[setup] output dir: {OUT_DIR}", flush=True)
@@ -234,9 +329,28 @@ def main():
         )
 
     wf_df = pd.DataFrame(records)
+
+    # Fit scalar m across all steps using per-step t_df_t
+    z = (wf_df["y_t"].values - wf_df["mu_t"].values) / np.where(
+        wf_df["sigma_oof_t"].values < 1e-12, 1e-12, wf_df["sigma_oof_t"].values
+    )
+    m_fit = fit_m(z=z, t_df_t=wf_df["t_df_t"].values)
+    wf_df["fitted_m"] = m_fit  # same value on every row; predict.py reads row 0
+
     wf_df.to_csv(OUT_DIR / "wf_residuals.csv", index=False)
-    print(f"\n[done] WF loop finished in {(time.time() - t_start)/60:.1f}m", flush=True)
+    print(f"\n[m-fit] fitted_m = {m_fit:.4f}", flush=True)
+
+    # Compute + emit diagnostics
+    diag = compute_wf_diagnostics(wf_df, m=m_fit)
+    pd.DataFrame([diag]).to_csv(OUT_DIR / "walkforward_calibration_diagnostics.csv", index=False)
+
+    print(f"[done] WF loop + m-fit + diagnostics finished in {(time.time() - t_start)/60:.1f}m", flush=True)
     print(f"[out] {OUT_DIR / 'wf_residuals.csv'}", flush=True)
+    print(f"[out] {OUT_DIR / 'walkforward_calibration_diagnostics.csv'}", flush=True)
+    print(f"\n=== Diagnostics ===", flush=True)
+    for k, v in diag.items():
+        print(f"  {k}: {v}", flush=True)
+
     return wf_df
 
 
