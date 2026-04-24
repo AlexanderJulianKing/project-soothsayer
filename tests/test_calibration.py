@@ -209,3 +209,39 @@ def test_compute_p_beats_leader_empty_test_set():
     p = compute_p_beats_leader(mu, sigma, 100.0, 1500.0, train_mask)
     assert len(p) == 2
     assert np.all(np.isnan(p))
+
+
+def test_fallback_path_produces_constant_sigma():
+    """End-to-end fallback: gate fails -> s(x)=1 -> sigma_hat constant across rows."""
+    n = 150
+    y_nb_std = RNG.uniform(5.0, 40.0, size=n)
+    residuals = RNG.normal(0, 15.0, size=n)  # uncorrelated with y_nb_std
+    predicted = RNG.uniform(1300, 1500, size=n)
+
+    gate = diagnose_scale_signal(y_nb_std, residuals, predicted)
+    assert gate.passed is False  # precondition
+
+    shape = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=gate.passed)
+    assert shape.fallback_used is True
+    assert shape.s_floor == 1.0
+
+    # In fallback, caller passes y_nb_std = np.ones(n) to compute_sigma
+    sigma = compute_sigma(np.ones(n), shape, m=1.0)
+    # sigma should be constant
+    assert np.allclose(sigma, sigma[0])
+    # Approximately equal to q_hat
+    assert abs(sigma[0] - shape.q_hat) < 1e-6
+
+
+def test_gate_pass_path_produces_varying_sigma():
+    n = 200
+    y_nb_std = RNG.uniform(10.0, 30.0, size=n)
+    r = stats.t.rvs(df=8, size=n, random_state=RNG)
+    residuals = y_nb_std * r
+    predicted = RNG.uniform(1300, 1500, size=n)
+
+    gate = diagnose_scale_signal(y_nb_std, residuals, predicted)
+    shape = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=gate.passed)
+    sigma = compute_sigma(y_nb_std, shape, m=1.0)
+    # sigma should vary with y_nb_std
+    assert np.std(sigma) > 0.1 * np.mean(sigma)
