@@ -187,7 +187,13 @@ def compute_sigma(
     shape: ShapeFit,
     m: float,
 ) -> np.ndarray:
-    raise NotImplementedError
+    """sigma(x) = m * q_hat * s(x), where s(x) = max(y_nb_std(x), s_floor).
+
+    In the fallback path, callers should pass y_nb_std = np.ones(n) so that
+    compute_local_scale returns s_floor (=1.0) everywhere, yielding a constant sigma.
+    """
+    s = compute_local_scale(y_nb_std, shape.s_floor)
+    return m * shape.q_hat * s
 
 
 def compute_p_beats_leader(

@@ -139,3 +139,24 @@ def test_fit_tail_shape_coverage_anchor():
     coverage = float(np.mean((residuals >= lower) & (residuals <= upper)))
     # Expect ~95% coverage, within tolerance for n=2000
     assert 0.92 <= coverage <= 0.98
+
+
+def test_compute_sigma_formula():
+    """sigma(x) = m * q_hat * max(y_nb_std, s_floor)."""
+    y_nb_std = np.array([0.0, 5.0, 10.0, 20.0])
+    shape = ShapeFit(t_df=15.0, q_hat=1.2, s_floor=8.0, fallback_used=False)
+    m = 1.08
+    out = compute_sigma(y_nb_std, shape, m)
+    expected = m * shape.q_hat * np.array([8.0, 8.0, 10.0, 20.0])
+    np.testing.assert_allclose(out, expected)
+
+
+def test_compute_sigma_fallback_shape():
+    """With fallback (s_floor=1.0, y_nb effectively unused), sigma is near-constant."""
+    y_nb_std = np.array([0.0, 5.0, 10.0])
+    shape = ShapeFit(t_df=50.0, q_hat=20.0, s_floor=1.0, fallback_used=True)
+    m = 1.0
+    # In true fallback we'd also feed y_nb=ones to compute_sigma; but the
+    # fallback path in predict.py is expected to pass y_nb=ones(n).
+    out = compute_sigma(np.ones_like(y_nb_std), shape, m)
+    np.testing.assert_allclose(out, np.full(3, m * shape.q_hat))
