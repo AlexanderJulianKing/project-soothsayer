@@ -1048,7 +1048,10 @@ def main():
         "--walkforward_calibration_path",
         type=str,
         default=None,
-        help="Path to wf_residuals.csv with fitted_m (added formally in Task 13).",
+        help="Path to walkforward_calibration.py's wf_residuals.csv. "
+             "If provided, predict.py reads the 'fitted_m' column and applies it "
+             "to sigma_hat. Fitting m itself happens inside walkforward_calibration.py, "
+             "not here. If None, m=1.0 (sigma reflects OOF level only).",
     )
     ap.add_argument("--categorical_threshold", type=int, default=0)
     ap.add_argument("--forced_categorical_cols", type=str, default="")
