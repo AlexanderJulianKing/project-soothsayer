@@ -176,8 +176,8 @@ def main():
         Xtr = np.hstack([Xtr, pls.transform(Xtr)])
         Xte = np.hstack([Xte, pls.transform(Xte)])
 
-        p, _, _ = predict_adaptive_knn(Xtr, y[:i], Xte,
-                                       max_k=min(80, i), min_k=min(20, i))
+        p, _, _, _ = predict_adaptive_knn(Xtr, y[:i], Xte,
+                                         max_k=min(80, i), min_k=min(20, i))
         preds.append(p)
         actuals.append(y[i])
         dt = time.time() - t0

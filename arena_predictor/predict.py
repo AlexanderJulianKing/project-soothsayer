@@ -62,11 +62,11 @@ from sklearn.neighbors import NearestNeighbors  # type: ignore
 SEED = 42
 np.random.seed(SEED)
 
-TARGET = "lmarena_Score"  # style-controlled Arena ELO
-ALT_TARGET = "lmsys_Score"  # raw Arena ELO — excluded as leakage
+TARGET = "lmarena_Score"  # style-controlled Arena ELO (default; override with --target)
+ALT_TARGET = "lmsys_Score"  # raw Arena ELO — excluded from features as leakage
 ID_COL = "model_name"
 
-TARGETS = {TARGET, ALT_TARGET}  # exclude both to avoid leakage
+TARGETS = {TARGET, ALT_TARGET}  # both always excluded from features regardless of which is active
 EXCLUDE = TARGETS | {ID_COL}
 
 DENSE_THRESHOLD = 0.508  # original threshold for dense-only CV evaluation
@@ -639,7 +639,7 @@ def predict_adaptive_knn(
     min_k: int = KNN_MIN_K,
     bw_pct: float = KNN_BW_PCT,
     vi_clip: tuple = KNN_VI_CLIP,
-) -> Tuple[float, float, int]:
+) -> Tuple[float, float, int, float]:
     """Predict a single test point using adaptive KNN + kernel Ridge + jackknife VI.
 
     Uses a sublinear power cutoff for neighborhood selection:
@@ -647,7 +647,8 @@ def predict_adaptive_knn(
     This gives tighter neighborhoods in dense regions (top models) while keeping
     adequate coverage in sparse regions, naturally adapting to feature sign flips.
 
-    Returns (prediction, std_estimate, k_used).
+    Returns (prediction, std_estimate, k_used, y_nb_std).
+    y_nb_std is the std of the neighborhood's y-values (for calibration).
     """
     nn = NearestNeighbors(n_neighbors=max_k)
     nn.fit(Xtr)
@@ -720,7 +721,7 @@ def predict_adaptive_knn(
     jack_resid = y_nb - jack_preds
     std_est = float(np.std(jack_resid))
 
-    return p_corrected, std_est, k
+    return p_corrected, std_est, k, float(np.std(y_nb))
 
 
 def fit_and_predict_knn(
@@ -769,7 +770,7 @@ def fit_and_predict_knn(
             Xva = np.hstack([Xva, pls_f.transform(Xva)])
 
         for vi, va_i in enumerate(va):
-            p, _, _ = predict_adaptive_knn(
+            p, _, _, _ = predict_adaptive_knn(
                 Xtr, ytr, Xva[vi:vi + 1],
                 power_alpha=power_alpha, power_C=power_C,
                 max_k=max_k, min_k=min_k, bw_pct=bw_pct,
@@ -805,7 +806,7 @@ def fit_and_predict_knn(
     ks_used = np.zeros(n_all, dtype=int)
 
     for i in pred_idx:
-        p, s, k = predict_adaptive_knn(
+        p, s, k, _ = predict_adaptive_knn(
             X_train_sc, y_train, X_all_sc[i:i + 1],
             power_alpha=power_alpha, power_C=power_C,
             max_k=max_k, min_k=min_k, bw_pct=bw_pct,
@@ -1248,8 +1249,16 @@ def main():
                     help="Add SVD factors from imputer to feature matrix (default: on).")
     ap.add_argument("--no_svd_in_features", dest="svd_in_features", action="store_false",
                     help="Exclude SVD factors from feature matrix.")
+    ap.add_argument("--target", type=str, default="lmarena_Score",
+                    choices=["lmarena_Score", "lmsys_Score"],
+                    help="Arena target to predict. lmarena_Score = style-controlled (shipped default); "
+                         "lmsys_Score = raw Arena ELO. The other is kept in TARGETS and excluded from features.")
 
     args = ap.parse_args()
+
+    global TARGET, ALT_TARGET
+    TARGET = args.target
+    ALT_TARGET = "lmsys_Score" if TARGET == "lmarena_Score" else "lmarena_Score"
 
     # Resolve CV repeats
     args.cv_repeats = max(1, int(args.cv_repeats))
