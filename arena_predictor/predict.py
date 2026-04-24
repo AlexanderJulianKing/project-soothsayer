@@ -55,6 +55,20 @@ from sklearn.preprocessing import StandardScaler  # type: ignore
 from sklearn.linear_model import Ridge  # type: ignore
 from sklearn.neighbors import NearestNeighbors  # type: ignore
 
+# scipy stats (used by calibration block)
+from scipy import stats  # type: ignore
+
+# Calibration module
+from calibration import (
+    GateResult,
+    ShapeFit,
+    compute_p_beats_leader,
+    compute_p_above,
+    compute_sigma,
+    diagnose_scale_signal,
+    fit_tail_shape_and_qhat,
+)  # type: ignore
+
 # ==============================================================================
 # CONSTANTS
 # ==============================================================================
@@ -406,223 +420,6 @@ def evaluate_imputation(imputer: SpecializedColumnImputer, orig_df: pd.DataFrame
     return per_cell, per_col, by_bin
 
 
-# ==============================================================================
-# CONFORMAL INTERVALS
-# ==============================================================================
-
-def prob_above_threshold(mu: np.ndarray, std: np.ndarray, threshold: float,
-                         t_df: Optional[float] = None) -> np.ndarray:
-    """P(score > threshold) using t-distribution when t_df is provided, else Gaussian."""
-    scale = np.where(std <= 1e-12, 1e-12, std)
-    z = (threshold - mu) / scale
-    try:
-        if t_df is not None and t_df > 0:
-            from scipy.stats import t as t_dist  # type: ignore
-            return 1.0 - t_dist.cdf(z, t_df)
-        from scipy.stats import norm  # type: ignore
-        return 1.0 - norm.cdf(z)
-    except Exception:
-        from math import erf as _erf
-        return np.array([0.5 * (1.0 - _erf(float(zi) / np.sqrt(2.0))) for zi in z])
-
-
-def _detect_suite_missing_fracs(
-    pre_imputation_missing: np.ndarray,
-    feature_names: List[str],
-) -> np.ndarray:
-    """Compute per-suite missing fraction for each model.
-
-    Groups features by prefix (e.g., 'livebench_', 'style_', 'aa_eval_')
-    and returns the average suite-level missing fraction across all suites.
-    A model missing all livebench columns scores 1.0 for that suite.
-    """
-    # Group column indices by prefix
-    suite_indices: Dict[str, List[int]] = defaultdict(list)
-    for i, name in enumerate(feature_names):
-        prefix = name.split("_")[0] if "_" in name else name
-        suite_indices[prefix].append(i)
-
-    # Filter to suites with at least 2 columns (single-column "suites" aren't informative)
-    multi_suites = {k: v for k, v in suite_indices.items() if len(v) >= 2}
-    if not multi_suites:
-        return np.zeros(pre_imputation_missing.shape[0])
-
-    missing_float = pre_imputation_missing.astype(float)
-    suite_missing_fracs = []
-    for suite_name, col_indices in multi_suites.items():
-        suite_cols = missing_float[:, col_indices]
-        suite_missing_fracs.append(suite_cols.mean(axis=1))
-
-    # Average across suites: how many suites is this model largely missing?
-    return np.mean(np.column_stack(suite_missing_fracs), axis=1)
-
-
-def compute_grouped_conformal_intervals(
-    mu: np.ndarray,
-    oof_preds: np.ndarray,
-    y_train: np.ndarray,
-    train_idx: np.ndarray,
-    pre_imputation_missing: np.ndarray,
-    feature_names: Optional[List[str]] = None,
-    target_coverage: float = 0.95,
-    top_threshold: float = 1400.0,
-    min_group_size: int = 10,
-    high_missing_frac: float = 0.35,
-) -> dict:
-    """Compute prediction intervals using coarse group-based conformal calibration.
-
-    Instead of learning a 6-feature heteroscedastic scale model (which overfits
-    at n~120), this assigns each model to a small number of predeclared groups
-    and uses empirical OOF residual quantiles per group.
-
-    Groups (hierarchical, backs off to parent if cell < min_group_size):
-      1. predicted_top (mu >= threshold) vs predicted_rest
-      2. Optionally split each by high vs low missingness
-
-    Args:
-        mu: Point predictions for ALL models, shape (n_all,).
-        oof_preds: OOF predictions for training rows with valid OOF, shape (n_valid,).
-        y_train: Actual target values for valid training rows, shape (n_valid,).
-        train_idx: Global indices of valid training rows, shape (n_valid,).
-        pre_imputation_missing: Boolean missing mask, shape (n_all, n_features).
-        feature_names: Column names for pre_imputation_missing.
-        target_coverage: Desired marginal coverage (default 0.95).
-        top_threshold: ELO threshold for "top" group.
-        min_group_size: Minimum group size; back off to parent if smaller.
-        high_missing_frac: Threshold for "high missingness" split.
-
-    Returns:
-        Dict matching compute_normalized_conformal_intervals interface.
-    """
-    n_all = len(mu)
-    n_valid = len(y_train)
-
-    # --- Compute group assignments ---
-    raw_missing_frac = pre_imputation_missing.astype(float).mean(axis=1)
-
-    # Suite-level missingness
-    suite_missing_frac = _detect_suite_missing_fracs(
-        pre_imputation_missing,
-        feature_names if feature_names is not None else [f"col_{i}" for i in range(pre_imputation_missing.shape[1])],
-    )
-
-    # OOF residuals
-    oof_residuals = np.abs(y_train - oof_preds)
-
-    # Group training rows by predicted score (use OOF preds to avoid leakage)
-    is_top_train = oof_preds >= top_threshold
-    is_high_missing_train = raw_missing_frac[train_idx] >= high_missing_frac
-
-    # Build groups with hierarchical fallback
-    groups = {}  # group_name -> (train_mask, all_mask)
-
-    # Try 4-way split first
-    candidates = {
-        "top_low_miss": (is_top_train & ~is_high_missing_train,
-                         (mu >= top_threshold) & (raw_missing_frac < high_missing_frac)),
-        "top_high_miss": (is_top_train & is_high_missing_train,
-                          (mu >= top_threshold) & (raw_missing_frac >= high_missing_frac)),
-        "rest_low_miss": (~is_top_train & ~is_high_missing_train,
-                          (mu < top_threshold) & (raw_missing_frac < high_missing_frac)),
-        "rest_high_miss": (~is_top_train & is_high_missing_train,
-                           (mu < top_threshold) & (raw_missing_frac >= high_missing_frac)),
-    }
-
-    # Back off small groups to parent
-    parent_map = {
-        "top_low_miss": "top", "top_high_miss": "top",
-        "rest_low_miss": "rest", "rest_high_miss": "rest",
-    }
-    parent_candidates = {
-        "top": (is_top_train, mu >= top_threshold),
-        "rest": (~is_top_train, mu < top_threshold),
-    }
-
-    # Determine which groups are viable
-    for name, (train_mask, all_mask) in candidates.items():
-        if int(train_mask.sum()) >= min_group_size:
-            groups[name] = (train_mask, all_mask)
-        else:
-            # Merge into parent
-            parent = parent_map[name]
-            if parent not in groups:
-                p_train, p_all = parent_candidates[parent]
-                groups[parent] = (p_train, p_all)
-
-    # If any parent is also too small, fall back to global
-    final_groups = {}
-    for name, (train_mask, all_mask) in groups.items():
-        if int(train_mask.sum()) >= min_group_size:
-            final_groups[name] = (train_mask, all_mask)
-
-    if not final_groups:
-        # Global fallback
-        final_groups["global"] = (np.ones(n_valid, dtype=bool), np.ones(n_all, dtype=bool))
-
-    # --- Compute per-group quantiles ---
-    pct = target_coverage * 100
-    group_q = {}
-    for name, (train_mask, _) in final_groups.items():
-        resids = oof_residuals[train_mask]
-        group_q[name] = float(np.percentile(resids, pct))
-
-    # --- Assign sigma_hat (= halfwidth) for all models ---
-    sigma_hat = np.full(n_all, np.nan)
-    group_labels = np.full(n_all, "", dtype=object)
-
-    for name, (_, all_mask) in final_groups.items():
-        sigma_hat[all_mask & np.isnan(sigma_hat)] = group_q[name]
-        group_labels[all_mask] = name
-
-    # Any unassigned models get the global worst-case
-    global_q = float(np.percentile(oof_residuals, pct))
-    still_nan = np.isnan(sigma_hat)
-    sigma_hat[still_nan] = global_q
-    group_labels[still_nan] = "global_fallback"
-
-    # --- Build intervals ---
-    lower = mu - sigma_hat
-    upper = mu + sigma_hat
-    std_new = sigma_hat / 1.96
-
-    # --- OOF coverage check (using OOF preds, not refit mu) ---
-    oof_lower = oof_preds - sigma_hat[train_idx]
-    oof_upper = oof_preds + sigma_hat[train_idx]
-    oof_coverage = float(np.mean((y_train >= oof_lower) & (y_train <= oof_upper)))
-
-    sigma_cv = float(np.std(sigma_hat) / np.mean(sigma_hat)) if np.mean(sigma_hat) > 0 else 0.0
-
-    # --- Diagnostics ---
-    scale_model_coef = {"method": "grouped_conformal"}
-    for name, (train_mask, _) in final_groups.items():
-        scale_model_coef[f"group_{name}_q{pct:.0f}"] = group_q[name]
-        scale_model_coef[f"group_{name}_n_train"] = int(train_mask.sum())
-    scale_model_coef["intercept"] = 0.0  # compat with diagnostics CSV
-
-    print(f"  Grouped conformal ({len(final_groups)} groups, coverage target={target_coverage:.0%}):")
-    for name in sorted(final_groups.keys()):
-        train_mask, all_mask = final_groups[name]
-        print(f"    {name}: n_train={int(train_mask.sum())}, n_all={int(all_mask.sum())}, "
-              f"halfwidth=\u00b1{group_q[name]:.1f}")
-
-    return {
-        "std": std_new,
-        "lower": lower,
-        "upper": upper,
-        "sigma_hat": sigma_hat,
-        "q_hat": 1.0,  # halfwidth IS sigma_hat (no separate q_hat)
-        "sigma_floor": 0.0,
-        "oof_sigma": sigma_hat[train_idx],
-        "sigma_cv": sigma_cv,
-        "oof_coverage": oof_coverage,
-        "scale_model_coef": scale_model_coef,
-        "uncertainty_features": pd.DataFrame({
-            "raw_missing_frac": raw_missing_frac,
-            "suite_missing_frac": suite_missing_frac,
-            "group": group_labels,
-            "sigma_hat": sigma_hat,
-        }),
-    }
 
 
 # ==============================================================================
@@ -1247,6 +1044,12 @@ def main():
     # -- Misc --
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Margin for 'top_by_margin_prob' column (default 20 points).")
+    ap.add_argument(
+        "--walkforward_calibration_path",
+        type=str,
+        default=None,
+        help="Path to wf_residuals.csv with fitted_m (added formally in Task 13).",
+    )
     ap.add_argument("--categorical_threshold", type=int, default=0)
     ap.add_argument("--forced_categorical_cols", type=str, default="")
     ap.add_argument("--tier_quantiles", type=str, default="0.33,0.67")
@@ -1655,79 +1458,115 @@ def main():
     print(f"train:     {mmss(train_end - preprocess_end)}")
 
     # =========================================================================
-    # 9. Conformal intervals
+    # 9. Calibration (OOF normalized conformal-style + walk-forward level scalar)
     # =========================================================================
-    conformal_start = time.time()
+    calibration_start = time.time()
 
     pre_imputation_missing = df[feature_cols].isna().values
 
+    # -- OOF residuals (used by gate and shape fit) --
     oof_valid_mask = ~np.isnan(oof_preds)
     oof_preds_valid = oof_preds[oof_valid_mask]
     y_train_valid = y_all[~y_missing_mask][oof_valid_mask]
-    train_idx_all = np.where(~y_missing_mask)[0]
-    train_idx_valid = train_idx_all[oof_valid_mask]
+    oof_residuals_valid = y_train_valid - oof_preds_valid
 
-    conformal = compute_grouped_conformal_intervals(
-        mu=mu,
-        oof_preds=oof_preds_valid,
-        y_train=y_train_valid,
-        train_idx=train_idx_valid,
-        pre_imputation_missing=pre_imputation_missing,
-        feature_names=list(feature_cols),
-        target_coverage=0.95,
+    # -- Per-training-row y_nb_std from the OOF loop --
+    y_nb_std_oof_full = knn_result["y_nb_std_oof"]  # length n_train
+    y_nb_std_oof_valid = y_nb_std_oof_full[oof_valid_mask]
+
+    # -- Predicted scores on training rows (for top-slice gate check) --
+    mu_train_valid = mu[~y_missing_mask][oof_valid_mask]
+
+    # -- (A) Diagnostic gate --
+    gate = diagnose_scale_signal(
+        y_nb_std_oof=y_nb_std_oof_valid,
+        oof_residuals=oof_residuals_valid,
+        predicted_scores=mu_train_valid,
         top_threshold=1400.0,
-        min_group_size=10,
     )
 
-    # Overwrite intervals with conformal calibration
-    std = conformal["std"]
-    lower = conformal["lower"]
-    upper = conformal["upper"]
+    # -- (B) Shape fit (t_df + q_hat + s_floor), non-circular --
+    shape = fit_tail_shape_and_qhat(
+        oof_residuals=oof_residuals_valid,
+        y_nb_std_oof=y_nb_std_oof_valid,
+        gate_passed=gate.passed,
+    )
 
-    # Fit t-distribution df from final calibrated OOF residuals
-    q_hat = conformal["q_hat"]
-    sigma_hat_arr = conformal["sigma_hat"]
-    cal_sigma_final = q_hat * sigma_hat_arr[train_idx_valid]
-    oof_residuals = y_all[train_idx_valid] - oof_preds_valid
-    oof_valid = ~np.isnan(oof_residuals)
-    z_final = oof_residuals[oof_valid] / np.where(cal_sigma_final[oof_valid] < 1e-12, 1e-12, cal_sigma_final[oof_valid])
-    t_df = None
-    try:
-        from scipy.stats import t as t_dist  # type: ignore
-        t_df_fit, _t_loc, _t_scale = t_dist.fit(z_final)
-        t_df = float(np.clip(t_df_fit, 3.0, 200.0))
-        t_crit = float(t_dist.ppf(0.975, t_df))
-        std = q_hat * sigma_hat_arr / t_crit
-    except Exception:
-        t_df = None
+    # -- (C) Walk-forward level correction: load fitted_m or default to 1.0 --
+    m_scalar = 1.0
+    if args.walkforward_calibration_path:
+        wf_df = pd.read_csv(args.walkforward_calibration_path)
+        fitted_m_col = wf_df["fitted_m"].dropna()
+        if len(fitted_m_col) == 0:
+            print(f"WARNING: --walkforward_calibration_path given but fitted_m column is empty; using m=1.0",
+                  file=sys.stderr)
+        else:
+            m_scalar = float(fitted_m_col.iloc[0])
 
-    conformal_end = time.time()
-    print(f"conformal: {mmss(conformal_end - conformal_start)}")
-    t_df_str = f"t_df={t_df:.1f}" if t_df is not None else "t_df=None (Gaussian fallback)"
-    print(f"  q_hat={conformal['q_hat']:.3f}  sigma_floor={conformal['sigma_floor']:.3f}  "
-          f"sigma_cv={conformal['sigma_cv']:.1%}  oof_coverage={conformal['oof_coverage']:.1%}  {t_df_str}")
+    # -- Per-row sigma for the full output (train + test rows) --
+    y_nb_std_all = knn_result["y_nb_std_final"]  # length n_all
+    if gate.passed:
+        sigma_hat = compute_sigma(y_nb_std_all, shape, m=m_scalar)
+    else:
+        # Fallback: s(x) = 1 everywhere, so sigma is constant across rows
+        sigma_hat = compute_sigma(np.ones_like(y_nb_std_all), shape, m=m_scalar)
+        print(f"WARNING: local scale gate failed (reason={gate.reason}); falling back to constant sigma × WF scalar",
+              file=sys.stderr)
+
+    # -- Intervals using t_crit --
+    t_crit_95 = float(stats.t.ppf(0.975, shape.t_df))
+    lower = mu - t_crit_95 * sigma_hat
+    upper = mu + t_crit_95 * sigma_hat
+
+    # -- max_leader threshold: max over rows with observed target --
+    #    y_missing_mask is True for rows whose target is NaN (candidates).
+    #    max_leader excludes candidates — only observed lmarena_Score counts.
+    if (~y_missing_mask).any():
+        max_leader = float(np.nanmax(y_all[~y_missing_mask]))
+    else:
+        max_leader = float("nan")
+
+    # -- Probabilities --
+    train_mask = ~y_missing_mask  # rows with observed target; p_beats_leader is meaningless for these
+    p_beats_leader = compute_p_beats_leader(
+        mu=mu,
+        sigma=sigma_hat,
+        t_df=shape.t_df,
+        max_leader=max_leader,
+        train_mask=train_mask,
+    )
+    top_by_margin_prob = compute_p_above(
+        mu=mu,
+        sigma=sigma_hat,
+        t_df=shape.t_df,
+        threshold=max_leader + args.margin,
+    )
+    top_by_margin_prob[train_mask] = np.nan
+
+    calibration_end = time.time()
+    print(f"calibration: {mmss(calibration_end - calibration_start)}")
+    print(f"  gate={'PASS' if gate.passed else 'FAIL'} ({gate.reason})")
+    print(f"  q_hat={shape.q_hat:.3f}  t_df={shape.t_df:.1f}  s_floor={shape.s_floor:.3f}  m={m_scalar:.3f}")
+    print(f"  max_leader={max_leader:.1f}  sigma_hat range=[{np.nanmin(sigma_hat):.2f}, {np.nanmax(sigma_hat):.2f}]")
 
     # =========================================================================
-    # 10. Compute probabilities
+    # 10. (probabilities computed in section 9 above)
     # =========================================================================
-    max_observed = float(np.nanmax(y_all[train_idx]))
-    num_one_prob = prob_above_threshold(mu, std, threshold=max_observed, t_df=t_df)
-    top_by_margin_prob = prob_above_threshold(mu, std, threshold=max_observed + args.margin, t_df=t_df)
-    top_by_margin_prob[train_idx] = np.nan
 
     # =========================================================================
     # 11. Save outputs
     # =========================================================================
 
     # -- predictions_best_model.csv --
+    # NOTE: Task 11 will clean up column names (p_beats_leader replaces num_one_prob).
     pred_df = pd.DataFrame({
         ID_COL: imputed_df[ID_COL].values,
         "predicted_score": mu,
         "actual_score": y_orig.values,
-        "sigma_hat": conformal["sigma_hat"],
+        "sigma_hat": sigma_hat,
         "lower_bound": lower,
         "upper_bound": upper,
-        "num_one_prob": num_one_prob,
+        "p_beats_leader": p_beats_leader,
         "top_by_margin_prob": top_by_margin_prob,
     })
     pred_df = pred_df.sort_values("predicted_score", ascending=False)
@@ -1751,23 +1590,18 @@ def main():
     eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
 
     # -- conformal_diagnostics.csv --
+    # NOTE: Task 12 will replace this with calibration_diagnostics.csv using
+    # the full gate/shape diagnostics. For now emit minimal row so run completes.
     diag_row = {
-        "q_hat": conformal["q_hat"],
-        "sigma_floor": conformal["sigma_floor"],
-        "sigma_cv": conformal["sigma_cv"],
-        "oof_coverage": conformal["oof_coverage"],
-        "t_df": t_df,
+        "gate_pass": gate.passed,
+        "gate_reason": gate.reason,
+        "q_hat": shape.q_hat,
+        "t_df": shape.t_df,
+        "s_floor": shape.s_floor,
+        "m": m_scalar,
+        "fallback_used": shape.fallback_used,
     }
-    for k, v in conformal["scale_model_coef"].items():
-        diag_row[f"scale_model_coef_{k}"] = v
     pd.DataFrame([diag_row]).to_csv(os.path.join(out_dir, "conformal_diagnostics.csv"), index=False)
-
-    # -- conformal_uncertainty_features.csv --
-    uf = conformal["uncertainty_features"].copy()
-    uf.insert(0, ID_COL, imputed_df[ID_COL].values)
-    uf["is_train"] = False
-    uf.loc[train_idx, "is_train"] = True
-    uf.to_csv(os.path.join(out_dir, "conformal_uncertainty_features.csv"), index=False)
 
     # -- run_config.json --
     run_config = dict(vars(args))
@@ -1804,8 +1638,8 @@ def main():
         "cv_repeats_outer": int(args.cv_repeats_outer),
         "notes": [
             "Safety-filled any residual NaNs/Infs in features post-imputation with column medians, then 0 if still NaN.",
-            "num_one_prob compares to current max observed lmarena_Score among training rows.",
-            f"top_by_margin_prob = P(score > max_observed + {args.margin}), only for models without actual scores.",
+            "p_beats_leader = P(score > max_leader) using calibrated per-model sigma; NaN on training rows.",
+            f"top_by_margin_prob = P(score > max_leader + {args.margin}), only for models without actual scores.",
             "predictions_best_model.csv is sorted by predicted_score descending (highest on top).",
         ]
     }
