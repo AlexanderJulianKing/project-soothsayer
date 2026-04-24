@@ -145,7 +145,41 @@ def fit_tail_shape_and_qhat(
     y_nb_std_oof: np.ndarray,
     gate_passed: bool,
 ) -> ShapeFit:
-    raise NotImplementedError
+    """Fit tail t_df and empirical 95%-anchor q_hat on OOF residuals.
+
+    Non-circular: t_df is fit on r_i = e_i / s(x_i) (or raw e_i in fallback),
+    then q_hat anchors the empirical q95 of |r| to t_ppf(0.975, t_df).
+
+    If gate_passed is False: s(x) = 1, so r_i = e_i.
+    """
+    finite = np.isfinite(oof_residuals) & np.isfinite(y_nb_std_oof)
+    e = oof_residuals[finite]
+    y_nb = y_nb_std_oof[finite]
+
+    if gate_passed:
+        # s_floor = p25 of y_nb_std
+        s_floor = float(np.percentile(y_nb[y_nb > 0], 25)) if (y_nb > 0).any() else 1.0
+        s = np.maximum(np.where(np.isnan(y_nb), 0.0, y_nb), s_floor)
+        r = e / s
+        fallback = False
+    else:
+        s_floor = 1.0
+        r = e.copy()
+        fallback = True
+
+    # t_df fit: scipy.stats.t.fit with floc=0, discard scale
+    try:
+        t_df_fit, _loc, _scale = stats.t.fit(r, floc=0)
+        t_df = float(np.clip(t_df_fit, 3.0, 200.0))
+    except Exception:
+        t_df = 200.0  # Gaussian fallback
+
+    # Empirical q95 anchor: q_hat * t_ppf(0.975, t_df) = q95(|r|)
+    q95 = float(np.quantile(np.abs(r), 0.95, method="linear"))
+    t_crit = float(stats.t.ppf(0.975, t_df))
+    q_hat = q95 / t_crit if t_crit > 0 else q95
+
+    return ShapeFit(t_df=t_df, q_hat=q_hat, s_floor=s_floor, fallback_used=fallback)
 
 
 def compute_sigma(

@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'arena_predicto
 
 import numpy as np
 import pytest
+from scipy import stats
 
 from calibration import (
     GateResult,
@@ -93,3 +94,48 @@ def test_compute_local_scale_handles_nan():
     s_floor = 10.0
     out = compute_local_scale(y_nb_std, s_floor)
     np.testing.assert_array_equal(out, np.array([10.0, 10.0, 10.0, 20.0]))
+
+
+def test_fit_tail_shape_gate_passed_path():
+    """With gate passed: t_df fit on r_i = e_i / s(x_i); q_hat anchors 95% coverage."""
+    n = 200
+    y_nb_std = RNG.uniform(10.0, 30.0, size=n)
+    # residuals scaled by y_nb_std, drawn from t(df=8)
+    r = stats.t.rvs(df=8, size=n, random_state=RNG)
+    residuals = y_nb_std * r
+    fit = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=True)
+    assert 3.0 <= fit.t_df <= 200.0
+    # t_df should be roughly near 8 (wide tolerance because n=200)
+    assert 4.0 <= fit.t_df <= 25.0
+    assert fit.q_hat > 0
+    assert fit.s_floor > 0
+    assert fit.fallback_used is False
+
+
+def test_fit_tail_shape_fallback_path():
+    """When gate is False: s(x) = 1, t_df fit on raw residuals."""
+    residuals = RNG.normal(0, 15.0, size=150)
+    y_nb_std = RNG.uniform(5.0, 40.0, size=150)  # ignored in fallback
+    fit = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=False)
+    assert fit.fallback_used is True
+    assert fit.s_floor == 1.0
+    # t_df fit on a near-Gaussian sample should clip near 200
+    assert fit.t_df >= 10.0
+    assert fit.q_hat > 0
+
+
+def test_fit_tail_shape_coverage_anchor():
+    """In the gate-passed limit with m=1, OOF 95% coverage should be ~95%."""
+    n = 2000  # large sample to make the anchor behave
+    y_nb_std = RNG.uniform(10.0, 30.0, size=n)
+    r = stats.t.rvs(df=10, size=n, random_state=RNG)
+    residuals = y_nb_std * r
+    fit = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=True)
+    s = compute_local_scale(y_nb_std, fit.s_floor)
+    sigma = fit.q_hat * s
+    t_crit = stats.t.ppf(0.975, fit.t_df)
+    lower = -t_crit * sigma
+    upper = t_crit * sigma
+    coverage = float(np.mean((residuals >= lower) & (residuals <= upper)))
+    # Expect ~95% coverage, within tolerance for n=2000
+    assert 0.92 <= coverage <= 0.98
