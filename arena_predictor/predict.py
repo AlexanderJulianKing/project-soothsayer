@@ -1590,19 +1590,54 @@ def main():
     eval_df = pd.DataFrame([{"model": "KNN", "rmse_mean": oof_rmse_val, "rmse_std": 0.0}])
     eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
 
-    # -- conformal_diagnostics.csv --
-    # NOTE: Task 12 will replace this with calibration_diagnostics.csv using
-    # the full gate/shape diagnostics. For now emit minimal row so run completes.
+    # -- calibration_diagnostics.csv --
+    # Compute OOF-level coverage and PIT for diagnostics
+    oof_sigma_valid = sigma_hat[~y_missing_mask][oof_valid_mask]
+    # Use OOF-level sigma without m correction for self-check (m is only appropriate for WF)
+    oof_sigma_nom = oof_sigma_valid / m_scalar if m_scalar != 0 else oof_sigma_valid
+    oof_residuals_for_diag = oof_residuals_valid
+    oof_z = oof_residuals_for_diag / np.where(oof_sigma_nom < 1e-12, 1e-12, oof_sigma_nom)
+    # PIT
+    try:
+        oof_u = stats.t.cdf(oof_z, df=shape.t_df)
+        oof_pit_ks_pvalue = float(stats.kstest(oof_u, "uniform").pvalue)
+    except Exception:
+        oof_pit_ks_pvalue = float("nan")
+    # 95% coverage
+    oof_covered_95 = (oof_residuals_for_diag >= -t_crit_95 * oof_sigma_nom) & \
+                     (oof_residuals_for_diag <= t_crit_95 * oof_sigma_nom)
+    oof_coverage_95 = float(oof_covered_95.mean())
+
     diag_row = {
-        "gate_pass": gate.passed,
+        "gate_pass": bool(gate.passed),
         "gate_reason": gate.reason,
+        "spearman_all": gate.spearman_all,
+        "spearman_top": gate.spearman_top,
+        "log_log_slope": gate.log_log_slope,
+        "log_log_r2": gate.log_log_r2,
+        "decile_lift": gate.decile_lift,
+        "n_oof": gate.n_all,
+        "n_top_oof": gate.n_top,
         "q_hat": shape.q_hat,
         "t_df": shape.t_df,
         "s_floor": shape.s_floor,
         "m": m_scalar,
-        "fallback_used": shape.fallback_used,
+        "fallback_used": bool(shape.fallback_used),
+        "oof_coverage_95": oof_coverage_95,
+        "oof_pit_ks_pvalue": oof_pit_ks_pvalue,
+        "max_leader": max_leader,
+        "t_crit_95": t_crit_95,
     }
-    pd.DataFrame([diag_row]).to_csv(os.path.join(out_dir, "conformal_diagnostics.csv"), index=False)
+    # WF-specific diagnostics land in walkforward_calibration_diagnostics.csv
+    # (emitted by walkforward_calibration.py). predict.py emits only OOF + shape here.
+    pd.DataFrame([diag_row]).to_csv(
+        os.path.join(out_dir, "calibration_diagnostics.csv"), index=False
+    )
+
+    # PIT self-check warning
+    if not np.isnan(oof_pit_ks_pvalue) and oof_pit_ks_pvalue < 0.01:
+        print(f"WARNING: OOF PIT KS p-value = {oof_pit_ks_pvalue:.4f} < 0.01; predictive distribution is not uniform on OOF",
+              file=sys.stderr)
 
     # -- run_config.json --
     run_config = dict(vars(args))
