@@ -1558,7 +1558,8 @@ def main():
     # =========================================================================
 
     # -- predictions_best_model.csv --
-    # NOTE: Task 11 will clean up column names (p_beats_leader replaces num_one_prob).
+    # NOTE: sigma_hat is the t-distribution scale parameter, NOT a 95% half-width.
+    # Consumers who need half-widths must multiply by t_crit_95 (= stats.t.ppf(0.975, t_df)).
     pred_df = pd.DataFrame({
         ID_COL: imputed_df[ID_COL].values,
         "predicted_score": mu,
@@ -1638,8 +1639,9 @@ def main():
         "cv_repeats_outer": int(args.cv_repeats_outer),
         "notes": [
             "Safety-filled any residual NaNs/Infs in features post-imputation with column medians, then 0 if still NaN.",
-            "p_beats_leader = P(score > max_leader) using calibrated per-model sigma; NaN on training rows.",
-            f"top_by_margin_prob = P(score > max_leader + {args.margin}), only for models without actual scores.",
+            "sigma_hat is the t-distribution SCALE parameter, not a half-width. For 95% intervals use mu ± t_crit_95 * sigma_hat.",
+            "p_beats_leader = P(score > max_leader) where max_leader = max(observed lmarena_Score); NaN on training rows.",
+            f"top_by_margin_prob = P(score > max_leader + {args.margin}), NaN on training rows.",
             "predictions_best_model.csv is sorted by predicted_score descending (highest on top).",
         ]
     }
