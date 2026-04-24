@@ -754,6 +754,7 @@ def fit_and_predict_knn(
     oof_preds_sum = np.zeros(n_train)
     oof_counts = np.zeros(n_train)
     oof_folds = np.full(n_train, -1, dtype=int)
+    oof_y_nb_std_sum = np.zeros(n_train)  # NEW: average across folds
 
     for fold_idx, (tr, va) in enumerate(cv_splits):
         sc = StandardScaler()
@@ -770,13 +771,14 @@ def fit_and_predict_knn(
             Xva = np.hstack([Xva, pls_f.transform(Xva)])
 
         for vi, va_i in enumerate(va):
-            p, _, _, _ = predict_adaptive_knn(
+            p, _, _, y_nb_std = predict_adaptive_knn(
                 Xtr, ytr, Xva[vi:vi + 1],
                 power_alpha=power_alpha, power_C=power_C,
                 max_k=max_k, min_k=min_k, bw_pct=bw_pct,
             )
             oof_preds_sum[va_i] += p
             oof_counts[va_i] += 1
+            oof_y_nb_std_sum[va_i] += y_nb_std
             oof_folds[va_i] = fold_idx % 5
             if _JACKKNIFE_LOG is not None and _JACKKNIFE_LOG:
                 _JACKKNIFE_LOG[-1]['is_oof'] = True
@@ -784,6 +786,7 @@ def fit_and_predict_knn(
                 _JACKKNIFE_LOG[-1]['fold'] = int(fold_idx)
 
     oof_preds = np.where(oof_counts > 0, oof_preds_sum / oof_counts, np.nan)
+    oof_y_nb_std = np.where(oof_counts > 0, oof_y_nb_std_sum / oof_counts, np.nan)  # NEW
     oof_valid = oof_counts > 0
     oof_rmse = float(np.sqrt(np.nanmean((oof_preds[oof_valid] - y_train[oof_valid]) ** 2)))
     print(f"  KNN OOF RMSE: {oof_rmse:.2f} ({int(oof_valid.sum())}/{n_train} valid)")
@@ -804,9 +807,10 @@ def fit_and_predict_knn(
     mu = np.full(n_all, np.nan)
     std = np.full(n_all, np.nan)
     ks_used = np.zeros(n_all, dtype=int)
+    y_nb_std_final = np.full(n_all, np.nan)  # NEW
 
     for i in pred_idx:
-        p, s, k, _ = predict_adaptive_knn(
+        p, s, k, y_nb_std = predict_adaptive_knn(
             X_train_sc, y_train, X_all_sc[i:i + 1],
             power_alpha=power_alpha, power_C=power_C,
             max_k=max_k, min_k=min_k, bw_pct=bw_pct,
@@ -814,6 +818,7 @@ def fit_and_predict_knn(
         mu[i] = p
         std[i] = s
         ks_used[i] = k
+        y_nb_std_final[i] = y_nb_std
         if _JACKKNIFE_LOG is not None and _JACKKNIFE_LOG:
             _JACKKNIFE_LOG[-1]['is_final'] = True
             _JACKKNIFE_LOG[-1]['row_idx'] = int(i)
@@ -832,6 +837,8 @@ def fit_and_predict_knn(
         "oof_preds": oof_preds,
         "oof_folds": oof_folds,
         "ks_used": ks_used,
+        "y_nb_std_oof": oof_y_nb_std,
+        "y_nb_std_final": y_nb_std_final,
     }
 
 
