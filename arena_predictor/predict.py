@@ -1382,9 +1382,15 @@ def main():
                         if c != ALT_TARGET and c != TARGET]
     if getattr(args, 'drop_style_tone', False):
         before = len(knn_feature_cols)
+        # 2026-05-11 experiment: drop only style_*, keep tone_* in KNN.
+        # The 2026-04-18 ablation tested style+tone together; tone_* is only
+        # 4 columns (already-summary judge TrueSkill values), and one of them
+        # (tone_*confidence*) is the load-bearing signal for benchmaxxed
+        # models like Phi-4 (0.0 percentile). PLS-3 smooths it away. Test
+        # whether keeping tone_* in fixes Phi-4 without harming overall RMSE.
         knn_feature_cols = [c for c in knn_feature_cols
-                            if not c.startswith('style_') and not c.startswith('tone_')]
-        print(f"  drop_style_tone: {before} -> {len(knn_feature_cols)} features")
+                            if not c.startswith('style_')]
+        print(f"  drop_style (keep tone): {before} -> {len(knn_feature_cols)} features")
     knn_X = safe_features[knn_feature_cols].values
     globals()['_LAST_KNN_FEATURE_COLS'] = list(knn_feature_cols)
     print(f"  KNN features: {len(knn_feature_cols)} (including SVD/traj)")
