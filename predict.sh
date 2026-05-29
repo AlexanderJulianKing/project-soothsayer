@@ -70,7 +70,9 @@ echo "Executing Python script"
 
 
 # Shipped predictor path: ModelBankImputer + coherence projection +
-# drop_style_tone + fold-internal PLS-3 + adaptive KNN + grouped conformal.
+# drop_style_tone + fold-internal PLS-6 + adaptive KNN + grouped conformal.
+# Retuned 2026-05-29 for n=175: pls_hybrid_k 3->6, selector_k_max 37->25
+# (cv10 OOF RMSE 14.03 -> 13.68). See docs/FINDINGS.md.
 # Prefer the sem-augmented CSV when available. Fall back to the base CSV if
 # combine.bash ran without the embedding stack installed.
 AUGMENTED_CSV="../benchmark_combiner/benchmarks/clean_combined_all_benches_with_sem_v4_d32.csv"
@@ -91,8 +93,10 @@ python3 predict.py \
     --coherence_shape exp \
     --predictor_selection loo_forward \
     --drop_style_tone \
-    --pls_hybrid_k 3 \
-    --cv_repeats_outer 10
+    --pls_hybrid_k 6 \
+    --selector_k_max 25 \
+    --cv_repeats_outer 10 \
+    "$@"
 
 # The virtual environment is automatically deactivated when the script finishes.
 echo ""

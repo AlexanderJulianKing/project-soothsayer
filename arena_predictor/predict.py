@@ -92,6 +92,7 @@ KNN_MAX_K = 80
 KNN_MIN_K = 20
 KNN_BW_PCT = 0.15      # kernel bandwidth at this percentile of neighbor distances
 KNN_VI_CLIP = (1.0, 1.5)
+GLOBAL_BLEND_REF = 15.0  # neighbor-std at/above which --global_blend reaches full weight
 
 # Diagnostic sidecar: if set to a list, predict_adaptive_knn appends dicts with
 # per-call (b_raw, b_clipped, k, mu_nb, p, p_corrected). Used for one-shot
@@ -535,6 +536,9 @@ def fit_and_predict_knn(
     min_k: int = KNN_MIN_K,
     bw_pct: float = KNN_BW_PCT,
     pls_hybrid_k: int = 0,
+    vi_clip_hi: float = 1.5,
+    pls_dist_weight: float = 1.0,
+    global_blend: float = 0.0,
 ) -> Dict[str, np.ndarray]:
     """Fit adaptive KNN on training data and predict all rows.
 
@@ -559,20 +563,28 @@ def fit_and_predict_knn(
         Xva = sc.transform(X_all[train_idx[va]])
         ytr = y_train[tr]
 
-        # PLS hybrid: fit PLS on training fold only, concatenate components to features
+        # PLS hybrid: fit PLS on training fold only, concatenate components to features.
+        # pls_dist_weight scales those components in the KNN distance (>1 = more ELO-supervised).
+        pls_f = None
+        Xtr_knn, Xva_knn = Xtr, Xva
         if pls_hybrid_k > 0:
             from sklearn.cross_decomposition import PLSRegression as _PLS
             n_comp = min(pls_hybrid_k, Xtr.shape[1], Xtr.shape[0] - 1)
             pls_f = _PLS(n_components=n_comp).fit(Xtr, ytr)
-            Xtr = np.hstack([Xtr, pls_f.transform(Xtr)])
-            Xva = np.hstack([Xva, pls_f.transform(Xva)])
+            Xtr_knn = np.hstack([Xtr, pls_dist_weight * pls_f.transform(Xtr)])
+            Xva_knn = np.hstack([Xva, pls_dist_weight * pls_f.transform(Xva)])
 
         for vi, va_i in enumerate(va):
             p, _, _, y_nb_std = predict_adaptive_knn(
-                Xtr, ytr, Xva[vi:vi + 1],
+                Xtr_knn, ytr, Xva_knn[vi:vi + 1],
                 power_alpha=power_alpha, power_C=power_C,
                 max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+                vi_clip=(1.0, vi_clip_hi),
             )
+            if global_blend > 0 and pls_f is not None:
+                p_glob = float(pls_f.predict(Xva[vi:vi + 1])[0])
+                lam = global_blend * min(1.0, y_nb_std / GLOBAL_BLEND_REF)
+                p = (1.0 - lam) * p + lam * p_glob
             oof_preds_sum[va_i] += p
             oof_counts[va_i] += 1
             oof_y_nb_std_sum[va_i] += y_nb_std
@@ -594,12 +606,14 @@ def fit_and_predict_knn(
     X_all_sc = sc_final.transform(X_all)
 
     # PLS hybrid: fit on full training set for final predictions
+    pls_final = None
+    X_train_knn, X_all_knn = X_train_sc, X_all_sc
     if pls_hybrid_k > 0:
         from sklearn.cross_decomposition import PLSRegression as _PLS
         n_comp = min(pls_hybrid_k, X_train_sc.shape[1], X_train_sc.shape[0] - 1)
         pls_final = _PLS(n_components=n_comp).fit(X_train_sc, y_train)
-        X_train_sc = np.hstack([X_train_sc, pls_final.transform(X_train_sc)])
-        X_all_sc = np.hstack([X_all_sc, pls_final.transform(X_all_sc)])
+        X_train_knn = np.hstack([X_train_sc, pls_dist_weight * pls_final.transform(X_train_sc)])
+        X_all_knn = np.hstack([X_all_sc, pls_dist_weight * pls_final.transform(X_all_sc)])
 
     mu = np.full(n_all, np.nan)
     std = np.full(n_all, np.nan)
@@ -608,10 +622,15 @@ def fit_and_predict_knn(
 
     for i in pred_idx:
         p, s, k, y_nb_std = predict_adaptive_knn(
-            X_train_sc, y_train, X_all_sc[i:i + 1],
+            X_train_knn, y_train, X_all_knn[i:i + 1],
             power_alpha=power_alpha, power_C=power_C,
             max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+            vi_clip=(1.0, vi_clip_hi),
         )
+        if global_blend > 0 and pls_final is not None:
+            p_glob = float(pls_final.predict(X_all_sc[i:i + 1])[0])
+            lam = global_blend * min(1.0, y_nb_std / GLOBAL_BLEND_REF)
+            p = (1.0 - lam) * p + lam * p_glob
         mu[i] = p
         std[i] = s
         ks_used[i] = k
@@ -1041,6 +1060,19 @@ def main():
                     help="Remove style_/tone_ columns from KNN feature set (imputer can still use them).")
     ap.add_argument("--pls_hybrid_k", type=int, default=0,
                     help="Append K PLS components (fit per-fold on train) to KNN features (0=disabled).")
+    # -- Edge/extrapolation experiment levers (defaults = shipped behavior) --
+    ap.add_argument("--vi_clip_hi", type=float, default=1.5,
+                    help="Jackknife VI b-clip ceiling (default 1.5). Higher lets edge predictions deviate more from the neighborhood mean.")
+    ap.add_argument("--pls_dist_weight", type=float, default=1.0,
+                    help="Scale on PLS components in the KNN distance (default 1.0). >1 makes neighbor search more ELO-supervised.")
+    ap.add_argument("--global_blend", type=float, default=0.0,
+                    help="Max blend weight toward the global PLS prediction, scaled by neighbor disagreement y_nb_std (0=off).")
+    ap.add_argument("--dump_coef", type=str, default=None,
+                    help="If set, dump per-model final local-Ridge coefficients + feature names to this .npz path.")
+    ap.add_argument("--drop_families", type=str, default="",
+                    help="Comma-separated column prefixes to drop from the KNN feature set (e.g. 'tone_,yupp_'). Imputation still uses all features.")
+    ap.add_argument("--drop_cols_file", type=str, default="",
+                    help="Path to a file with EXACT KNN column names (one per line) to drop. For per-column LOO ablation.")
     # -- Misc --
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Margin for 'top_by_margin_prob' column (default 20 points).")
@@ -1391,6 +1423,17 @@ def main():
         knn_feature_cols = [c for c in knn_feature_cols
                             if not c.startswith('style_')]
         print(f"  drop_style (keep tone): {before} -> {len(knn_feature_cols)} features")
+    if getattr(args, 'drop_families', ''):
+        _pre = [p.strip() for p in args.drop_families.split(',') if p.strip()]
+        before = len(knn_feature_cols)
+        knn_feature_cols = [c for c in knn_feature_cols if not any(c.startswith(p) for p in _pre)]
+        print(f"  drop_families {_pre}: {before} -> {len(knn_feature_cols)} features")
+    if getattr(args, 'drop_cols_file', ''):
+        with open(args.drop_cols_file) as _f:
+            _dc = set(l.rstrip('\n') for l in _f if l.strip())
+        before = len(knn_feature_cols)
+        knn_feature_cols = [c for c in knn_feature_cols if c not in _dc]
+        print(f"  drop_cols_file ({len(_dc)} req): {before} -> {len(knn_feature_cols)} features")
     knn_X = safe_features[knn_feature_cols].values
     globals()['_LAST_KNN_FEATURE_COLS'] = list(knn_feature_cols)
     print(f"  KNN features: {len(knn_feature_cols)} (including SVD/traj)")
@@ -1441,6 +1484,8 @@ def main():
     # 8. KNN prediction
     # =========================================================================
     print("Using adaptive KNN prediction pipeline")
+    if getattr(args, 'dump_coef', None):
+        globals()['_JACKKNIFE_LOG'] = []
     knn_result = fit_and_predict_knn(
         knn_X,
         y_all,
@@ -1455,7 +1500,22 @@ def main():
         min_k=args.knn_min_k,
         bw_pct=args.knn_bw_pct,
         pls_hybrid_k=args.pls_hybrid_k,
+        vi_clip_hi=args.vi_clip_hi,
+        pls_dist_weight=args.pls_dist_weight,
+        global_blend=args.global_blend,
     )
+    if getattr(args, 'dump_coef', None):
+        import numpy as _np
+        _log = globals().get('_JACKKNIFE_LOG') or []
+        _cols = list(globals().get('_LAST_KNN_FEATURE_COLS', []))
+        _names = imputed_df[ID_COL].values
+        _fin = [d for d in _log if d.get('is_final') and 'row_idx' in d]
+        _mn = [str(_names[d['row_idx']]) for d in _fin]
+        _cf = _np.array([d['coef'] for d in _fin])
+        _np.savez(args.dump_coef, feature_cols=_np.array(_cols, dtype=object),
+                  model_names=_np.array(_mn, dtype=object), coefs=_cf)
+        print(f"  dumped coef matrix {_cf.shape} ({len(_cols)} named feats + PLS) -> {args.dump_coef}")
+        globals()['_JACKKNIFE_LOG'] = None
     mu = knn_result["mu"]
     std = knn_result["std"]
     lower = knn_result["lower"]
