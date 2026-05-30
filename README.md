@@ -8,18 +8,20 @@ Predict [Arena](https://arena.ai) ELO scores for LLMs before they appear on the 
 
 ## Performance
 
-Out-of-fold RMSE on n=127 labeled models (10× 5-fold CV, target = style-controlled Arena ELO):
+Two evaluations against style-controlled Arena ELO. **OOF** is 10× 5-fold cross-validation on the n=138 labeled models. **Walk-forward** is the honest temporal test: train on older models, predict each of the 23 newest one at a time in release order, re-fitting the entire pipeline at every step — the real test of predicting a model *before* it has Arena votes.
 
-| Method | RMSE | R² | Spearman ρ |
-|---|---:|---:|---:|
-| Predict mean (dummy) | 56.3 | 0.00 | — |
-| Public benchmarks + median impute | 35.6 | 0.66 | 0.81 |
-| All benchmarks + median impute | 25.7 | 0.82 | 0.90 |
-| Full Soothsayer pipeline | **13.61** | **0.941** | **0.971** |
+| Method | OOF RMSE | Walk-forward RMSE |
+|---|---:|---:|
+| Predict mean (dummy) | 57.1 | 64.5 |
+| Public benchmarks + median impute | 27.2 | 33.3 |
+| All benchmarks + median impute | 19.2 | 23.1 |
+| **Full Soothsayer pipeline** | **13.68** | **14.16** |
 
-Honest walk-forward on the 23 newest models (re-fits imputation, PCA-32, and PLS-3 every step): RMSE **14.69**, R² **0.900**, Spearman ρ **0.940**.
+The ladder isolates where the signal comes from: adding our 4 custom benchmarks to the public ones cuts OOF RMSE 27.2 → 19.2, and the full impute + adaptive-KNN + PLS pipeline takes it to 13.68. Full-pipeline quality beyond RMSE — OOF: R² 0.943, Spearman ρ 0.968; walk-forward: R² 0.911, ρ 0.954.
 
-Reproduce with `arena_predictor/baseline_comparison_lmarena.py` (first three rows) and `predict.sh` (final row).
+The pipeline also has by far the smallest OOF→walk-forward gap (+0.48 RMSE, vs +3.9 to +7.4 for the baselines): naive methods degrade sharply when forced to extrapolate to genuinely new models, so the pipeline's edge widens in the temporal test.
+
+Baselines use median imputation + RidgeCV (regularized — plain OLS is rank-deficient at 122 features / ~90–110 training rows); R² is variance explained (sklearn `r2_score`). Reproduce with `arena_predictor/baseline_comparison_lmarena.py` (OOF), `baseline_comparison_walkforward.py` (walk-forward), and `predict.sh` (full-pipeline OOF row).
 
 ## Benchmarks
 
@@ -173,7 +175,7 @@ The prediction pipeline (`scrapers/` → `benchmark_combiner/` → `arena_predic
 
 The combined benchmark matrix is sparse -- most models are missing scores from several benchmarks. `ModelBankImputer` fills these gaps by selecting the best available predictors for each missing cell (based on what's actually observed in that row), fitting cached per-cell models, and applying a low-rank coherence projection to keep imputed values consistent across columns. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details on the imputation algorithms.
 
-Finally, `predict.py` trains on models that have Arena scores to predict scores for those that don't, using fold-internal PLS-3 supervision appended to the KNN feature matrix, adaptive-neighborhood kernel Ridge with jackknife variance inflation, and grouped conformal prediction intervals.
+Finally, `predict.py` trains on models that have Arena scores to predict scores for those that don't, using fold-internal PLS-6 supervision appended to the KNN feature matrix, adaptive-neighborhood kernel Ridge with jackknife variance inflation, and grouped conformal prediction intervals.
 
 A snapshot of benchmark data (as of April 2026 in the current tree) is included in `benchmark_combiner/benchmarks/` so the prediction pipeline can run from a fresh clone without needing to re-scrape.
 

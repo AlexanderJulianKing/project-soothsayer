@@ -1,33 +1,55 @@
 # Walk-Forward CV Analysis: Why the Pipeline Mis-Predicts
 
-## Honest Walk-Forward (2026-04-18, current shipped pipeline)
+## Honest Walk-Forward (2026-05-29, current shipped pipeline)
 
-**Script:** `arena_predictor/_walkforward_honest.py` — at every step, re-fits ModelBankImputer on rows `[0..i]`, re-fits PCA-32 on pooled response embeddings for rows `[0..i-1]`, re-builds the 119-feature production matrix, re-fits PLS-3 on `[0..i-1]`, then `predict_adaptive_knn` on model `i`. The only information that leaks across steps is the target for rows strictly before the prediction horizon.
+**Script:** `arena_predictor/_walkforward_honest.py` — at every step, re-fits ModelBankImputer on rows `[0..i]`, re-fits PCA-32 on pooled response embeddings for rows `[0..i-1]`, re-builds the production feature matrix, re-fits PLS-6 on `[0..i-1]`, then `predict_adaptive_knn` on model `i`. The only information that leaks across steps is the target for rows strictly before the prediction horizon.
 
-**Config:** shipped 2026-04-18 (`--imputer_type model_bank --coherence_lambda 8.0 --coherence_shape exp --predictor_selection loo_forward --drop_style_tone --pls_hybrid_k 3`), sem-augmented CSV, bge-small / per_bench_eq_split / PCA-32 fingerprints.
+**Config:** shipped 2026-05-29 retune (`--imputer_type model_bank --coherence_lambda 8.0 --coherence_shape exp --predictor_selection loo_forward --drop_style_tone --pls_hybrid_k 6 --selector_k_max 25`), sem-augmented CSV, bge-small / per_bench_eq_split / PCA-32 fingerprints.
 
-**Split:** 115 models with target + release date + all 5 embedding slots; oldest 80% (92 models) as initial train; newest 23 predicted one at a time.
+**Split:** 114 models with target + release date + all 5 embedding slots; oldest 80% (91 models) as initial train; newest 23 predicted one at a time.
 
-| Metric | Honest WF (n=23) | 10×5-fold OOF (n=127) |
+| Metric | Honest WF (n=23) | 10×5-fold OOF (n=138) |
 |---|---|---|
-| RMSE | **14.69** | 13.61 |
-| MAE | 11.00 | 10.70 |
-| R² | 0.900 | 0.941 |
-| Pearson r | 0.949 | 0.971 |
-| Spearman ρ | 0.940 | 0.971 |
+| RMSE | **14.16** | 13.68 |
+| MAE | 10.80 | 10.92 |
+| R² | 0.911 | 0.943 |
+| Pearson r | 0.956 | 0.972 |
+| Spearman ρ | 0.954 | 0.968 |
+
+(Pre-retune, this same WF was 14.69 / 0.900 / 0.940; the retune improved temporal extrapolation, not just CV interpolation.)
 
 **Biggest residuals in the honest run:**
 
 | Model | actual | pred | err |
 |---|---|---|---|
-| Claude Sonnet 4.6 Thinking | 1463 | 1495.9 | +32.9 |
-| Qwen3.5 27B Thinking | 1403 | 1375.2 | −27.8 |
-| Claude Opus 4.6 | 1497 | 1472.8 | −24.2 |
-| Qwen3.5 397B A17B Thinking | 1446 | 1427.8 | −18.2 |
+| Qwen3.5 27B Thinking | 1408 | 1377.8 | −30.2 |
+| Claude Sonnet 4.6 Thinking | 1470 | 1496.6 | +26.6 |
+| GPT-5.4 Thinking | 1480 | 1505.1 | +25.1 |
+| Nova 2 Lite | 1338 | 1361.6 | +23.6 |
+| Claude Opus 4.6 | 1498 | 1478.6 | −19.4 |
 
-All four are thinking-variant or newest-generation models where the older training pool has limited precedent. The +1.21 RMSE gap vs OOF is the honest cost of *not* having ~20% of the data in imputation-/PCA-/PLS-fitting.
+Most are thinking-variant or newest-generation models where the older training pool has limited precedent. The +0.48 RMSE gap vs OOF is the honest cost of *not* having ~20% of the data in imputation-/PCA-/PLS-fitting.
 
 **Per-step results:** `/tmp/walkforward_honest_80.csv`.
+
+### Baseline ladder under walk-forward
+
+The same four-row ladder as the README's OOF table, but each baseline run through the *identical* walk-forward protocol (same 114-model pool, same oldest-91 → newest-23 split, re-fit each step). Reproduce with `arena_predictor/baseline_comparison_walkforward.py`.
+
+| Method | OOF RMSE | WF RMSE | OOF→WF gap |
+|---|---:|---:|---:|
+| Predict mean (dummy) | 57.1 | 64.5 | +7.4 |
+| Public benchmarks + median impute | 27.2 | 33.3 | +6.1 |
+| All benchmarks + median impute | 19.2 | 23.1 | +3.9 |
+| **Full Soothsayer pipeline** | **13.68** | **14.16** | **+0.48** |
+
+WF R²/ρ for the baselines: dummy −0.84 / 0.38, public 0.51 / 0.79, all 0.76 / 0.91; full pipeline 0.911 / 0.954.
+
+Two points:
+- **The dummy goes below chance under WF (R² = −0.84).** "Predict the training mean" systematically under-shoots, because the newest models trend stronger than the historical average — the exact failure mode the pipeline must beat to be useful on new releases. (Its WF ρ is still positive at 0.38 only because the rising training mean weakly tracks the rising test ELOs.)
+- **The pipeline has by far the smallest OOF→WF gap (+0.48 vs +3.9–7.4).** Naive methods degrade hard when extrapolating to genuinely-new models; the pipeline's advantage *widens* in the honest temporal test.
+
+**Methodology — why RidgeCV, not OLS.** The baseline regressor is RidgeCV, not plain OLS. With ~122 features and ~91 training rows the per-step design is p>n, where unregularized OLS is rank-deficient and unstable: under WF it lands at 52–73 RMSE and swings with tiny data changes (an earlier write-up used OLS and reported ~54–55 here). Ridge gives the naive baseline a fair, stable shot at high dimension. Switching to a fair baseline *narrows* the pipeline's apparent margin (old OLS comparison: ~14.7 vs ~54; honest Ridge comparison: 14.2 vs 23–33) — still a decisive win, but not against a strawman. R² is sklearn `r2_score` throughout (not Pearson²; the dummy is exactly ≤0 under it). **Caveat:** the "All benchmarks" WF row uses the precomputed `sem_f*` columns, whose PCA basis was fit on all models — mild forward-leakage that, if anything, flatters the baseline; the full pipeline re-fits PCA every step to avoid it.
 
 ---
 

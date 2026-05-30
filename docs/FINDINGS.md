@@ -1052,7 +1052,7 @@ Pre-PLS, EB parent shrunk uncertain cells toward the column mean, and the `--ran
 ### Artifacts
 
 - Sweep scripts: `arena_predictor/run_*_experiments.bash`
-- Honest walk-forward: `arena_predictor/_walkforward_honest.py` → RMSE 14.69 / R² 0.900 / ρ 0.940 on n=23 newest
+- Honest walk-forward: `arena_predictor/_walkforward_honest.py` → RMSE 14.16 / R² 0.911 / ρ 0.954 on n=23 newest (shipped pls6+selk25 config; was 14.69 / 0.900 / 0.940 pre-retune)
 - Per-step walk-forward results: `/tmp/walkforward_honest_80.csv`
 
 ---
