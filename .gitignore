@@ -132,9 +132,19 @@ benchmark_combiner/benchmarks/*
 !benchmark_combiner/benchmarks/eq_20260313.csv
 !benchmark_combiner/benchmarks/clean_combined_all_benches.csv
 !benchmark_combiner/benchmarks/combined_all_benches.csv
+# Sem-augmented CSV is what predict.sh actually reads for the shipped RMSE (13.68);
+# tracked so `./predict.sh` reproduces the headline number from a fresh clone
+# without regenerating embeddings. Derived (combine.bash rebuilds it), but small.
+!benchmark_combiner/benchmarks/clean_combined_all_benches_with_sem_v4_d32.csv
 
 # Combiner analysis output (generated charts/CSVs)
 benchmark_combiner/analysis_output/
+
+# Scraper diagnostic reports (regenerable from combine runs)
+benchmark_combiner/missing_from_openbench_*.txt
+
+# Judge calibration outputs (regenerable via judge_calibration.py + opus_judge_*)
+judge_calibration_results/
 
 # Prediction pipeline outputs
 arena_predictor/analysis_output/

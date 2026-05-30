@@ -17,7 +17,7 @@ cd "$ROOT/benchmark_combiner"
 START_TIME=$SECONDS
 # python3 ../scrapers/lmarena_grabber.py  # replaced by arena_ai_grabber.py
 # python3 ../scrapers/vectara_grabber.py
-# python3 ../scrapers/lechmazur_grabber.py
+python3 ../scrapers/lechmazur_grabber.py  # nytcon-only (others dropped 2026-05-28)
 
 python3 ../scrapers/arena_ai_grabber.py
 python3 ../scrapers/livebench_grabber.py
@@ -29,7 +29,7 @@ python3 ../scrapers/arc_grabber.py
 python3 ../scrapers/eqbench_grabber.py
 python3 ../scrapers/ugi_leaderboard_grabber.py
 python3 ../scrapers/weirdml_grabber.py
-python3 ../scrapers/yupp_grabber.py
+# python3 ../scrapers/yupp_grabber.py
 #python3 combine.py
 
 ELAPSED=$(( SECONDS - START_TIME ))

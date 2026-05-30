@@ -151,5 +151,16 @@
   "Claude 4.7 (High)": "",
   "Claude 4.7 (Low)": "",
   "Claude 4.7 (Medium)": "",
-  "Claude 4.7 (Max)": "Claude Opus 4.7 Thinking"
+  "Claude 4.7 (Max)": "Claude Opus 4.7 Thinking",
+  "GPT-5.5 (Low)": "",
+  "GPT-5.2 (xHigh)": "GPT-5.2 (xhigh)",
+  "GPT-5.2 Pro (xHigh)": "",
+  "GPT-5.5 (Medium)": "",
+  "GPT-5.5 Pro (High)": "",
+  "GPT-5.5 (High)": "",
+  "GPT-5.5 Pro (xHigh)": "",
+  "GPT-5.5 (xHigh)": "GPT-5.5 Thinking",
+  "Opus 4.7 (High)": "Claude Opus 4.7 Thinking",
+  "Gemini 3.5 Flash (High)": "Gemini 3.5 Flash",
+  "Gemini 3.5 Flash (Minimal)": ""
 }
