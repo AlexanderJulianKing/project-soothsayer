@@ -5,8 +5,6 @@ each WF step to produce per-step OOF residuals and y_nb_std, (b) fitting per-ste
 gate + t_df + q_hat + s_floor on that prefix, (c) fitting a global scalar m across
 steps, and (d) emitting diagnostics (PIT, coverage, Brier, log-loss) + wf_residuals.csv
 for downstream consumption by predict.py via --walkforward_calibration_path.
-
-See docs/superpowers/specs/2026-04-24-predictor-calibration-design.md for design.
 """
 from __future__ import annotations
 

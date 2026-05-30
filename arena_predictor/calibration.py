@@ -3,8 +3,7 @@
 Implements OOF normalized conformal-style shape fit (local scale + tail t_df
 + empirical quantile anchor) plus walk-forward level correction.
 
-All functions are pure (no I/O, no global state). See
-docs/superpowers/specs/2026-04-24-predictor-calibration-design.md for design.
+All functions are pure (no I/O, no global state).
 """
 from __future__ import annotations
 

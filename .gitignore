@@ -157,3 +157,6 @@ font_test.html
 # Unreleased benchmarks
 soothsayer_zebra/
 tests/test_zebra_puzzle_generator.py
+
+# AI planning / spec artifacts (kept local, not in PRs)
+docs/superpowers/
