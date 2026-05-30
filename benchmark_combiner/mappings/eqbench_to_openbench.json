@@ -171,5 +171,16 @@
   "*google/gemma-4-31B-it": "Gemma 4 31B",
   "gpt-5.3-chat": "",
   "Qwen/Qwen3.5-397B-A17B": "Qwen3.5 397B A17B Nonthinking",
-  "*zai-org/GLM-5.1": "GLM 5.1"
+  "*zai-org/GLM-5.1": "GLM 5.1",
+  "*moonshotai/Kimi-K2.6": "Kimi K2.6",
+  "*claude-opus-4-7": "Claude Opus 4.7 Thinking",
+  "*deepseek-ai/DeepSeek-V4-Pro": "DeepSeek V4 Pro Thinking",
+  "gpt-5.4": "GPT-5.4 Thinking",
+  "*gpt-5.5": "GPT-5.5 Thinking",
+  "grok-4.20-beta": "Grok 4.2 beta",
+  "*deepseek-ai/DeepSeek-V4-Flash": "DeepSeek V4 Flash Thinking",
+  "zai-org/GLM-5.1": "GLM 5.1",
+  "google/gemma-4-26B-A4B-it": "Gemma 4 26B A4B",
+  "*HiveLabsAI/hivemind-32b-preview": "",
+  "google/gemma-4-31B-it": "Gemma 4 31B"
 }

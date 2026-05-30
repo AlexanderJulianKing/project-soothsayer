@@ -124,6 +124,18 @@ class TrueSkillArena:
         known_keys = set(history_df["battle_key"].dropna().tolist())
         return history_df, known_keys
 
+    def atomic_save_history(self, history_df: pd.DataFrame) -> None:
+        """Write battle_history.csv via tmp + rename so a crash mid-write
+        cannot corrupt the file. Cheap enough to call after every batch in
+        info-gain loops — turns a multi-hour run from "all-or-nothing" into
+        "saved progress on every batch boundary"."""
+        out = self.cfg.battle_history_csv
+        parent = os.path.dirname(out) or "."
+        os.makedirs(parent, exist_ok=True)
+        tmp = f"{out}.tmp"
+        history_df.to_csv(tmp, index=False)
+        os.replace(tmp, out)
+
     def extract_existing_orientations(self, history_df: pd.DataFrame) -> set:
         orientations = set()
         if history_df.empty:
@@ -368,56 +380,64 @@ class TrueSkillArena:
         print(f"\n=== INFO-GAIN MATCH SELECTION ===")
 
         batch_num = 0
-        while remaining_limit > 0:
-            batch_num += 1
+        try:
+            while remaining_limit > 0:
+                batch_num += 1
 
-            if list_pending_matches_fn:
-                pending_matches, priority_matches = list_pending_matches_fn(
-                    content_index, existing_orientations, judge["name"],
-                    item_filter, paired_mode=self.cfg.paired_mode,
+                if list_pending_matches_fn:
+                    pending_matches, priority_matches = list_pending_matches_fn(
+                        content_index, existing_orientations, judge["name"],
+                        item_filter, paired_mode=self.cfg.paired_mode,
+                    )
+                else:
+                    pending_matches, priority_matches = self.list_pending_matches(
+                        content_index, existing_orientations, judge["name"],
+                        item_filter, paired_mode=self.cfg.paired_mode,
+                    )
+
+                if not pending_matches:
+                    print(f"\nNo pending matches remaining.")
+                    break
+
+                batch_size = min(workers * 2, remaining_limit)
+                batch = self.select_matches_by_info_gain(
+                    pending_matches, priority_matches, ratings, batch_size
                 )
-            else:
-                pending_matches, priority_matches = self.list_pending_matches(
-                    content_index, existing_orientations, judge["name"],
-                    item_filter, paired_mode=self.cfg.paired_mode,
+
+                if not batch:
+                    print(f"\nNo matches selected.")
+                    break
+
+                priority_count = sum(1 for m in batch if m in priority_matches)
+                print(f"\nBatch {batch_num}: Running {len(batch)} battles "
+                      f"({priority_count} completing pairs, {len(priority_matches)} incomplete pairs)")
+
+                records = self.run_battles_batch(
+                    batch, content_index, judge,
+                    run_single_battle_fn, workers,
+                    **extra_kwargs,
                 )
 
-            if not pending_matches:
-                print(f"\nNo pending matches remaining.")
-                break
+                if records:
+                    history_df = pd.concat([history_df, pd.DataFrame(records)], ignore_index=True)
+                    existing_orientations = self.extract_existing_orientations(history_df)
+                    all_new_records.extend(records)
+                    remaining_limit -= len(records)
 
-            batch_size = min(workers * 2, remaining_limit)
-            batch = self.select_matches_by_info_gain(
-                pending_matches, priority_matches, ratings, batch_size
-            )
+                    pair_df = build_paired_results_fn(history_df, judge["name"])
+                    ratings = self.compute_trueskill_ratings(pair_df)
 
-            if not batch:
-                print(f"\nNo matches selected.")
-                break
+                    # Per-batch checkpoint so an interrupt or crash doesn't lose hours of work.
+                    self.atomic_save_history(history_df)
 
-            priority_count = sum(1 for m in batch if m in priority_matches)
-            print(f"\nBatch {batch_num}: Running {len(batch)} battles "
-                  f"({priority_count} completing pairs, {len(priority_matches)} incomplete pairs)")
-
-            records = self.run_battles_batch(
-                batch, content_index, judge,
-                run_single_battle_fn, workers,
-                **extra_kwargs,
-            )
-
-            if records:
-                history_df = pd.concat([history_df, pd.DataFrame(records)], ignore_index=True)
-                existing_orientations = self.extract_existing_orientations(history_df)
-                all_new_records.extend(records)
-                remaining_limit -= len(records)
-
-                pair_df = build_paired_results_fn(history_df, judge["name"])
-                ratings = self.compute_trueskill_ratings(pair_df)
-
-                print(f"  Completed {len(records)} battles, {remaining_limit} remaining in budget")
-            else:
-                print(f"  No battles completed")
-                break
+                    print(f"  Completed {len(records)} battles, {remaining_limit} remaining in budget")
+                else:
+                    print(f"  No battles completed")
+                    break
+        except KeyboardInterrupt:
+            print(f"\n[KeyboardInterrupt at batch {batch_num}] Saving {len(all_new_records)} new records before exit...")
+            self.atomic_save_history(history_df)
+            raise
 
         return history_df, all_new_records
 

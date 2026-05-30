@@ -1,17 +1,19 @@
 # Findings: Alt-Target Prediction Pipeline
 
-## Reference numbers (current as of 2026-04-18, post-CritPT rerun, n=127)
+## Reference numbers (current as of 2026-05-29 retune, n=138 labeled / 176 total)
 
 | Config | OOF RMSE | R² | ρ |
 |---|---:|---:|---:|
 | Baseline (no sem) | 15.39 | — | — |
 | Sem v4 @ 32 dims | 14.12 | — | — |
 | Sem + PLS hybrid + drop_style_tone (2026-04-18 ship, pre-CritPT n=126) | 13.48 | 0.943 | 0.971 |
-| **Sem + PLS hybrid + drop_style_tone (SHIPPED, post-CritPT n=127)** | **13.61** | **0.941** | **0.971** |
+| Sem + PLS-3 + drop_style_tone (2026-04-18 ship, post-CritPT n=127) | 13.61 | 0.941 | 0.971 |
+| Same config drifted to n=138 (pre-retune baseline) | 14.03 | — | — |
+| **Sem + PLS-6 + selector_k_max 25 + drop_style_tone (SHIPPED 2026-05-29, n=138)** | **13.68** | **0.943** | **0.968** |
 
-**Honest walk-forward (2026-04-18, n=23 newest):** RMSE 14.69, R² 0.900, Spearman ρ 0.940. Re-fits ModelBankImputer + PCA-32 + PLS-3 at every step — see `docs/WALKFORWARD_ANALYSIS.md`.
+**Honest walk-forward (2026-05-29, shipped pls6+selk25 config, n=23 newest):** RMSE **14.16**, R² **0.911**, Spearman ρ **0.954** (was 14.69 / 0.900 / 0.940 under the old PLS-3 / selector_k_max 37 config — the retune improves temporal extrapolation too, not just interpolation). Re-fits ModelBankImputer + PCA-32 + PLS-6 at every step — see `_walkforward_honest.py` and `docs/WALKFORWARD_ANALYSIS.md`.
 
-**Shipped 7-flag config** (from `predict.sh`, lift verbatim for any new sweep):
+**Shipped config** (from `predict.sh`, lift verbatim for any new sweep):
 
 ```bash
 python3 predict.py \
@@ -20,7 +22,8 @@ python3 predict.py \
     --coherence_lambda 8.0 --coherence_shape exp \
     --predictor_selection loo_forward \
     --drop_style_tone \
-    --pls_hybrid_k 3 \
+    --pls_hybrid_k 6 \
+    --selector_k_max 25 \
     --cv_repeats_outer 10
 ```
 
@@ -1049,5 +1052,60 @@ Pre-PLS, EB parent shrunk uncertain cells toward the column mean, and the `--ran
 ### Artifacts
 
 - Sweep scripts: `arena_predictor/run_*_experiments.bash`
-- Honest walk-forward: `arena_predictor/_walkforward_honest.py` → RMSE 14.69 / R² 0.900 / ρ 0.940 on n=23 newest
+- Honest walk-forward: `arena_predictor/_walkforward_honest.py` → RMSE 14.16 / R² 0.911 / ρ 0.954 on n=23 newest (shipped pls6+selk25 config; was 14.69 / 0.900 / 0.940 pre-retune)
 - Per-step walk-forward results: `/tmp/walkforward_honest_80.csv`
+
+---
+
+## 2026-05-29: n=138 retune sweep (14.03 → 13.68)
+
+**Motivation.** The shipped config was tuned at n=127 labeled. The labeled set (models with a real `lmarena_Score`) has since grown to **n=138** (176 total rows in the CSV; the imputation bank uses all 176, the supervised target prediction trains/scores on the 138 labeled) — nytcon refresh, `gen` dropped from Lechmazur, new models, post-CritPT CSV — and cv10 OOF RMSE drifted **13.61 → 14.03** on the harder, larger test set. Part of that 0.42 is irreducible (more hard-to-place models); the rest is a stale config. We had already established this session that the ELO *extremes* (Phi-4 +42, bottom/top deciles) are structurally unfixable from features — so the recoverable headroom is in re-optimizing the stale knobs for the current data, which lives in the bulk/middle.
+
+**Method.** 5-stage staged sweep on the 48-core tower (`run_retune_sweep.bash`, `run_loo_sweep.bash`, `run_stage5.bash`). Screen one knob at a time at `--cv_repeats_outer 5` reusing the champion imputation cache where the knob is post-imputation (KNN knobs, family drops); re-impute for imputation knobs. Per-column LOO (`--drop_cols_file`, 122 columns, 3-wide). Confirm finalists + stacks at `--cv_repeats_outer 10`. Bootstrap CI ≈ ±1.6, so sub-CI deltas are ties; a real win has a lower point estimate that holds from cv5 → cv10.
+
+**What moved (cv10, champion baseline = 14.0301):**
+
+| config | cv10 RMSE | Δ |
+|---|---:|---:|
+| pls6 + selk25 + drop `livebench_connections` | 13.62 | −0.41 |
+| pls6 + selk25 + sem-d40 | 13.64 | −0.39 |
+| **pls6 + selk25 (SHIPPED)** | **13.68** | **−0.35** |
+| pls6 + drop `livebench_connections` | 13.74 | −0.29 |
+| pls8 + selk25 | 13.77 | −0.26 |
+| pls6 | 13.81 | −0.22 |
+| pls8 | 13.84 | −0.19 |
+
+Three levers stack roughly additively: **`--pls_hybrid_k` 3 → 6** (−0.22; more PLS components justified by labeled n growing 127→138 — `k=8` is worse, so 6 is the optimum), **`--selector_k_max` 37 → 25** (−0.13 more, an imputation knob — tighter per-cell donor pools), and dropping the noisy `livebench_connections` column (−0.06 more).
+
+**What we shipped and why.** `--pls_hybrid_k 6 --selector_k_max 25` (cv10 **13.68**, −0.35). These are two *principled hyperparameter* changes — pure retuning, robust. We deliberately did **not** ship the extra −0.06 from dropping `livebench_connections`: it came out of a 122-way LOO (multiple-comparisons risk), and while it held cv5 → cv10, the marginal gain is within noise and would require baking a column-drop into the pipeline. Sem-d40 (−0.04 vs d32) was likewise not worth a fingerprint rebuild. The top three configs (13.62–13.68) have heavily overlapping bootstrap CIs — they are statistically tied — so we took the simplest robust one.
+
+**Net:** recovered essentially the old 13.61 RMSE (and its full quality profile: **R² 0.943, Spearman ρ 0.968, Pearson r 0.972** vs the old 0.941 / 0.971 / —) on the harder, +11-labeled-model dataset. No CI cleared the 14.03 point estimate (CIs are wide at n=138, ~±1.6), so per the ship rule we shipped the simplest config in the tied cluster.
+
+**Honest walk-forward confirms it's a real generalization gain.** Re-running `_walkforward_honest.py` (oldest 80% → newest 20%, n_test=23, re-fits imputer + PCA-32 + PLS every step) with the shipped pls6+selk25 config: **RMSE 14.16 / R² 0.911 / ρ 0.954**, vs **14.69 / 0.900 / 0.940** under the old PLS-3/selector_k_max-37 config. So the retune helps temporal *extrapolation* to genuinely-newer models, not just LOO/cv interpolation — it isn't CV overfitting. (`_walkforward_honest.py` was updated to the shipped knobs: `selector_k_max=25`, `PLSRegression(n_components=6)`.)
+
+**Sweep dead-ends (no off-default win, cv5):** all other KNN knobs (`power_alpha`, `power_c`, `max_k`, `min_k`, `bw_pct`, `vi_clip_hi`), all other imputation knobs (`coherence_lambda`, `coherence_shape`, `alpha`, `confidence_threshold`), every feature-family drop except `livebench_connections`, and `--no_svd_in_features`. The champion was already at or near the optimum on every axis except the two shipped.
+
+**New predict.py flags from this session** (all default to inert/shipped behavior; safe to keep): `--drop_families`, `--drop_cols_file`, `--vi_clip_hi`, `--pls_dist_weight`, `--global_blend`, `--dump_coef`.
+
+---
+
+## Future Directions
+
+### Add back more chat-tuning features to KNN (2026-05-11 log)
+
+**Motivation:** Phi-4's persistent over-prediction (−42 ELO OOF) decomposes into ~20 ELO of structural boundary effect (Phi-4 is 3rd-lowest model in corpus, KNN can't extrapolate below the data) and ~22 ELO of feature-Arena mismatch. The feature-mismatch part comes from Phi-4 looking like the mid-tier chat-tuned cluster (GPT-4o, DeepSeek V3, Qwen2.5 72B, GPT-4o Mini) on 130 features and unlike them on only a handful — `tone_*confidence*` (0.0 percentile) and `lechmazur_nytcon_Score %` (2.4 percentile) are the strongest discriminators we have, but they're 2-3 features competing with 130 others in the Euclidean distance.
+
+**Idea:** derive more features from the raw Soothsayer-bench responses (already stored in each `soothsayer_*/responses` dir) that explicitly capture chat-tuning quality and aren't already absorbed by `style_*` formatting stats or `tone_*` judge TrueSkills. Candidates:
+
+- Natural-conversational-opener rate (fraction of responses that don't start with a formulaic "Sure, I can help...")
+- Hedging-density per response (rate of "however / actually / I should note" markers)
+- Per-prompt response-length variance (high-variance models adapt response size; low-variance ones use boilerplate length)
+- Inter-judge disagreement on tone (variance between Gemma and Grok tone judgments — if a model splits the judges, it has unusual conversational style)
+
+**Status:** logged, not implemented. Lower-priority than the alternative of accepting the floor and waiting for more low-Arena data.
+
+**Why this is different from the 2026-04-18 `--drop_style_tone` decision:**
+- That decision was about whether to keep the *existing* 21 style + 4 tone columns in KNN. Already partially reverted on 2026-05-11 (keep tone, drop style — see commit `3faebae`).
+- This is about *new* engineered features from the raw response corpus, not the existing aggregate stats. The existing style_* features capture formatting; the proposed features capture conversational style which is distinct.
+
+**Constraint:** Phi-4's structural boundary half (~20 ELO) is unfixable without more low-Arena training data. Even perfect chat-tuning features can only address the feature-mismatch half (~22 ELO).

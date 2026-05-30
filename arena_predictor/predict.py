@@ -55,6 +55,20 @@ from sklearn.preprocessing import StandardScaler  # type: ignore
 from sklearn.linear_model import Ridge  # type: ignore
 from sklearn.neighbors import NearestNeighbors  # type: ignore
 
+# scipy stats (used by calibration block)
+from scipy import stats  # type: ignore
+
+# Calibration module
+from calibration import (
+    GateResult,
+    ShapeFit,
+    compute_p_beats_leader,
+    compute_p_above,
+    compute_sigma,
+    diagnose_scale_signal,
+    fit_tail_shape_and_qhat,
+)  # type: ignore
+
 # ==============================================================================
 # CONSTANTS
 # ==============================================================================
@@ -62,11 +76,11 @@ from sklearn.neighbors import NearestNeighbors  # type: ignore
 SEED = 42
 np.random.seed(SEED)
 
-TARGET = "lmarena_Score"  # style-controlled Arena ELO
-ALT_TARGET = "lmsys_Score"  # raw Arena ELO — excluded as leakage
+TARGET = "lmarena_Score"  # style-controlled Arena ELO (default; override with --target)
+ALT_TARGET = "lmsys_Score"  # raw Arena ELO — excluded from features as leakage
 ID_COL = "model_name"
 
-TARGETS = {TARGET, ALT_TARGET}  # exclude both to avoid leakage
+TARGETS = {TARGET, ALT_TARGET}  # both always excluded from features regardless of which is active
 EXCLUDE = TARGETS | {ID_COL}
 
 DENSE_THRESHOLD = 0.508  # original threshold for dense-only CV evaluation
@@ -78,6 +92,7 @@ KNN_MAX_K = 80
 KNN_MIN_K = 20
 KNN_BW_PCT = 0.15      # kernel bandwidth at this percentile of neighbor distances
 KNN_VI_CLIP = (1.0, 1.5)
+GLOBAL_BLEND_REF = 15.0  # neighbor-std at/above which --global_blend reaches full weight
 
 # Diagnostic sidecar: if set to a list, predict_adaptive_knn appends dicts with
 # per-call (b_raw, b_clipped, k, mu_nb, p, p_corrected). Used for one-shot
@@ -406,223 +421,6 @@ def evaluate_imputation(imputer: SpecializedColumnImputer, orig_df: pd.DataFrame
     return per_cell, per_col, by_bin
 
 
-# ==============================================================================
-# CONFORMAL INTERVALS
-# ==============================================================================
-
-def prob_above_threshold(mu: np.ndarray, std: np.ndarray, threshold: float,
-                         t_df: Optional[float] = None) -> np.ndarray:
-    """P(score > threshold) using t-distribution when t_df is provided, else Gaussian."""
-    scale = np.where(std <= 1e-12, 1e-12, std)
-    z = (threshold - mu) / scale
-    try:
-        if t_df is not None and t_df > 0:
-            from scipy.stats import t as t_dist  # type: ignore
-            return 1.0 - t_dist.cdf(z, t_df)
-        from scipy.stats import norm  # type: ignore
-        return 1.0 - norm.cdf(z)
-    except Exception:
-        from math import erf as _erf
-        return np.array([0.5 * (1.0 - _erf(float(zi) / np.sqrt(2.0))) for zi in z])
-
-
-def _detect_suite_missing_fracs(
-    pre_imputation_missing: np.ndarray,
-    feature_names: List[str],
-) -> np.ndarray:
-    """Compute per-suite missing fraction for each model.
-
-    Groups features by prefix (e.g., 'livebench_', 'style_', 'aa_eval_')
-    and returns the average suite-level missing fraction across all suites.
-    A model missing all livebench columns scores 1.0 for that suite.
-    """
-    # Group column indices by prefix
-    suite_indices: Dict[str, List[int]] = defaultdict(list)
-    for i, name in enumerate(feature_names):
-        prefix = name.split("_")[0] if "_" in name else name
-        suite_indices[prefix].append(i)
-
-    # Filter to suites with at least 2 columns (single-column "suites" aren't informative)
-    multi_suites = {k: v for k, v in suite_indices.items() if len(v) >= 2}
-    if not multi_suites:
-        return np.zeros(pre_imputation_missing.shape[0])
-
-    missing_float = pre_imputation_missing.astype(float)
-    suite_missing_fracs = []
-    for suite_name, col_indices in multi_suites.items():
-        suite_cols = missing_float[:, col_indices]
-        suite_missing_fracs.append(suite_cols.mean(axis=1))
-
-    # Average across suites: how many suites is this model largely missing?
-    return np.mean(np.column_stack(suite_missing_fracs), axis=1)
-
-
-def compute_grouped_conformal_intervals(
-    mu: np.ndarray,
-    oof_preds: np.ndarray,
-    y_train: np.ndarray,
-    train_idx: np.ndarray,
-    pre_imputation_missing: np.ndarray,
-    feature_names: Optional[List[str]] = None,
-    target_coverage: float = 0.95,
-    top_threshold: float = 1400.0,
-    min_group_size: int = 10,
-    high_missing_frac: float = 0.35,
-) -> dict:
-    """Compute prediction intervals using coarse group-based conformal calibration.
-
-    Instead of learning a 6-feature heteroscedastic scale model (which overfits
-    at n~120), this assigns each model to a small number of predeclared groups
-    and uses empirical OOF residual quantiles per group.
-
-    Groups (hierarchical, backs off to parent if cell < min_group_size):
-      1. predicted_top (mu >= threshold) vs predicted_rest
-      2. Optionally split each by high vs low missingness
-
-    Args:
-        mu: Point predictions for ALL models, shape (n_all,).
-        oof_preds: OOF predictions for training rows with valid OOF, shape (n_valid,).
-        y_train: Actual target values for valid training rows, shape (n_valid,).
-        train_idx: Global indices of valid training rows, shape (n_valid,).
-        pre_imputation_missing: Boolean missing mask, shape (n_all, n_features).
-        feature_names: Column names for pre_imputation_missing.
-        target_coverage: Desired marginal coverage (default 0.95).
-        top_threshold: ELO threshold for "top" group.
-        min_group_size: Minimum group size; back off to parent if smaller.
-        high_missing_frac: Threshold for "high missingness" split.
-
-    Returns:
-        Dict matching compute_normalized_conformal_intervals interface.
-    """
-    n_all = len(mu)
-    n_valid = len(y_train)
-
-    # --- Compute group assignments ---
-    raw_missing_frac = pre_imputation_missing.astype(float).mean(axis=1)
-
-    # Suite-level missingness
-    suite_missing_frac = _detect_suite_missing_fracs(
-        pre_imputation_missing,
-        feature_names if feature_names is not None else [f"col_{i}" for i in range(pre_imputation_missing.shape[1])],
-    )
-
-    # OOF residuals
-    oof_residuals = np.abs(y_train - oof_preds)
-
-    # Group training rows by predicted score (use OOF preds to avoid leakage)
-    is_top_train = oof_preds >= top_threshold
-    is_high_missing_train = raw_missing_frac[train_idx] >= high_missing_frac
-
-    # Build groups with hierarchical fallback
-    groups = {}  # group_name -> (train_mask, all_mask)
-
-    # Try 4-way split first
-    candidates = {
-        "top_low_miss": (is_top_train & ~is_high_missing_train,
-                         (mu >= top_threshold) & (raw_missing_frac < high_missing_frac)),
-        "top_high_miss": (is_top_train & is_high_missing_train,
-                          (mu >= top_threshold) & (raw_missing_frac >= high_missing_frac)),
-        "rest_low_miss": (~is_top_train & ~is_high_missing_train,
-                          (mu < top_threshold) & (raw_missing_frac < high_missing_frac)),
-        "rest_high_miss": (~is_top_train & is_high_missing_train,
-                           (mu < top_threshold) & (raw_missing_frac >= high_missing_frac)),
-    }
-
-    # Back off small groups to parent
-    parent_map = {
-        "top_low_miss": "top", "top_high_miss": "top",
-        "rest_low_miss": "rest", "rest_high_miss": "rest",
-    }
-    parent_candidates = {
-        "top": (is_top_train, mu >= top_threshold),
-        "rest": (~is_top_train, mu < top_threshold),
-    }
-
-    # Determine which groups are viable
-    for name, (train_mask, all_mask) in candidates.items():
-        if int(train_mask.sum()) >= min_group_size:
-            groups[name] = (train_mask, all_mask)
-        else:
-            # Merge into parent
-            parent = parent_map[name]
-            if parent not in groups:
-                p_train, p_all = parent_candidates[parent]
-                groups[parent] = (p_train, p_all)
-
-    # If any parent is also too small, fall back to global
-    final_groups = {}
-    for name, (train_mask, all_mask) in groups.items():
-        if int(train_mask.sum()) >= min_group_size:
-            final_groups[name] = (train_mask, all_mask)
-
-    if not final_groups:
-        # Global fallback
-        final_groups["global"] = (np.ones(n_valid, dtype=bool), np.ones(n_all, dtype=bool))
-
-    # --- Compute per-group quantiles ---
-    pct = target_coverage * 100
-    group_q = {}
-    for name, (train_mask, _) in final_groups.items():
-        resids = oof_residuals[train_mask]
-        group_q[name] = float(np.percentile(resids, pct))
-
-    # --- Assign sigma_hat (= halfwidth) for all models ---
-    sigma_hat = np.full(n_all, np.nan)
-    group_labels = np.full(n_all, "", dtype=object)
-
-    for name, (_, all_mask) in final_groups.items():
-        sigma_hat[all_mask & np.isnan(sigma_hat)] = group_q[name]
-        group_labels[all_mask] = name
-
-    # Any unassigned models get the global worst-case
-    global_q = float(np.percentile(oof_residuals, pct))
-    still_nan = np.isnan(sigma_hat)
-    sigma_hat[still_nan] = global_q
-    group_labels[still_nan] = "global_fallback"
-
-    # --- Build intervals ---
-    lower = mu - sigma_hat
-    upper = mu + sigma_hat
-    std_new = sigma_hat / 1.96
-
-    # --- OOF coverage check (using OOF preds, not refit mu) ---
-    oof_lower = oof_preds - sigma_hat[train_idx]
-    oof_upper = oof_preds + sigma_hat[train_idx]
-    oof_coverage = float(np.mean((y_train >= oof_lower) & (y_train <= oof_upper)))
-
-    sigma_cv = float(np.std(sigma_hat) / np.mean(sigma_hat)) if np.mean(sigma_hat) > 0 else 0.0
-
-    # --- Diagnostics ---
-    scale_model_coef = {"method": "grouped_conformal"}
-    for name, (train_mask, _) in final_groups.items():
-        scale_model_coef[f"group_{name}_q{pct:.0f}"] = group_q[name]
-        scale_model_coef[f"group_{name}_n_train"] = int(train_mask.sum())
-    scale_model_coef["intercept"] = 0.0  # compat with diagnostics CSV
-
-    print(f"  Grouped conformal ({len(final_groups)} groups, coverage target={target_coverage:.0%}):")
-    for name in sorted(final_groups.keys()):
-        train_mask, all_mask = final_groups[name]
-        print(f"    {name}: n_train={int(train_mask.sum())}, n_all={int(all_mask.sum())}, "
-              f"halfwidth=\u00b1{group_q[name]:.1f}")
-
-    return {
-        "std": std_new,
-        "lower": lower,
-        "upper": upper,
-        "sigma_hat": sigma_hat,
-        "q_hat": 1.0,  # halfwidth IS sigma_hat (no separate q_hat)
-        "sigma_floor": 0.0,
-        "oof_sigma": sigma_hat[train_idx],
-        "sigma_cv": sigma_cv,
-        "oof_coverage": oof_coverage,
-        "scale_model_coef": scale_model_coef,
-        "uncertainty_features": pd.DataFrame({
-            "raw_missing_frac": raw_missing_frac,
-            "suite_missing_frac": suite_missing_frac,
-            "group": group_labels,
-            "sigma_hat": sigma_hat,
-        }),
-    }
 
 
 # ==============================================================================
@@ -639,7 +437,7 @@ def predict_adaptive_knn(
     min_k: int = KNN_MIN_K,
     bw_pct: float = KNN_BW_PCT,
     vi_clip: tuple = KNN_VI_CLIP,
-) -> Tuple[float, float, int]:
+) -> Tuple[float, float, int, float]:
     """Predict a single test point using adaptive KNN + kernel Ridge + jackknife VI.
 
     Uses a sublinear power cutoff for neighborhood selection:
@@ -647,7 +445,8 @@ def predict_adaptive_knn(
     This gives tighter neighborhoods in dense regions (top models) while keeping
     adequate coverage in sparse regions, naturally adapting to feature sign flips.
 
-    Returns (prediction, std_estimate, k_used).
+    Returns (prediction, std_estimate, k_used, y_nb_std).
+    y_nb_std is the std of the neighborhood's y-values (for calibration).
     """
     nn = NearestNeighbors(n_neighbors=max_k)
     nn.fit(Xtr)
@@ -720,7 +519,7 @@ def predict_adaptive_knn(
     jack_resid = y_nb - jack_preds
     std_est = float(np.std(jack_resid))
 
-    return p_corrected, std_est, k
+    return p_corrected, std_est, k, float(np.std(y_nb))
 
 
 def fit_and_predict_knn(
@@ -737,6 +536,9 @@ def fit_and_predict_knn(
     min_k: int = KNN_MIN_K,
     bw_pct: float = KNN_BW_PCT,
     pls_hybrid_k: int = 0,
+    vi_clip_hi: float = 1.5,
+    pls_dist_weight: float = 1.0,
+    global_blend: float = 0.0,
 ) -> Dict[str, np.ndarray]:
     """Fit adaptive KNN on training data and predict all rows.
 
@@ -753,6 +555,7 @@ def fit_and_predict_knn(
     oof_preds_sum = np.zeros(n_train)
     oof_counts = np.zeros(n_train)
     oof_folds = np.full(n_train, -1, dtype=int)
+    oof_y_nb_std_sum = np.zeros(n_train)  # NEW: average across folds
 
     for fold_idx, (tr, va) in enumerate(cv_splits):
         sc = StandardScaler()
@@ -760,22 +563,31 @@ def fit_and_predict_knn(
         Xva = sc.transform(X_all[train_idx[va]])
         ytr = y_train[tr]
 
-        # PLS hybrid: fit PLS on training fold only, concatenate components to features
+        # PLS hybrid: fit PLS on training fold only, concatenate components to features.
+        # pls_dist_weight scales those components in the KNN distance (>1 = more ELO-supervised).
+        pls_f = None
+        Xtr_knn, Xva_knn = Xtr, Xva
         if pls_hybrid_k > 0:
             from sklearn.cross_decomposition import PLSRegression as _PLS
             n_comp = min(pls_hybrid_k, Xtr.shape[1], Xtr.shape[0] - 1)
             pls_f = _PLS(n_components=n_comp).fit(Xtr, ytr)
-            Xtr = np.hstack([Xtr, pls_f.transform(Xtr)])
-            Xva = np.hstack([Xva, pls_f.transform(Xva)])
+            Xtr_knn = np.hstack([Xtr, pls_dist_weight * pls_f.transform(Xtr)])
+            Xva_knn = np.hstack([Xva, pls_dist_weight * pls_f.transform(Xva)])
 
         for vi, va_i in enumerate(va):
-            p, _, _ = predict_adaptive_knn(
-                Xtr, ytr, Xva[vi:vi + 1],
+            p, _, _, y_nb_std = predict_adaptive_knn(
+                Xtr_knn, ytr, Xva_knn[vi:vi + 1],
                 power_alpha=power_alpha, power_C=power_C,
                 max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+                vi_clip=(1.0, vi_clip_hi),
             )
+            if global_blend > 0 and pls_f is not None:
+                p_glob = float(pls_f.predict(Xva[vi:vi + 1])[0])
+                lam = global_blend * min(1.0, y_nb_std / GLOBAL_BLEND_REF)
+                p = (1.0 - lam) * p + lam * p_glob
             oof_preds_sum[va_i] += p
             oof_counts[va_i] += 1
+            oof_y_nb_std_sum[va_i] += y_nb_std
             oof_folds[va_i] = fold_idx % 5
             if _JACKKNIFE_LOG is not None and _JACKKNIFE_LOG:
                 _JACKKNIFE_LOG[-1]['is_oof'] = True
@@ -783,6 +595,7 @@ def fit_and_predict_knn(
                 _JACKKNIFE_LOG[-1]['fold'] = int(fold_idx)
 
     oof_preds = np.where(oof_counts > 0, oof_preds_sum / oof_counts, np.nan)
+    oof_y_nb_std = np.where(oof_counts > 0, oof_y_nb_std_sum / oof_counts, np.nan)  # NEW
     oof_valid = oof_counts > 0
     oof_rmse = float(np.sqrt(np.nanmean((oof_preds[oof_valid] - y_train[oof_valid]) ** 2)))
     print(f"  KNN OOF RMSE: {oof_rmse:.2f} ({int(oof_valid.sum())}/{n_train} valid)")
@@ -793,26 +606,35 @@ def fit_and_predict_knn(
     X_all_sc = sc_final.transform(X_all)
 
     # PLS hybrid: fit on full training set for final predictions
+    pls_final = None
+    X_train_knn, X_all_knn = X_train_sc, X_all_sc
     if pls_hybrid_k > 0:
         from sklearn.cross_decomposition import PLSRegression as _PLS
         n_comp = min(pls_hybrid_k, X_train_sc.shape[1], X_train_sc.shape[0] - 1)
         pls_final = _PLS(n_components=n_comp).fit(X_train_sc, y_train)
-        X_train_sc = np.hstack([X_train_sc, pls_final.transform(X_train_sc)])
-        X_all_sc = np.hstack([X_all_sc, pls_final.transform(X_all_sc)])
+        X_train_knn = np.hstack([X_train_sc, pls_dist_weight * pls_final.transform(X_train_sc)])
+        X_all_knn = np.hstack([X_all_sc, pls_dist_weight * pls_final.transform(X_all_sc)])
 
     mu = np.full(n_all, np.nan)
     std = np.full(n_all, np.nan)
     ks_used = np.zeros(n_all, dtype=int)
+    y_nb_std_final = np.full(n_all, np.nan)  # NEW
 
     for i in pred_idx:
-        p, s, k = predict_adaptive_knn(
-            X_train_sc, y_train, X_all_sc[i:i + 1],
+        p, s, k, y_nb_std = predict_adaptive_knn(
+            X_train_knn, y_train, X_all_knn[i:i + 1],
             power_alpha=power_alpha, power_C=power_C,
             max_k=max_k, min_k=min_k, bw_pct=bw_pct,
+            vi_clip=(1.0, vi_clip_hi),
         )
+        if global_blend > 0 and pls_final is not None:
+            p_glob = float(pls_final.predict(X_all_sc[i:i + 1])[0])
+            lam = global_blend * min(1.0, y_nb_std / GLOBAL_BLEND_REF)
+            p = (1.0 - lam) * p + lam * p_glob
         mu[i] = p
         std[i] = s
         ks_used[i] = k
+        y_nb_std_final[i] = y_nb_std
         if _JACKKNIFE_LOG is not None and _JACKKNIFE_LOG:
             _JACKKNIFE_LOG[-1]['is_final'] = True
             _JACKKNIFE_LOG[-1]['row_idx'] = int(i)
@@ -831,6 +653,8 @@ def fit_and_predict_knn(
         "oof_preds": oof_preds,
         "oof_folds": oof_folds,
         "ks_used": ks_used,
+        "y_nb_std_oof": oof_y_nb_std,
+        "y_nb_std_final": y_nb_std_final,
     }
 
 
@@ -1236,9 +1060,31 @@ def main():
                     help="Remove style_/tone_ columns from KNN feature set (imputer can still use them).")
     ap.add_argument("--pls_hybrid_k", type=int, default=0,
                     help="Append K PLS components (fit per-fold on train) to KNN features (0=disabled).")
+    # -- Edge/extrapolation experiment levers (defaults = shipped behavior) --
+    ap.add_argument("--vi_clip_hi", type=float, default=1.5,
+                    help="Jackknife VI b-clip ceiling (default 1.5). Higher lets edge predictions deviate more from the neighborhood mean.")
+    ap.add_argument("--pls_dist_weight", type=float, default=1.0,
+                    help="Scale on PLS components in the KNN distance (default 1.0). >1 makes neighbor search more ELO-supervised.")
+    ap.add_argument("--global_blend", type=float, default=0.0,
+                    help="Max blend weight toward the global PLS prediction, scaled by neighbor disagreement y_nb_std (0=off).")
+    ap.add_argument("--dump_coef", type=str, default=None,
+                    help="If set, dump per-model final local-Ridge coefficients + feature names to this .npz path.")
+    ap.add_argument("--drop_families", type=str, default="",
+                    help="Comma-separated column prefixes to drop from the KNN feature set (e.g. 'tone_,yupp_'). Imputation still uses all features.")
+    ap.add_argument("--drop_cols_file", type=str, default="",
+                    help="Path to a file with EXACT KNN column names (one per line) to drop. For per-column LOO ablation.")
     # -- Misc --
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Margin for 'top_by_margin_prob' column (default 20 points).")
+    ap.add_argument(
+        "--walkforward_calibration_path",
+        type=str,
+        default=None,
+        help="Path to walkforward_calibration.py's wf_residuals.csv. "
+             "If provided, predict.py reads the 'fitted_m' column and applies it "
+             "to sigma_hat. Fitting m itself happens inside walkforward_calibration.py, "
+             "not here. If None, m=1.0 (sigma reflects OOF level only).",
+    )
     ap.add_argument("--categorical_threshold", type=int, default=0)
     ap.add_argument("--forced_categorical_cols", type=str, default="")
     ap.add_argument("--tier_quantiles", type=str, default="0.33,0.67")
@@ -1248,8 +1094,16 @@ def main():
                     help="Add SVD factors from imputer to feature matrix (default: on).")
     ap.add_argument("--no_svd_in_features", dest="svd_in_features", action="store_false",
                     help="Exclude SVD factors from feature matrix.")
+    ap.add_argument("--target", type=str, default="lmarena_Score",
+                    choices=["lmarena_Score", "lmsys_Score"],
+                    help="Arena target to predict. lmarena_Score = style-controlled (shipped default); "
+                         "lmsys_Score = raw Arena ELO. The other is kept in TARGETS and excluded from features.")
 
     args = ap.parse_args()
+
+    global TARGET, ALT_TARGET
+    TARGET = args.target
+    ALT_TARGET = "lmsys_Score" if TARGET == "lmarena_Score" else "lmarena_Score"
 
     # Resolve CV repeats
     args.cv_repeats = max(1, int(args.cv_repeats))
@@ -1560,9 +1414,26 @@ def main():
                         if c != ALT_TARGET and c != TARGET]
     if getattr(args, 'drop_style_tone', False):
         before = len(knn_feature_cols)
+        # 2026-05-11 experiment: drop only style_*, keep tone_* in KNN.
+        # The 2026-04-18 ablation tested style+tone together; tone_* is only
+        # 4 columns (already-summary judge TrueSkill values), and one of them
+        # (tone_*confidence*) is the load-bearing signal for benchmaxxed
+        # models like Phi-4 (0.0 percentile). PLS-3 smooths it away. Test
+        # whether keeping tone_* in fixes Phi-4 without harming overall RMSE.
         knn_feature_cols = [c for c in knn_feature_cols
-                            if not c.startswith('style_') and not c.startswith('tone_')]
-        print(f"  drop_style_tone: {before} -> {len(knn_feature_cols)} features")
+                            if not c.startswith('style_')]
+        print(f"  drop_style (keep tone): {before} -> {len(knn_feature_cols)} features")
+    if getattr(args, 'drop_families', ''):
+        _pre = [p.strip() for p in args.drop_families.split(',') if p.strip()]
+        before = len(knn_feature_cols)
+        knn_feature_cols = [c for c in knn_feature_cols if not any(c.startswith(p) for p in _pre)]
+        print(f"  drop_families {_pre}: {before} -> {len(knn_feature_cols)} features")
+    if getattr(args, 'drop_cols_file', ''):
+        with open(args.drop_cols_file) as _f:
+            _dc = set(l.rstrip('\n') for l in _f if l.strip())
+        before = len(knn_feature_cols)
+        knn_feature_cols = [c for c in knn_feature_cols if c not in _dc]
+        print(f"  drop_cols_file ({len(_dc)} req): {before} -> {len(knn_feature_cols)} features")
     knn_X = safe_features[knn_feature_cols].values
     globals()['_LAST_KNN_FEATURE_COLS'] = list(knn_feature_cols)
     print(f"  KNN features: {len(knn_feature_cols)} (including SVD/traj)")
@@ -1613,6 +1484,8 @@ def main():
     # 8. KNN prediction
     # =========================================================================
     print("Using adaptive KNN prediction pipeline")
+    if getattr(args, 'dump_coef', None):
+        globals()['_JACKKNIFE_LOG'] = []
     knn_result = fit_and_predict_knn(
         knn_X,
         y_all,
@@ -1627,7 +1500,22 @@ def main():
         min_k=args.knn_min_k,
         bw_pct=args.knn_bw_pct,
         pls_hybrid_k=args.pls_hybrid_k,
+        vi_clip_hi=args.vi_clip_hi,
+        pls_dist_weight=args.pls_dist_weight,
+        global_blend=args.global_blend,
     )
+    if getattr(args, 'dump_coef', None):
+        import numpy as _np
+        _log = globals().get('_JACKKNIFE_LOG') or []
+        _cols = list(globals().get('_LAST_KNN_FEATURE_COLS', []))
+        _names = imputed_df[ID_COL].values
+        _fin = [d for d in _log if d.get('is_final') and 'row_idx' in d]
+        _mn = [str(_names[d['row_idx']]) for d in _fin]
+        _cf = _np.array([d['coef'] for d in _fin])
+        _np.savez(args.dump_coef, feature_cols=_np.array(_cols, dtype=object),
+                  model_names=_np.array(_mn, dtype=object), coefs=_cf)
+        print(f"  dumped coef matrix {_cf.shape} ({len(_cols)} named feats + PLS) -> {args.dump_coef}")
+        globals()['_JACKKNIFE_LOG'] = None
     mu = knn_result["mu"]
     std = knn_result["std"]
     lower = knn_result["lower"]
@@ -1639,79 +1527,116 @@ def main():
     print(f"train:     {mmss(train_end - preprocess_end)}")
 
     # =========================================================================
-    # 9. Conformal intervals
+    # 9. Calibration (OOF normalized conformal-style + walk-forward level scalar)
     # =========================================================================
-    conformal_start = time.time()
+    calibration_start = time.time()
 
     pre_imputation_missing = df[feature_cols].isna().values
 
+    # -- OOF residuals (used by gate and shape fit) --
     oof_valid_mask = ~np.isnan(oof_preds)
     oof_preds_valid = oof_preds[oof_valid_mask]
     y_train_valid = y_all[~y_missing_mask][oof_valid_mask]
-    train_idx_all = np.where(~y_missing_mask)[0]
-    train_idx_valid = train_idx_all[oof_valid_mask]
+    oof_residuals_valid = y_train_valid - oof_preds_valid
 
-    conformal = compute_grouped_conformal_intervals(
-        mu=mu,
-        oof_preds=oof_preds_valid,
-        y_train=y_train_valid,
-        train_idx=train_idx_valid,
-        pre_imputation_missing=pre_imputation_missing,
-        feature_names=list(feature_cols),
-        target_coverage=0.95,
+    # -- Per-training-row y_nb_std from the OOF loop --
+    y_nb_std_oof_full = knn_result["y_nb_std_oof"]  # length n_train
+    y_nb_std_oof_valid = y_nb_std_oof_full[oof_valid_mask]
+
+    # -- Predicted scores on training rows (for top-slice gate check) --
+    mu_train_valid = mu[~y_missing_mask][oof_valid_mask]
+
+    # -- (A) Diagnostic gate --
+    gate = diagnose_scale_signal(
+        y_nb_std_oof=y_nb_std_oof_valid,
+        oof_residuals=oof_residuals_valid,
+        predicted_scores=mu_train_valid,
         top_threshold=1400.0,
-        min_group_size=10,
     )
 
-    # Overwrite intervals with conformal calibration
-    std = conformal["std"]
-    lower = conformal["lower"]
-    upper = conformal["upper"]
+    # -- (B) Shape fit (t_df + q_hat + s_floor), non-circular --
+    shape = fit_tail_shape_and_qhat(
+        oof_residuals=oof_residuals_valid,
+        y_nb_std_oof=y_nb_std_oof_valid,
+        gate_passed=gate.passed,
+    )
 
-    # Fit t-distribution df from final calibrated OOF residuals
-    q_hat = conformal["q_hat"]
-    sigma_hat_arr = conformal["sigma_hat"]
-    cal_sigma_final = q_hat * sigma_hat_arr[train_idx_valid]
-    oof_residuals = y_all[train_idx_valid] - oof_preds_valid
-    oof_valid = ~np.isnan(oof_residuals)
-    z_final = oof_residuals[oof_valid] / np.where(cal_sigma_final[oof_valid] < 1e-12, 1e-12, cal_sigma_final[oof_valid])
-    t_df = None
-    try:
-        from scipy.stats import t as t_dist  # type: ignore
-        t_df_fit, _t_loc, _t_scale = t_dist.fit(z_final)
-        t_df = float(np.clip(t_df_fit, 3.0, 200.0))
-        t_crit = float(t_dist.ppf(0.975, t_df))
-        std = q_hat * sigma_hat_arr / t_crit
-    except Exception:
-        t_df = None
+    # -- (C) Walk-forward level correction: load fitted_m or default to 1.0 --
+    m_scalar = 1.0
+    if args.walkforward_calibration_path:
+        wf_df = pd.read_csv(args.walkforward_calibration_path)
+        fitted_m_col = wf_df["fitted_m"].dropna()
+        if len(fitted_m_col) == 0:
+            print(f"WARNING: --walkforward_calibration_path given but fitted_m column is empty; using m=1.0",
+                  file=sys.stderr)
+        else:
+            m_scalar = float(fitted_m_col.iloc[0])
 
-    conformal_end = time.time()
-    print(f"conformal: {mmss(conformal_end - conformal_start)}")
-    t_df_str = f"t_df={t_df:.1f}" if t_df is not None else "t_df=None (Gaussian fallback)"
-    print(f"  q_hat={conformal['q_hat']:.3f}  sigma_floor={conformal['sigma_floor']:.3f}  "
-          f"sigma_cv={conformal['sigma_cv']:.1%}  oof_coverage={conformal['oof_coverage']:.1%}  {t_df_str}")
+    # -- Per-row sigma for the full output (train + test rows) --
+    y_nb_std_all = knn_result["y_nb_std_final"]  # length n_all
+    if gate.passed:
+        sigma_hat = compute_sigma(y_nb_std_all, shape, m=m_scalar)
+    else:
+        # Fallback: s(x) = 1 everywhere, so sigma is constant across rows
+        sigma_hat = compute_sigma(np.ones_like(y_nb_std_all), shape, m=m_scalar)
+        print(f"WARNING: local scale gate failed (reason={gate.reason}); falling back to constant sigma × WF scalar",
+              file=sys.stderr)
+
+    # -- Intervals using t_crit --
+    t_crit_95 = float(stats.t.ppf(0.975, shape.t_df))
+    lower = mu - t_crit_95 * sigma_hat
+    upper = mu + t_crit_95 * sigma_hat
+
+    # -- max_leader threshold: max over rows with observed target --
+    #    y_missing_mask is True for rows whose target is NaN (candidates).
+    #    max_leader excludes candidates — only observed lmarena_Score counts.
+    if (~y_missing_mask).any():
+        max_leader = float(np.nanmax(y_all[~y_missing_mask]))
+    else:
+        max_leader = float("nan")
+
+    # -- Probabilities --
+    train_mask = ~y_missing_mask  # rows with observed target; p_beats_leader is meaningless for these
+    p_beats_leader = compute_p_beats_leader(
+        mu=mu,
+        sigma=sigma_hat,
+        t_df=shape.t_df,
+        max_leader=max_leader,
+        train_mask=train_mask,
+    )
+    top_by_margin_prob = compute_p_above(
+        mu=mu,
+        sigma=sigma_hat,
+        t_df=shape.t_df,
+        threshold=max_leader + args.margin,
+    )
+    top_by_margin_prob[train_mask] = np.nan
+
+    calibration_end = time.time()
+    print(f"calibration: {mmss(calibration_end - calibration_start)}")
+    print(f"  gate={'PASS' if gate.passed else 'FAIL'} ({gate.reason})")
+    print(f"  q_hat={shape.q_hat:.3f}  t_df={shape.t_df:.1f}  s_floor={shape.s_floor:.3f}  m={m_scalar:.3f}")
+    print(f"  max_leader={max_leader:.1f}  sigma_hat range=[{np.nanmin(sigma_hat):.2f}, {np.nanmax(sigma_hat):.2f}]")
 
     # =========================================================================
-    # 10. Compute probabilities
+    # 10. (probabilities computed in section 9 above)
     # =========================================================================
-    max_observed = float(np.nanmax(y_all[train_idx]))
-    num_one_prob = prob_above_threshold(mu, std, threshold=max_observed, t_df=t_df)
-    top_by_margin_prob = prob_above_threshold(mu, std, threshold=max_observed + args.margin, t_df=t_df)
-    top_by_margin_prob[train_idx] = np.nan
 
     # =========================================================================
     # 11. Save outputs
     # =========================================================================
 
     # -- predictions_best_model.csv --
+    # NOTE: sigma_hat is the t-distribution scale parameter, NOT a 95% half-width.
+    # Consumers who need half-widths must multiply by t_crit_95 (= stats.t.ppf(0.975, t_df)).
     pred_df = pd.DataFrame({
         ID_COL: imputed_df[ID_COL].values,
         "predicted_score": mu,
         "actual_score": y_orig.values,
-        "sigma_hat": conformal["sigma_hat"],
+        "sigma_hat": sigma_hat,
         "lower_bound": lower,
         "upper_bound": upper,
-        "num_one_prob": num_one_prob,
+        "p_beats_leader": p_beats_leader,
         "top_by_margin_prob": top_by_margin_prob,
     })
     pred_df = pred_df.sort_values("predicted_score", ascending=False)
@@ -1734,24 +1659,54 @@ def main():
     eval_df = pd.DataFrame([{"model": "KNN", "rmse_mean": oof_rmse_val, "rmse_std": 0.0}])
     eval_df.to_csv(os.path.join(out_dir, "model_eval_rmse.csv"), index=False)
 
-    # -- conformal_diagnostics.csv --
-    diag_row = {
-        "q_hat": conformal["q_hat"],
-        "sigma_floor": conformal["sigma_floor"],
-        "sigma_cv": conformal["sigma_cv"],
-        "oof_coverage": conformal["oof_coverage"],
-        "t_df": t_df,
-    }
-    for k, v in conformal["scale_model_coef"].items():
-        diag_row[f"scale_model_coef_{k}"] = v
-    pd.DataFrame([diag_row]).to_csv(os.path.join(out_dir, "conformal_diagnostics.csv"), index=False)
+    # -- calibration_diagnostics.csv --
+    # Compute OOF-level coverage and PIT for diagnostics
+    oof_sigma_valid = sigma_hat[~y_missing_mask][oof_valid_mask]
+    # Use OOF-level sigma without m correction for self-check (m is only appropriate for WF)
+    oof_sigma_nom = oof_sigma_valid / m_scalar if m_scalar != 0 else oof_sigma_valid
+    oof_residuals_for_diag = oof_residuals_valid
+    oof_z = oof_residuals_for_diag / np.where(oof_sigma_nom < 1e-12, 1e-12, oof_sigma_nom)
+    # PIT
+    try:
+        oof_u = stats.t.cdf(oof_z, df=shape.t_df)
+        oof_pit_ks_pvalue = float(stats.kstest(oof_u, "uniform").pvalue)
+    except Exception:
+        oof_pit_ks_pvalue = float("nan")
+    # 95% coverage
+    oof_covered_95 = (oof_residuals_for_diag >= -t_crit_95 * oof_sigma_nom) & \
+                     (oof_residuals_for_diag <= t_crit_95 * oof_sigma_nom)
+    oof_coverage_95 = float(oof_covered_95.mean())
 
-    # -- conformal_uncertainty_features.csv --
-    uf = conformal["uncertainty_features"].copy()
-    uf.insert(0, ID_COL, imputed_df[ID_COL].values)
-    uf["is_train"] = False
-    uf.loc[train_idx, "is_train"] = True
-    uf.to_csv(os.path.join(out_dir, "conformal_uncertainty_features.csv"), index=False)
+    diag_row = {
+        "gate_pass": bool(gate.passed),
+        "gate_reason": gate.reason,
+        "spearman_all": gate.spearman_all,
+        "spearman_top": gate.spearman_top,
+        "log_log_slope": gate.log_log_slope,
+        "log_log_r2": gate.log_log_r2,
+        "decile_lift": gate.decile_lift,
+        "n_oof": gate.n_all,
+        "n_top_oof": gate.n_top,
+        "q_hat": shape.q_hat,
+        "t_df": shape.t_df,
+        "s_floor": shape.s_floor,
+        "m": m_scalar,
+        "fallback_used": bool(shape.fallback_used),
+        "oof_coverage_95": oof_coverage_95,
+        "oof_pit_ks_pvalue": oof_pit_ks_pvalue,
+        "max_leader": max_leader,
+        "t_crit_95": t_crit_95,
+    }
+    # WF-specific diagnostics land in walkforward_calibration_diagnostics.csv
+    # (emitted by walkforward_calibration.py). predict.py emits only OOF + shape here.
+    pd.DataFrame([diag_row]).to_csv(
+        os.path.join(out_dir, "calibration_diagnostics.csv"), index=False
+    )
+
+    # PIT self-check warning
+    if not np.isnan(oof_pit_ks_pvalue) and oof_pit_ks_pvalue < 0.01:
+        print(f"WARNING: OOF PIT KS p-value = {oof_pit_ks_pvalue:.4f} < 0.01; predictive distribution is not uniform on OOF",
+              file=sys.stderr)
 
     # -- run_config.json --
     run_config = dict(vars(args))
@@ -1788,8 +1743,9 @@ def main():
         "cv_repeats_outer": int(args.cv_repeats_outer),
         "notes": [
             "Safety-filled any residual NaNs/Infs in features post-imputation with column medians, then 0 if still NaN.",
-            "num_one_prob compares to current max observed lmarena_Score among training rows.",
-            f"top_by_margin_prob = P(score > max_observed + {args.margin}), only for models without actual scores.",
+            "sigma_hat is the t-distribution SCALE parameter, not a half-width. For 95% intervals use mu ± t_crit_95 * sigma_hat.",
+            "p_beats_leader = P(score > max_leader) where max_leader = max(observed lmarena_Score); NaN on training rows.",
+            f"top_by_margin_prob = P(score > max_leader + {args.margin}), NaN on training rows.",
             "predictions_best_model.csv is sorted by predicted_score descending (highest on top).",
         ]
     }

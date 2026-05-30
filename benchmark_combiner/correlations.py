@@ -54,8 +54,24 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 
 USE_UMAP = False
-MISSING_THRESHOLD = 0.508  # Max missing ratio for model inclusion
+MISSING_THRESHOLD = 0.508  # Max overall-cell missing ratio for model inclusion
 INCLUDE_MISSINGNESS_FLAGS = False  # Set False to skip adding __was_missing indicator columns
+
+# Public-bench coverage filter (sibling of MISSING_THRESHOLD).
+# Counts the fraction of *public-benchmark* cells that have data per model.
+# Custom soothsayer benches (eq/writing/logic/style/tone) and sem_* fingerprints
+# do NOT count, so a model with full custom-bench coverage but sparse public
+# coverage will fail this even though it passes the cell-level MISSING_THRESHOLD.
+# Rationale: KNN distance computations on heavily-imputed feature vectors are
+# unreliable; the May-2026 RMSE jump (13.74 → 16.66) was driven by 7 models
+# with ≤18% public-cell coverage having huge OOF errors. See git log + memory.
+MIN_PUBLIC_CELL_FRACTION = 0.25
+PUBLIC_BENCH_PREFIXES = (
+    'lmarena_', 'lmsys_', 'openbench_', 'livebench_', 'lechmazur_',
+    'weirdml_', 'eqbench_', 'contextarena_', 'aa_', 'aaomniscience_',
+    'aagdpval_', 'aacritpt_', 'ugileaderboard_', 'yupp_', 'arc_',
+)
+
 EXCLUDE_MODELS = {
     "Mistral 7B Instruct",  # Arena ELO 1110 — extreme outlier (z=-4.7)
     "Grok 4.2 beta",  # Inconsistent benchmark scores — likely different versions across sources
@@ -257,6 +273,21 @@ def prepare_data_for_analysis(df, exclude_columns=None, threshold_margin=0.2, in
     # Filter rows based on threshold
     rows_to_keep = missing_ratio[analysis_df.index] < missing_threshold
     print(f"Removing {(~rows_to_keep).sum()} models with more than {missing_threshold*100}% missing values")
+
+    # Sibling filter: structural public-bench coverage. A model needs ≥
+    # MIN_PUBLIC_CELL_FRACTION of its public-benchmark cells to be filled.
+    # See header constants for rationale.
+    public_cols = [c for c in analysis_df.columns if any(c.startswith(p) for p in PUBLIC_BENCH_PREFIXES)]
+    if public_cols and MIN_PUBLIC_CELL_FRACTION > 0:
+        public_cell_frac = analysis_df[public_cols].notna().mean(axis=1)
+        passes_public = public_cell_frac >= MIN_PUBLIC_CELL_FRACTION
+        n_dropped_public = (~passes_public & rows_to_keep).sum()
+        if n_dropped_public:
+            dropped = analysis_df.index[(~passes_public) & rows_to_keep].tolist()
+            print(f"Removing {n_dropped_public} models with public-cell fraction < {MIN_PUBLIC_CELL_FRACTION:.2f} "
+                  f"(of {len(public_cols)} public cols): {', '.join(dropped[:8])}{'...' if len(dropped) > 8 else ''}")
+        rows_to_keep = rows_to_keep & passes_public
+
     analysis_df = analysis_df[rows_to_keep]
     
 
@@ -1270,7 +1301,7 @@ def main(file_path):
             'livebench_tablereformat',    # near-solved: 50% score 98+, SD=3.3, best corr only 0.45
         ],
         'lmsys': [
-            'lmsys_Score',  # dropped: now targeting lmarena (style-controlled) instead of lmsys (raw Arena)
+            # 'lmsys_Score',  # kept: predict.py --target selects between lmsys_Score and lmarena_Score
             'lmsys_rank',
             'lmsys_rank_stylectrl',
             'lmsys_95_pct_ci',
@@ -1382,7 +1413,12 @@ def main(file_path):
         'tone' : [
             'tone_judged_model',
             'tone_Grok 4.1 Fast density Sigma',
-            'tone_Grok 4.1 Fast confidence Sigma'
+            'tone_Grok 4.1 Fast confidence Sigma',
+            # Gemma 4 26B A4B is the current style/tone judge (shipped 2026-05-06).
+            # TrueSkill columns kept as features; sigma columns dropped (uncertainty,
+            # not predictive signal — mirrors the Grok and Gemini drop pattern).
+            'tone_Gemma 4 26B A4B density Sigma',
+            'tone_Gemma 4 26B A4B confidence Sigma',
         ],
         'writing' : [
             'writing_writer_model',
@@ -1393,8 +1429,14 @@ def main(file_path):
             'writing_Gemini 3.0 Flash Preview (2025-12-17)  Glicko',
             'writing_Gemini 3.0 Flash Preview (2025-12-17)  TrueSkill',
             'writing_Gemini 3.0 Flash Preview (2025-12-17)  Sigma',
-            'writing_Grok 4 Fast Sigma'
-
+            'writing_Grok 4 Fast Sigma',
+            # Gemma 4 26B A4B is the current writing judge. Keep TrueSkill, drop sigma.
+            'writing_Gemma 4 26B A4B Sigma',
+            # Gemma 4 31B was the writing judge for ~one run on 2026-05-06 before
+            # we flipped to 26B. Only ~63/230 models have a 31B score, so the
+            # column is mostly NaN — would inject noise as a feature. Drop both.
+            'writing_Gemma 4 31B TrueSkill',
+            'writing_Gemma 4 31B Sigma',
         ],
         'arc' : [
             'arc_Organization',

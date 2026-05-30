@@ -169,7 +169,21 @@
   "GLM 5V Turbo": "",
   "Claude 4.7 Opus Thinking High Effort": "",
   "Claude 4.7 Opus Thinking xHigh Effort": "Claude Opus 4.7 Thinking",
-  "Qwen 3.6 Plus": "",
+  "Qwen 3.6 Plus": "Qwen3.6 Plus",
   "Elephant Alpha": "",
-  "Nemotron 3 Super 120B A12B": "Nemotron 3 Super"
+  "Nemotron 3 Super 120B A12B": "Nemotron 3 Super",
+  "Kimi K2.6 Thinking": "Kimi K2.6",
+  "GPT-5.5 Thinking xHigh Effort": "GPT-5.5 Thinking",
+  "GPT-5.5 Thinking High Effort": "",
+  "DeepSeek V4 Pro": "DeepSeek V4 Pro Thinking",
+  "DeepSeek V4 Flash": "DeepSeek V4 Flash Thinking",
+  "GLM 5.1": "GLM 5.1",
+  "Grok 4.3": "Grok 4.3",
+  "Qwen 3.7 Max": "Qwen3.7 Max",
+  "Qwen 3.6 27B": "Qwen3.6 27B",
+  "Qwen 3.6 Flash": "",
+  "Gemini 3.5 Flash High": "Gemini 3.5 Flash",
+  "Claude 4.8 Opus Thinking Medium Effort": "",
+  "Claude 4.8 Opus Thinking Low Effort": "",
+  "Claude 4.8 Opus Thinking xHigh Effort": "Claude Opus 4.8 Thinking"
 }

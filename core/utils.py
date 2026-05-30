@@ -70,11 +70,20 @@ def discover_openbench_csv(script_dir: str) -> str:
     raise ValueError("No openbench CSV found in benchmark_combiner/benchmarks/ or local directory.")
 
 
+# Models excluded from all benchmark runs by exact display name match.
+# Use this for models with broken upstream behavior (length truncation, garbled
+# responses, etc.) that you don't want polluting the corpus.
+SKIPPED_MODELS = frozenset({
+    "Mistral Medium 3.5",  # finish_reason=length with empty content (style collect, 2026-05-06)
+})
+
+
 def load_models(csv_path: str) -> List[Dict[str, Any]]:
     """Load model data from an OpenBench CSV.
 
     Returns a list of dicts with keys ``name``, ``id``, and ``Reasoning``.
-    Models without an ``openbench_id`` are dropped.
+    Models without an ``openbench_id`` are dropped, as are any models in
+    ``SKIPPED_MODELS``.
 
     The ``Reasoning`` column is always returned with a capital-R key,
     normalizing soothsayer_style's lowercase variant.
@@ -86,6 +95,14 @@ def load_models(csv_path: str) -> List[Dict[str, Any]]:
         raise ValueError("CSV must contain 'Model' and 'openbench_id' columns.")
 
     df.dropna(subset=['openbench_id'], inplace=True)
+
+    if SKIPPED_MODELS:
+        before = len(df)
+        df = df[~df['Model'].isin(SKIPPED_MODELS)]
+        skipped = before - len(df)
+        if skipped:
+            print(f"  load_models: skipping {skipped} model(s) per SKIPPED_MODELS: "
+                  f"{sorted(SKIPPED_MODELS)}")
 
     # Normalize column names — soothsayer_style used lowercase 'reasoning'
     if 'reasoning' in df.columns and 'Reasoning' not in df.columns:

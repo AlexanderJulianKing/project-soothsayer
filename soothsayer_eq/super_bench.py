@@ -38,7 +38,7 @@ BATTLE_PAIRS_CSV = RESULTS_DIR / "battle_pairs.csv"
 BENCH_PREFIX = "eq_"
 DEFAULT_JUDGE_NAME = "Gemini 3.0 Flash Preview (2025-12-17)"
 MAX_PARSE_ATTEMPTS = 3
-DEFAULT_BATTLES_TO_RUN = 125
+DEFAULT_BATTLES_TO_RUN = 30
 
 # Arena configuration
 ARENA_CONFIG = ArenaConfig(

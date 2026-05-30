@@ -10,6 +10,11 @@ Updates vs. the older arena_predictor/baseline_comparison.py:
 - Target is lmarena_Score (lmsys_Score was leakage; switched 2026-03-29).
 - sem_ features are Soothsayer-derived, so they move from "public" to "custom".
 - eqbench_ / eqmt_ stay "public" (external eqbench scraper, not in-house eq_).
+- Baseline regressor is RidgeCV, not plain OLS LinearRegression: at n=138 with 122
+  features the per-fold design is p>n, where OLS is rank-deficient and unstable
+  (it produced a non-monotone ladder where adding features hurt). Ridge gives the
+  naive baseline a fair shot at high dimension. R² is sklearn r2_score (not Pearson²),
+  matching how the full-pipeline row reports R².
 """
 
 import sys
@@ -19,8 +24,10 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 from sklearn.base import clone
+from sklearn.dummy import DummyRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import RidgeCV
+from sklearn.metrics import r2_score
 from sklearn.model_selection import KFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -55,8 +62,12 @@ def oof_repeated(pipe, X, y, n_repeats=N_REPEATS, n_splits=N_SPLITS, seed=SEED):
 
 
 def metrics(pred, y):
+    # R² = sklearn r2_score (1 - SS_res/SS_tot), the standard "variance explained",
+    # consistent with how predict.py / the full-pipeline row reports R². (Earlier this
+    # used Pearson² = corrcoef**2, which overstates R² when predictions are biased and
+    # is undefined for the constant dummy predictor.)
     rmse = float(np.sqrt(np.mean((pred - y) ** 2)))
-    r2 = float(np.corrcoef(pred, y)[0, 1] ** 2)
+    r2 = float(r2_score(y, pred))
     rho = float(spearmanr(pred, y).correlation)
     return rmse, r2, rho
 
@@ -87,17 +98,28 @@ def run():
     X_all = raw.loc[has_t, all_feat].values
     X_public = raw.loc[has_t, public_feat].values
 
+    # RidgeCV (not plain OLS): with 122 features at n≈110/fold the design is p>n,
+    # where unregularized OLS is rank-deficient and unstable (it gave a non-monotone
+    # ladder where adding features *hurt*). Ridge regularization gives the naive
+    # baseline its fair shot at high dimension; alpha picked per-fit by internal LOO-CV.
+    ridge_alphas = np.logspace(-1, 4, 30)
     pipe = lambda: make_pipeline(
         SimpleImputer(strategy="median"),
         StandardScaler(),
-        LinearRegression(),
+        RidgeCV(alphas=ridge_alphas),
     )
 
     results = []
 
-    # Dummy
-    pred = np.full_like(y, fill_value=y.mean(), dtype=float)
-    rmse, r2, rho = metrics(pred, y)
+    # Dummy — per-fold training mean, run through the SAME out-of-fold CV as the
+    # other baselines so it's leakage-free and consistent with the walk-forward
+    # dummy (which uses the expanding training mean). The old `y.mean()` was the
+    # global mean, which leaked each held-out point into the value it was scored
+    # against. Per-fold predictions vary only ~4 ELO, so ρ is reported as "—"
+    # ("predict the mean" has no rank order) and R² as the definitional zero-skill
+    # 0.00 (the raw per-fold value is -0.013, i.e. CV noise around zero).
+    pred = oof_repeated(DummyRegressor(strategy="mean"), np.zeros((len(y), 1)), y)
+    rmse, _, _ = metrics(pred, y)
     results.append(("Predict mean (dummy)", rmse, 0.0, float("nan")))
 
     pred = oof_repeated(pipe(), X_public, y)
@@ -111,7 +133,8 @@ def run():
     for name, rmse, r2, rho in results:
         rho_s = f"{rho:11.3f}" if not np.isnan(rho) else f"{'—':>11s}"
         print(f"{name:40s} {rmse:7.2f} {r2:7.3f} {rho_s}")
-    print(f"{'Full Soothsayer pipeline':40s}    see predict.sh (current: 14.24 @ 5-fold single)")
+    print(f"{'Full Soothsayer pipeline':40s}    see predict.sh "
+          f"(current: 13.68 / R² 0.943 / ρ 0.968 @ 10×5-fold OOF)")
 
 
 if __name__ == "__main__":

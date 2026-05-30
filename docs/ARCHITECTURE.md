@@ -2,7 +2,7 @@
 
 ## System Design Overview
 
-This pipeline aggregates 23 CSV patterns (17 public/input benchmark families plus 6 custom/derived internal families), performs model name unification, and uses adaptive KNN + fold-internal PLS hybrid + kernel Ridge regression to predict lmarena scores (style-controlled Arena ELO (arena.ai), 10×5-fold OOF R²=0.941) for large language models.
+This pipeline aggregates 23 CSV patterns (17 public/input benchmark families plus 6 custom/derived internal families), performs model name unification, and uses adaptive KNN + fold-internal PLS hybrid + kernel Ridge regression to predict lmarena scores (style-controlled Arena ELO (arena.ai), 10×5-fold OOF R²=0.943, n=138) for large language models.
 
 Missing benchmark values are filled by the **ModelBankImputer** (`column_imputer.py`), which selects the best predictor subset for each individual missing cell based on what that row actually has observed, with per-cell uncertainty tracking and low-rank coherence projection.
 
@@ -299,25 +299,25 @@ For uncertainty quantification:
 
 ### 3. Adaptive KNN + PLS Hybrid + Kernel Ridge + Jackknife VI (shipped pipeline)
 
-The primary prediction algorithm (10×5-fold OOF R²=0.941 for `lmarena_Score`):
+The primary prediction algorithm (10×5-fold OOF R²=0.943 for `lmarena_Score`, n=138):
 
 1. **Drop `style_*` / `tone_*` columns (`--drop_style_tone`)** — once PLS is introduced in step 3, these columns redundantly dilute the KNN distance. They still inform the imputer's predictor selection and the style_delta feature.
 2. **Standardize** the remaining feature matrix (imputed benchmarks + 21 imputation-derived SVD/trajectory features + 32 sem_f* response-embedding dims).
-3. **Fold-internal PLS-3 hybrid (`--pls_hybrid_k 3`)** — within each CV fold, fit `PLSRegression(n_components=3)` on `(Xtr, y[tr])` and append the 3 transformed components to both `Xtr` and `Xte` before the KNN call. No leakage: PLS never sees held-out rows. PLS gives the distance a supervised, low-rank "direction of ELO" summary that the raw KNN couldn't see.
+3. **Fold-internal PLS-6 hybrid (`--pls_hybrid_k 6`)** — within each CV fold, fit `PLSRegression(n_components=6)` on `(Xtr, y[tr])` and append the 6 transformed components to both `Xtr` and `Xte` before the KNN call. No leakage: PLS never sees held-out rows. PLS gives the distance a supervised, low-rank "direction of ELO" summary that the raw KNN couldn't see. (Was 3 components through 2026-04-18; the 2026-05-29 retune raised it to 6 as the labeled set grew to n=138.)
 4. **Adaptive k via sublinear power cutoff:** `max_dist = d_nearest^0.7 × 3.0`. Tighter neighborhoods in dense regions (top models, k≈20-30) while keeping adequate coverage in sparse regions. Min 20, max 80.
 5. **Gaussian kernel weights:** `w = exp(-0.5 × (dist/bw)²)` where bandwidth = distance to 15th-percentile neighbor.
 6. **Ridge regression:** `alpha = max(10, std(neighbor_scores))`. Adaptive regularization.
 7. **Jackknife variance inflation:** Leave each of the k neighbors out, refit Ridge on k-1, predict the left-out one. Estimate compression slope `b = cov(actual, jackknife_pred) / var(jackknife_pred)`. Clip to [1.0, 1.5]. Correct: `prediction = neighborhood_mean + b × (raw_prediction - neighborhood_mean)`. Reverses Ridge's centering bias.
 
-**Why it works:** Different features predict lmarena at different score levels — feature correlations flip sign around ~1400 (e.g., list count is positive below, negative above). The sublinear power cutoff keeps each neighborhood within a consistent score regime. PLS supervises the feature space with the target but pays the n=127 tax cheaply (3 components, fold-internal). Adding PLS hybrid + drop_style_tone on 2026-04-18 cut OOF RMSE 14.45 → 13.48 at ship time; the post-CritPT rerun (n=127) lands at RMSE 13.61.
+**Why it works:** Different features predict lmarena at different score levels — feature correlations flip sign around ~1400 (e.g., list count is positive below, negative above). The sublinear power cutoff keeps each neighborhood within a consistent score regime. PLS supervises the feature space with the target but pays the dimensionality tax cheaply (6 components, fold-internal). Adding PLS hybrid + drop_style_tone on 2026-04-18 cut OOF RMSE 14.45 → 13.48 at ship time; the post-CritPT rerun at n=127 landed at RMSE 13.61. As the labeled set grew to n=138 the old config drifted to 14.03, and the 2026-05-29 retune (`--pls_hybrid_k 6 --selector_k_max 25`) recovered it to **RMSE 13.68 / R² 0.943 / ρ 0.968**.
 
 ---
 
 ## Configuration Parameters
 
-### predict.py CLI Arguments (shipped 2026-04-18, 46 flags total)
+### predict.py CLI Arguments (shipped config, retuned 2026-05-29)
 
-The **shipped 7-flag config** (from `predict.sh`):
+The **shipped config** (from `predict.sh`):
 
 ```bash
 python3 predict.py \
@@ -326,7 +326,8 @@ python3 predict.py \
     --coherence_lambda 8.0 --coherence_shape exp \
     --predictor_selection loo_forward \
     --drop_style_tone \
-    --pls_hybrid_k 3 \
+    --pls_hybrid_k 6 \
+    --selector_k_max 25 \
     --cv_repeats_outer 10
 ```
 

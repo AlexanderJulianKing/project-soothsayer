@@ -1,0 +1,247 @@
+"""Tests for arena_predictor/calibration.py."""
+from __future__ import annotations
+
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'arena_predictor'))
+
+import numpy as np
+import pytest
+from scipy import stats
+
+from calibration import (
+    GateResult,
+    ShapeFit,
+    compute_local_scale,
+    compute_p_above,
+    compute_p_beats_leader,
+    compute_sigma,
+    diagnose_scale_signal,
+    fit_tail_shape_and_qhat,
+)
+
+
+RNG = np.random.default_rng(42)
+
+
+def _make_correlated_residuals(n: int, slope: float = 1.0, noise: float = 0.3):
+    """Generate y_nb_std positively correlated with |residuals|."""
+    y_nb_std = RNG.uniform(5.0, 40.0, size=n)
+    residuals = slope * y_nb_std * RNG.normal(0, 1, size=n) + RNG.normal(0, noise, size=n)
+    predicted = RNG.uniform(1300, 1500, size=n)
+    return y_nb_std, residuals, predicted
+
+
+def test_diagnose_scale_signal_passes_on_correlated_data():
+    y_nb_std, residuals, predicted = _make_correlated_residuals(127)
+    result = diagnose_scale_signal(y_nb_std, residuals, predicted)
+    assert result.passed is True
+    assert result.spearman_all > 0.25
+    assert result.decile_lift > 1.3
+    assert result.n_all == 127
+    assert isinstance(result.reason, str)
+
+
+def test_diagnose_scale_signal_fails_on_uncorrelated_data():
+    y_nb_std = RNG.uniform(5.0, 40.0, size=127)
+    residuals = RNG.normal(0, 15.0, size=127)  # iid, no correlation with y_nb_std
+    predicted = RNG.uniform(1300, 1500, size=127)
+    result = diagnose_scale_signal(y_nb_std, residuals, predicted)
+    assert result.passed is False
+
+
+def test_diagnose_scale_signal_small_top_slice():
+    """If |top| < 10, spearman_top is NaN and doesn't contribute to gate."""
+    y_nb_std = RNG.uniform(5.0, 40.0, size=30)
+    residuals = RNG.normal(0, 15.0, size=30)
+    predicted = np.full(30, 1300.0)  # no models >= 1400
+    result = diagnose_scale_signal(y_nb_std, residuals, predicted)
+    assert np.isnan(result.spearman_top)
+    assert result.n_top == 0
+
+
+def test_diagnose_scale_signal_gate_rule_top_slice_wins():
+    """If top slice passes but overall doesn't, gate passes."""
+    y_nb_std = np.concatenate([RNG.uniform(5, 40, 100), RNG.uniform(5, 40, 27)])
+    predicted = np.concatenate([np.full(100, 1300.0), np.full(27, 1450.0)])  # 27 "top" rows
+    residuals = np.concatenate([
+        RNG.normal(0, 15, 100),                              # uncorrelated
+        2.0 * y_nb_std[100:] * RNG.normal(0, 1, 27),         # correlated in top slice
+    ])
+    result = diagnose_scale_signal(y_nb_std, residuals, predicted)
+    assert result.n_top >= 10
+    assert result.spearman_top >= 0.20
+    assert result.passed is True
+
+
+def test_compute_local_scale_applies_floor():
+    y_nb_std = np.array([0.0, 5.0, 10.0, 20.0, 100.0])
+    s_floor = 10.0
+    out = compute_local_scale(y_nb_std, s_floor)
+    np.testing.assert_array_equal(out, np.array([10.0, 10.0, 10.0, 20.0, 100.0]))
+
+
+def test_compute_local_scale_no_floor_change_above_threshold():
+    y_nb_std = np.array([15.0, 25.0, 35.0])
+    s_floor = 10.0
+    out = compute_local_scale(y_nb_std, s_floor)
+    np.testing.assert_array_equal(out, y_nb_std)
+
+
+def test_compute_local_scale_handles_nan():
+    """NaN y_nb_std rows get the floor."""
+    y_nb_std = np.array([np.nan, 5.0, np.nan, 20.0])
+    s_floor = 10.0
+    out = compute_local_scale(y_nb_std, s_floor)
+    np.testing.assert_array_equal(out, np.array([10.0, 10.0, 10.0, 20.0]))
+
+
+def test_fit_tail_shape_gate_passed_path():
+    """With gate passed: t_df fit on r_i = e_i / s(x_i); q_hat anchors 95% coverage."""
+    n = 200
+    y_nb_std = RNG.uniform(10.0, 30.0, size=n)
+    # residuals scaled by y_nb_std, drawn from t(df=8)
+    r = stats.t.rvs(df=8, size=n, random_state=RNG)
+    residuals = y_nb_std * r
+    fit = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=True)
+    assert 3.0 <= fit.t_df <= 200.0
+    # t_df should be roughly near 8 (wide tolerance because n=200)
+    assert 4.0 <= fit.t_df <= 25.0
+    assert fit.q_hat > 0
+    assert fit.s_floor > 0
+    assert fit.fallback_used is False
+
+
+def test_fit_tail_shape_fallback_path():
+    """When gate is False: s(x) = 1, t_df fit on raw residuals."""
+    residuals = RNG.normal(0, 15.0, size=150)
+    y_nb_std = RNG.uniform(5.0, 40.0, size=150)  # ignored in fallback
+    fit = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=False)
+    assert fit.fallback_used is True
+    assert fit.s_floor == 1.0
+    # t_df fit on a near-Gaussian sample should clip near 200
+    assert fit.t_df >= 10.0
+    assert fit.q_hat > 0
+
+
+def test_fit_tail_shape_coverage_anchor():
+    """In the gate-passed limit with m=1, OOF 95% coverage should be ~95%."""
+    n = 2000  # large sample to make the anchor behave
+    y_nb_std = RNG.uniform(10.0, 30.0, size=n)
+    r = stats.t.rvs(df=10, size=n, random_state=RNG)
+    residuals = y_nb_std * r
+    fit = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=True)
+    s = compute_local_scale(y_nb_std, fit.s_floor)
+    sigma = fit.q_hat * s
+    t_crit = stats.t.ppf(0.975, fit.t_df)
+    lower = -t_crit * sigma
+    upper = t_crit * sigma
+    coverage = float(np.mean((residuals >= lower) & (residuals <= upper)))
+    # Expect ~95% coverage, within tolerance for n=2000
+    assert 0.92 <= coverage <= 0.98
+
+
+def test_compute_sigma_formula():
+    """sigma(x) = m * q_hat * max(y_nb_std, s_floor)."""
+    y_nb_std = np.array([0.0, 5.0, 10.0, 20.0])
+    shape = ShapeFit(t_df=15.0, q_hat=1.2, s_floor=8.0, fallback_used=False)
+    m = 1.08
+    out = compute_sigma(y_nb_std, shape, m)
+    expected = m * shape.q_hat * np.array([8.0, 8.0, 10.0, 20.0])
+    np.testing.assert_allclose(out, expected)
+
+
+def test_compute_sigma_fallback_shape():
+    """With fallback (s_floor=1.0, y_nb effectively unused), sigma is near-constant."""
+    y_nb_std = np.array([0.0, 5.0, 10.0])
+    shape = ShapeFit(t_df=50.0, q_hat=20.0, s_floor=1.0, fallback_used=True)
+    m = 1.0
+    # In true fallback we'd also feed y_nb=ones to compute_sigma; but the
+    # fallback path in predict.py is expected to pass y_nb=ones(n).
+    out = compute_sigma(np.ones_like(y_nb_std), shape, m)
+    np.testing.assert_allclose(out, np.full(3, m * shape.q_hat))
+
+
+def test_compute_p_above_formula():
+    """P(score > threshold) = 1 - t_cdf((threshold - mu)/sigma, df)."""
+    mu = np.array([1500.0, 1490.0])
+    sigma = np.array([20.0, 20.0])
+    t_df = 200.0  # effectively Gaussian
+    threshold = 1500.0
+    p = compute_p_above(mu, sigma, t_df, threshold)
+    # mu == threshold => P(score > threshold) = 0.5
+    np.testing.assert_allclose(p[0], 0.5, atol=1e-3)
+    # mu 10 below threshold, sigma 20 => P(score > threshold) ≈ norm.sf(0.5)
+    from scipy.stats import norm
+    np.testing.assert_allclose(p[1], float(norm.sf(0.5)), atol=1e-2)
+
+
+def test_compute_p_above_tight_sigma():
+    """Very tight sigma: step function."""
+    mu = np.array([1550.0, 1450.0])
+    sigma = np.array([0.01, 0.01])
+    t_df = 10.0
+    threshold = 1500.0
+    p = compute_p_above(mu, sigma, t_df, threshold)
+    assert p[0] > 0.99  # far above threshold
+    assert p[1] < 0.01  # far below threshold
+
+
+def test_compute_p_beats_leader_nans_training_rows():
+    mu = np.array([1505.0, 1495.0, 1480.0])
+    sigma = np.array([20.0, 20.0, 20.0])
+    t_df = 100.0
+    max_leader = 1500.0
+    train_mask = np.array([True, False, True])  # rows 0 and 2 are training
+    p = compute_p_beats_leader(mu, sigma, t_df, max_leader, train_mask)
+    assert np.isnan(p[0])
+    assert np.isnan(p[2])
+    assert not np.isnan(p[1])
+    # Row 1: mu=1495, sigma=20, leader=1500 => slightly below 0.5
+    assert 0.3 < p[1] < 0.5
+
+
+def test_compute_p_beats_leader_empty_test_set():
+    """All rows are training: returns all-NaN array of correct length."""
+    mu = np.array([1500.0, 1490.0])
+    sigma = np.array([20.0, 20.0])
+    train_mask = np.array([True, True])
+    p = compute_p_beats_leader(mu, sigma, 100.0, 1500.0, train_mask)
+    assert len(p) == 2
+    assert np.all(np.isnan(p))
+
+
+def test_fallback_path_produces_constant_sigma():
+    """End-to-end fallback: gate fails -> s(x)=1 -> sigma_hat constant across rows."""
+    n = 150
+    y_nb_std = RNG.uniform(5.0, 40.0, size=n)
+    residuals = RNG.normal(0, 15.0, size=n)  # uncorrelated with y_nb_std
+    predicted = RNG.uniform(1300, 1500, size=n)
+
+    gate = diagnose_scale_signal(y_nb_std, residuals, predicted)
+    assert gate.passed is False  # precondition
+
+    shape = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=gate.passed)
+    assert shape.fallback_used is True
+    assert shape.s_floor == 1.0
+
+    # In fallback, caller passes y_nb_std = np.ones(n) to compute_sigma
+    sigma = compute_sigma(np.ones(n), shape, m=1.0)
+    # sigma should be constant
+    assert np.allclose(sigma, sigma[0])
+    # Approximately equal to q_hat
+    assert abs(sigma[0] - shape.q_hat) < 1e-6
+
+
+def test_gate_pass_path_produces_varying_sigma():
+    n = 200
+    y_nb_std = RNG.uniform(10.0, 30.0, size=n)
+    r = stats.t.rvs(df=8, size=n, random_state=RNG)
+    residuals = y_nb_std * r
+    predicted = RNG.uniform(1300, 1500, size=n)
+
+    gate = diagnose_scale_signal(y_nb_std, residuals, predicted)
+    shape = fit_tail_shape_and_qhat(residuals, y_nb_std, gate_passed=gate.passed)
+    sigma = compute_sigma(y_nb_std, shape, m=1.0)
+    # sigma should vary with y_nb_std
+    assert np.std(sigma) > 0.1 * np.mean(sigma)

@@ -39,9 +39,14 @@ RESULTS_DIR = SCRIPT_DIR / "results"
 PAIRWISE_PROMPT_FILE = SCRIPT_DIR / "pairwise_prompt_style.txt"
 BATTLE_PAIRS_CSV = RESULTS_DIR / "battle_pairs.csv"
 BENCH_PREFIX = "tone_"
-DEFAULT_JUDGE_NAME = "Grok 4.1 Fast"
+DEFAULT_JUDGE_NAME = "Gemma 4 26B A4B"
 MAX_PARSE_ATTEMPTS = 3
-DEFAULT_BATTLES_TO_RUN = 125
+DEFAULT_BATTLES_TO_RUN = 100
+
+# Question ids excluded from battle generation. Existing Q4 battles in
+# battle_history.csv are left in place but no new ones will be created.
+# Keep in sync with collect.py and score.py.
+EXCLUDED_QUESTIONS = {"4"}
 
 AXES = ["signal_density", "conversational_confidence"]
 
@@ -81,6 +86,7 @@ def load_response_index(responses_csv: str) -> Dict[str, Dict[str, str]]:
 
     df = pd.read_csv(responses_csv)
     df = df[df['status'] == 'ok'].copy()
+    df = df[~df['question_id'].astype(str).isin(EXCLUDED_QUESTIONS)]
     df = df.drop_duplicates(subset=['model_name', 'question_id'], keep='first')
 
     index: Dict[str, Dict[str, str]] = {}
@@ -299,6 +305,7 @@ def build_paired_results_for_axis(
     filtered = history_df[
         (history_df["judge_model"] == judge_name)
         & history_df["question_id"].notna()
+        & ~history_df["question_id"].astype(str).isin(EXCLUDED_QUESTIONS)
         & history_df["response_a_model"].notna()
         & history_df["response_b_model"].notna()
         & history_df["criteria_json"].notna()
@@ -377,6 +384,7 @@ def build_paired_results_combined(history_df: pd.DataFrame, judge_name: str) -> 
     filtered = history_df[
         (history_df["judge_model"] == judge_name)
         & history_df["question_id"].notna()
+        & ~history_df["question_id"].astype(str).isin(EXCLUDED_QUESTIONS)
         & history_df["response_a_model"].notna()
         & history_df["response_b_model"].notna()
         & history_df["criteria_json"].notna()
@@ -531,55 +539,63 @@ def run_dual_arena_loop(
     print(f"\n=== DUAL-ARENA INFO-GAIN MATCH SELECTION ===")
 
     batch_num = 0
-    while remaining > 0:
-        batch_num += 1
+    try:
+        while remaining > 0:
+            batch_num += 1
 
-        pending, priority = arena.list_pending_matches(
-            content_index, existing_orientations, judge["name"],
-            item_filter, paired_mode=True,
-        )
+            pending, priority = arena.list_pending_matches(
+                content_index, existing_orientations, judge["name"],
+                item_filter, paired_mode=True,
+            )
 
-        if not pending:
-            print(f"\nNo pending matches remaining.")
-            break
+            if not pending:
+                print(f"\nNo pending matches remaining.")
+                break
 
-        batch_size = min(workers * 2, remaining)
-        batch = select_matches_combined_info_gain(
-            pending, priority,
-            density_ratings, confidence_ratings,
-            batch_size,
-        )
+            batch_size = min(workers * 2, remaining)
+            batch = select_matches_combined_info_gain(
+                pending, priority,
+                density_ratings, confidence_ratings,
+                batch_size,
+            )
 
-        if not batch:
-            print(f"\nNo matches selected.")
-            break
+            if not batch:
+                print(f"\nNo matches selected.")
+                break
 
-        priority_count = sum(1 for m in batch if m in priority)
-        print(f"\nBatch {batch_num}: Running {len(batch)} battles "
-              f"({priority_count} completing pairs, {len(priority)} incomplete pairs)")
+            priority_count = sum(1 for m in batch if m in priority)
+            print(f"\nBatch {batch_num}: Running {len(batch)} battles "
+                  f"({priority_count} completing pairs, {len(priority)} incomplete pairs)")
 
-        records = arena.run_battles_batch(
-            batch, content_index, judge,
-            run_battle, workers,
-            template=template, questions=questions,
-        )
+            records = arena.run_battles_batch(
+                batch, content_index, judge,
+                run_battle, workers,
+                template=template, questions=questions,
+            )
 
-        if records:
-            history_df = pd.concat([history_df, pd.DataFrame(records)], ignore_index=True)
-            existing_orientations = arena.extract_existing_orientations(history_df)
-            all_new_records.extend(records)
-            remaining -= len(records)
+            if records:
+                history_df = pd.concat([history_df, pd.DataFrame(records)], ignore_index=True)
+                existing_orientations = arena.extract_existing_orientations(history_df)
+                all_new_records.extend(records)
+                remaining -= len(records)
 
-            # Recompute per-axis ratings
-            density_pairs = build_paired_results_for_axis(history_df, judge["name"], "signal_density")
-            confidence_pairs = build_paired_results_for_axis(history_df, judge["name"], "conversational_confidence")
-            density_ratings = arena.compute_trueskill_ratings(density_pairs)
-            confidence_ratings = arena.compute_trueskill_ratings(confidence_pairs)
+                # Recompute per-axis ratings
+                density_pairs = build_paired_results_for_axis(history_df, judge["name"], "signal_density")
+                confidence_pairs = build_paired_results_for_axis(history_df, judge["name"], "conversational_confidence")
+                density_ratings = arena.compute_trueskill_ratings(density_pairs)
+                confidence_ratings = arena.compute_trueskill_ratings(confidence_pairs)
 
-            print(f"  Completed {len(records)} battles, {remaining} remaining in budget")
-        else:
-            print(f"  No battles completed")
-            break
+                # Per-batch checkpoint so an interrupt or crash doesn't lose hours of work.
+                arena.atomic_save_history(history_df)
+
+                print(f"  Completed {len(records)} battles, {remaining} remaining in budget")
+            else:
+                print(f"  No battles completed")
+                break
+    except KeyboardInterrupt:
+        print(f"\n[KeyboardInterrupt at batch {batch_num}] Saving {len(all_new_records)} new records before exit...")
+        arena.atomic_save_history(history_df)
+        raise
 
     return history_df, all_new_records
 
@@ -639,7 +655,7 @@ def parse_args():
                         help="Limit number of new battles per run.")
     parser.add_argument("--questions",
                         help="Comma-separated question IDs (e.g., '1,3,7'). Defaults to all.")
-    parser.add_argument("--workers", type=int, default=20,
+    parser.add_argument("--workers", type=int, default=80,
                         help="Number of concurrent judge calls.")
     parser.add_argument("--pilot", type=int, default=None, metavar='N',
                         help="Limit to first N unique models (for pilot runs).")

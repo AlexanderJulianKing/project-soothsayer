@@ -102,10 +102,11 @@ def main():
     P = src[pooled_cols].values.astype(float)
 
     # Production imputer settings (from predict.sh + argparse defaults)
+    # selector_k_max=25 per the 2026-05-29 retune (shipped).
     imp_kwargs = dict(
         passes=14, alpha=0.9361, verbose=0,
         use_feature_selector=True, selector_tau=0.9012,
-        selector_k_max=37, gp_selector_k_max=28,
+        selector_k_max=25, gp_selector_k_max=28,
         imputer_n_jobs=-1,
         categorical_threshold=0, force_categorical_cols=[],
         tolerance_percentile=91.1553, tolerance_relaxation_factor=1.2704, tolerance_multiplier=5.8849,
@@ -168,16 +169,16 @@ def main():
         Xtr_raw = np.hstack([X_static[:i], sem_tr])
         Xte_raw = np.hstack([X_static[i:i + 1], sem_te])
 
-        # ----- 4. Scale + PLS-3 + KNN -----
+        # ----- 4. Scale + PLS-6 + KNN -----
         sc = StandardScaler()
         Xtr = sc.fit_transform(Xtr_raw)
         Xte = sc.transform(Xte_raw)
-        pls = PLSRegression(n_components=min(3, Xtr.shape[1], i - 1)).fit(Xtr, y[:i])
+        pls = PLSRegression(n_components=min(6, Xtr.shape[1], i - 1)).fit(Xtr, y[:i])  # pls_hybrid_k=6 (2026-05-29 retune)
         Xtr = np.hstack([Xtr, pls.transform(Xtr)])
         Xte = np.hstack([Xte, pls.transform(Xte)])
 
-        p, _, _ = predict_adaptive_knn(Xtr, y[:i], Xte,
-                                       max_k=min(80, i), min_k=min(20, i))
+        p, _, _, _ = predict_adaptive_knn(Xtr, y[:i], Xte,
+                                         max_k=min(80, i), min_k=min(20, i))
         preds.append(p)
         actuals.append(y[i])
         dt = time.time() - t0

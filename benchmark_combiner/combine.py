@@ -936,6 +936,7 @@ if __name__ == "__main__":
         # Manual fill for AA pricing columns when data is missing
         manual_aa_pricing_updates = {
             "o3 High": {"input": 2.0, "output": 8.0},
+            "GPT-5.5 Thinking": {"input": 5.0, "output": 30.0},
             "GPT-5.2 (high)": {"input": 1.75, "output": 14.00},
             "GPT-5.1 Codex Max": (1.25, 10.0),
             "DeepSeek R1": (0.55, 2.19),

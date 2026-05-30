@@ -92,57 +92,20 @@ def prefix_columns(df, prefix):
             new_columns[col] = f"{prefix}_{col}"
     return df.rename(columns=new_columns)
 
-# URLs for the README.md files.
-url_confab = "https://raw.githubusercontent.com/lechmazur/confabulations/refs/heads/master/README.md"
-url_gen    = "https://raw.githubusercontent.com/lechmazur/generalization/refs/heads/main/README.md"
-url_elim   = "https://raw.githubusercontent.com/lechmazur/elimination_game/refs/heads/main/README.md"
-url_step   = "https://raw.githubusercontent.com/lechmazur/step_game/refs/heads/main/README.md"
+# URL for the NYT Connections README.md — the ONLY Lechmazur board we keep.
+# Dropped 2026-05-28 (confab/gen/elim/step/writing): stale (last pull Dec-2025)
+# and low-coverage. nyt-connections is the comprehensive (81 models), actively
+# maintained one — see docs/FINDINGS.md.
 url_nytcon = "https://raw.githubusercontent.com/lechmazur/nyt-connections/refs/heads/master/README.md"
-# url_writing= "https://raw.githubusercontent.com/lechmazur/writing/refs/heads/main/README.md"
 
-# Download the README.md files.
-resp_confab = requests.get(url_confab)
-if resp_confab.status_code != 200:
-    raise Exception(f"Failed to download confabulations README.md: {resp_confab.status_code}")
-md_confab = resp_confab.text
-
-resp_gen = requests.get(url_gen)
-if resp_gen.status_code != 200:
-    raise Exception(f"Failed to download generalization README.md: {resp_gen.status_code}")
-md_gen = resp_gen.text
-
-resp_elim = requests.get(url_elim)
-if resp_elim.status_code != 200:
-    raise Exception(f"Failed to download elimination_game README.md: {resp_elim.status_code}")
-md_elim = resp_elim.text
-
-resp_step = requests.get(url_step)
-if resp_step.status_code != 200:
-    raise Exception(f"Failed to download step_game README.md: {resp_step.status_code}")
-md_step = resp_step.text
-
+# Download the README.md file.
 resp_nytcon = requests.get(url_nytcon)
 if resp_nytcon.status_code != 200:
     raise Exception(f"Failed to download nyt-connections README.md: {resp_nytcon.status_code}")
 md_nytcon = resp_nytcon.text
 
-
-# resp_writing = requests.get(url_writing)
-# if resp_writing.status_code != 200:
-#     raise Exception(f"Failed to download writing README.md: {resp_writing.status_code}")
-# md_writing = resp_writing.text
-
-# Extract the tables.
-df_confab = extract_table(md_confab)
-df_gen    = extract_table(md_gen)
-df_gen = df_gen.drop_duplicates(subset="Model", keep='first')
-
-
-
-# df_elim   = extract_table(md_elim)
-df_step   = extract_table(md_step)
+# Extract the table.
 df_nytcon = extract_first_table(md_nytcon)
-# df_writing = extract_first_table(md_writing)
 
 
 # Normalize the Model names by removing a trailing asterisk, if present.
@@ -175,39 +138,18 @@ def normalize_model_names(df):
     # df["Model"] = df["Model"].str.replace("Claude Sonnet 4 Thinking 64K", 'Claude Sonnet 4 Thinking 16K')
     return df
 
-df_confab = normalize_model_names(df_confab)
-df_gen    = normalize_model_names(df_gen)
-# df_elim   = normalize_model_names(df_elim)
-df_step   = normalize_model_names(df_step)
 df_nytcon = normalize_model_names(df_nytcon)
-# df_writing = normalize_model_names(df_writing)
 
 
-# Prefix columns for each DataFrame (except for 'Model').
-df_confab = prefix_columns(df_confab, "confab")
-df_gen    = prefix_columns(df_gen, "gen")
-# df_elim   = prefix_columns(df_elim, "elim")
-df_step   = prefix_columns(df_step, "step")
+# Prefix columns (except 'Model').
 df_nytcon = prefix_columns(df_nytcon, "nytcon")
-# df_writing = prefix_columns(df_writing, "writing")
 
-# Merge all four tables on the "Model" column using outer joins.
-df_temp = pd.merge(df_confab, df_gen, on="Model", how="outer")
-# df_temp = pd.merge(df_temp, df_elim, on="Model", how="outer")
-df_temp = pd.merge(df_temp, df_step, on="Model", how="outer")
-df_combined = pd.merge(df_temp, df_nytcon, on="Model", how="outer")
-# df_combined = pd.merge(df_temp, df_writing, on="Model", how="outer")
-# print(df_writing.columns)
+df_combined = df_nytcon
 print(df_combined.columns)
-# Extract the latest update dates from all README.md files.
-date_confab = extract_latest_update(md_confab)
-date_gen    = extract_latest_update(md_gen)
-# date_elim   = extract_latest_update(md_elim)
-date_step   = extract_latest_update(md_step)
+# Extract the latest update date from the nyt-connections README.
 date_nytcon = extract_latest_update(md_nytcon)
-# date_writing = extract_latest_update(md_writing)
 
-dates = [d for d in [date_confab, date_gen, date_step, date_nytcon] if d is not None]
+dates = [d for d in [date_nytcon] if d is not None]
 latest_date = max(dates) if dates else None
 
 # Format the date as YYYYMMDD or use "unknown" if not found.
