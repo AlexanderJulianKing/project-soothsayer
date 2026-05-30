@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 from sklearn.base import clone
+from sklearn.dummy import DummyRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import RidgeCV
 from sklearn.metrics import r2_score
@@ -110,9 +111,15 @@ def run():
 
     results = []
 
-    # Dummy
-    pred = np.full_like(y, fill_value=y.mean(), dtype=float)
-    rmse, r2, rho = metrics(pred, y)
+    # Dummy — per-fold training mean, run through the SAME out-of-fold CV as the
+    # other baselines so it's leakage-free and consistent with the walk-forward
+    # dummy (which uses the expanding training mean). The old `y.mean()` was the
+    # global mean, which leaked each held-out point into the value it was scored
+    # against. Per-fold predictions vary only ~4 ELO, so ρ is reported as "—"
+    # ("predict the mean" has no rank order) and R² as the definitional zero-skill
+    # 0.00 (the raw per-fold value is -0.013, i.e. CV noise around zero).
+    pred = oof_repeated(DummyRegressor(strategy="mean"), np.zeros((len(y), 1)), y)
+    rmse, _, _ = metrics(pred, y)
     results.append(("Predict mean (dummy)", rmse, 0.0, float("nan")))
 
     pred = oof_repeated(pipe(), X_public, y)

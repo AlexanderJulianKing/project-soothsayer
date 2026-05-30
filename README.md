@@ -12,7 +12,7 @@ Two evaluations against style-controlled Arena ELO. **OOF** is 10× 5-fold cross
 
 | Method | OOF RMSE | Walk-forward RMSE |
 |---|---:|---:|
-| Predict mean (dummy) | 57.1 | 64.5 |
+| Predict mean (dummy) | 57.5 | 64.5 |
 | Public benchmarks + median impute | 27.2 | 33.3 |
 | All benchmarks + median impute | 19.2 | 23.1 |
 | **Full Soothsayer pipeline** | **13.68** | **14.16** |

@@ -38,7 +38,7 @@ The same four-row ladder as the README's OOF table, but each baseline run throug
 
 | Method | OOF RMSE | WF RMSE | OOF→WF gap |
 |---|---:|---:|---:|
-| Predict mean (dummy) | 57.1 | 64.5 | +7.4 |
+| Predict mean (dummy) | 57.5 | 64.5 | +7.0 |
 | Public benchmarks + median impute | 27.2 | 33.3 | +6.1 |
 | All benchmarks + median impute | 19.2 | 23.1 | +3.9 |
 | **Full Soothsayer pipeline** | **13.68** | **14.16** | **+0.48** |
