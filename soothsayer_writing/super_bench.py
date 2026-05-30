@@ -35,9 +35,9 @@ RESULTS_DIR = "results"
 JUDGING_PROMPT_FILE = "judging_prompt.txt"
 BATTLE_PAIRS_CSV = os.path.join(RESULTS_DIR, "battle_pairs.csv")
 SUPER_BENCH_PREFIX = "writing_"
-DEFAULT_JUDGE_NAME = "Grok 4 Fast"
+DEFAULT_JUDGE_NAME = "Gemma 4 26B A4B"
 MAX_PARSE_ATTEMPTS = 3
-DEFAULT_BATTLES_TO_RUN = 125
+DEFAULT_BATTLES_TO_RUN = 100
 
 # Arena configuration
 ARENA_CONFIG = ArenaConfig(
@@ -547,7 +547,7 @@ def parse_args():
     parser.add_argument(
         "--workers",
         type=int,
-        default=10,
+        default=80,
         help="Number of concurrent judge calls to run.",
     )
     return parser.parse_args()

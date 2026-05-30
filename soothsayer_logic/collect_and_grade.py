@@ -13,7 +13,7 @@ from tqdm import tqdm # type: ignore # For a nice progress bar
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from core.utils import get_latest_file, discover_openbench_csv
+from core.utils import get_latest_file, discover_openbench_csv, SKIPPED_MODELS
 
 from core.llm_client import get_llm_response, APIError, API_KEY
 
@@ -222,7 +222,13 @@ def main():
         print("Failed to load evaluation data or models. Exiting.")
         return
 
-    models_to_test = [{'name': m['Model'], 'id': m['openbench_id'], 'reasoning' : m['Reasoning']} for m in models_raw if m.get('Model') and m.get('openbench_id') and m.get('Reasoning')]
+    models_to_test = [{'name': m['Model'], 'id': m['openbench_id'], 'reasoning' : m['Reasoning']}
+                      for m in models_raw
+                      if m.get('Model') and m.get('openbench_id') and m.get('Reasoning')
+                      and m['Model'] not in SKIPPED_MODELS]
+    n_skipped = sum(1 for m in models_raw if m.get('Model') in SKIPPED_MODELS)
+    if n_skipped:
+        print(f"Skipping {n_skipped} model(s) per SKIPPED_MODELS: {sorted(SKIPPED_MODELS)}")
     print(f"Loaded {len(eval_data)} questions and {len(models_to_test)} models.")
     existing_results_set = load_existing_results(OUTPUT_CSV_FILE)
     print(f"Found {len(existing_results_set)} previously completed runs.")

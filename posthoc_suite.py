@@ -841,7 +841,10 @@ def plot_prediction_calibration(df_predictions, df_oof, run_dir):
     # based on conformal groups, not the refit point prediction).
     has_bounds = "lower_bound" in df_predictions.columns and "upper_bound" in df_predictions.columns
     if has_bounds and not df_oof.empty:
-        # Get sigma_hat (halfwidth) from predictions, apply to OOF point predictions
+        # sigma_hat is the t-distribution SCALE parameter, not a 95% halfwidth.
+        # Multiply by t_crit_95 to get the proper 95% prediction-interval halfwidth.
+        # (Without this multiplier we'd be measuring coverage of a ~±1σ band, which
+        # is ~68% on Gaussian — used to mislead this chart for months.)
         df_cov = df_predictions.dropna(subset=["actual_score"]).copy()
         df_cov = df_cov.merge(
             df_oof[["model_name", "oof_predicted_score"]],
@@ -849,7 +852,11 @@ def plot_prediction_calibration(df_predictions, df_oof, run_dir):
         )
         cov_actual = df_cov["actual_score"].values
         cov_pred = df_cov["oof_predicted_score"].values
-        halfwidth = df_cov["sigma_hat"].values
+        # Default t_df=37 corresponds to predictor's calibration block; if the
+        # predictor exposed a different df via metadata, we'd thread it through.
+        from scipy import stats as _stats
+        t_crit_95 = float(_stats.t.ppf(0.975, 37))
+        halfwidth = t_crit_95 * df_cov["sigma_hat"].values
         cov_lower = cov_pred - halfwidth
         cov_upper = cov_pred + halfwidth
         in_interval = (cov_actual >= cov_lower) & (cov_actual <= cov_upper)
@@ -1562,19 +1569,41 @@ def plot_token_productivity(df_scores, df_clean, df_predictions, run_dir):
 RELEASE_DATES_FILE = "../benchmark_combiner/benchmarks/openbench_release_dates.csv"
 
 
+def _load_release_dates():
+    """Prefer the live openbench_YYYYMMDD.csv (auto-updated by scrapers) and
+    union in the legacy hand-maintained openbench_release_dates.csv for models
+    that predate that file. Live file wins on conflicts.
+    """
+    import glob
+    frames = []
+    live_files = sorted(glob.glob("../benchmark_combiner/benchmarks/openbench_2*.csv"))
+    if live_files:
+        ob = pd.read_csv(live_files[-1])
+        if "Release_Date" in ob.columns:
+            ob_rd = ob[["Model", "Release_Date"]].dropna(subset=["Release_Date"]).copy()
+            ob_rd["Release_Date"] = pd.to_datetime(ob_rd["Release_Date"], errors="coerce")
+            ob_rd = ob_rd.dropna(subset=["Release_Date"])
+            frames.append(ob_rd)
+    if os.path.exists(RELEASE_DATES_FILE):
+        legacy = pd.read_csv(RELEASE_DATES_FILE)[["Model", "Release_Date"]].copy()
+        legacy["Release_Date"] = pd.to_datetime(legacy["Release_Date"], errors="coerce")
+        legacy = legacy.dropna(subset=["Release_Date"])
+        frames.append(legacy)
+    if not frames:
+        return None
+    df_rd = pd.concat(frames, ignore_index=True)
+    df_rd["Model"] = df_rd["Model"].astype(str).str.strip()
+    df_rd = df_rd.drop_duplicates(subset=["Model"], keep="first")  # live wins (first)
+    return df_rd.rename(columns={"Model": "model_name"})
+
+
 def plot_capability_over_time(df_scores, df_clean, df_predictions, df_combined, run_dir):
     print("\n--- Chart 13: Capability Over Time ---")
 
-    # Load release dates
-    if not os.path.exists(RELEASE_DATES_FILE):
-        print(f"  WARNING: {RELEASE_DATES_FILE} not found, skipping.")
+    df_rd = _load_release_dates()
+    if df_rd is None or df_rd.empty:
+        print("  WARNING: no release-date source found, skipping.")
         return
-
-    df_rd = pd.read_csv(RELEASE_DATES_FILE)
-    df_rd["Release_Date"] = pd.to_datetime(df_rd["Release_Date"], errors="coerce")
-    df_rd = df_rd.dropna(subset=["Release_Date"])
-    df_rd = df_rd.rename(columns={"Model": "model_name"})
-    df_rd["model_name"] = df_rd["model_name"].str.strip()
 
     # Build plot data
     df = df_rd[["model_name", "Release_Date"]].copy()

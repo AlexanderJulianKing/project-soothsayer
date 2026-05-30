@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── locate openbench CSV ────────────────────────────────────────────────
-from core.utils import discover_openbench_csv
+from core.utils import discover_openbench_csv, SKIPPED_MODELS
 try:
     csv_path = discover_openbench_csv(SCRIPT_DIR)
 except ValueError:
@@ -36,6 +36,11 @@ from core.llm_client import get_llm_response, API_KEY
 df = pd.read_csv(csv_path)
 df = df.dropna(subset=["openbench_id"])
 df["Model"] = df["Model"].str.strip()
+if SKIPPED_MODELS:
+    before = len(df)
+    df = df[~df["Model"].isin(SKIPPED_MODELS)]
+    if before > len(df):
+        print(f"Skipping {before - len(df)} model(s) per SKIPPED_MODELS: {sorted(SKIPPED_MODELS)}")
 
 PROMPT = (
     "A farmer has 17 sheep. All but 9 die. How many sheep are left? "
@@ -45,7 +50,8 @@ MAX_WORKERS = 30
 
 # Judge models used by the actual benchmarks
 JUDGE_MODELS = {
-    "writing": "Grok 4 Fast",
+    "writing": "Gemma 4 26B A4B",
+    "style":   "Gemma 4 26B A4B",
     "eq":      "Gemini 3.0 Flash Preview (2025-12-17)",
 }
 

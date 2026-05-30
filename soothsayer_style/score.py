@@ -42,6 +42,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESPONSES_CSV = os.path.join(SCRIPT_DIR, 'responses.csv')
 JUDGE_RESULTS_CSV = os.path.join(SCRIPT_DIR, 'judge_results.csv')
 
+# Question ids excluded from analysis. Existing Q4 data is left untouched in
+# responses.csv but is filtered out during scoring. Keep in sync with
+# collect.py and super_bench.py.
+EXCLUDED_QUESTIONS = {"4"}
+
 _BENCHMARK_PATTERNS = [
     os.path.join(SCRIPT_DIR, '..', 'benchmark_combiner', 'benchmarks', 'combined_all_benches.csv'),
     os.path.join(SCRIPT_DIR, 'combined_all_benches.csv'),
@@ -218,6 +223,7 @@ def compute_style_features(responses_csv: str) -> Tuple[pd.DataFrame, List[str],
         return pd.DataFrame(), [], [], []
 
     df = pd.read_csv(responses_csv)
+    df = df[~df['question_id'].astype(str).isin(EXCLUDED_QUESTIONS)].copy()
     if df.empty:
         print("Error: responses.csv is empty.")
         return pd.DataFrame(), [], [], []

@@ -1,10 +1,51 @@
 import json
 import os
 import random
+import threading
 import time
 from typing import Optional, Dict, Any, Tuple, Union
 
 import requests
+
+# Providers blacklisted globally on the OR path. Per 2026-05-08 activity-log
+# analysis, DekaLLM's mean latency was 4× the fastest provider (172s vs 39s
+# for Cloudflare on Gemma 4 26B A4B), and orphan slow calls dominated the
+# long tail (84% of >300s calls had no slow partner). Cheap to exclude.
+DEFAULT_PROVIDER_IGNORE = ["DekaLLM"]
+
+# Hard total wall-clock timeout for OR generations. requests.post's `timeout`
+# is (connect, read-between-bytes) — for streamed responses where the server
+# trickles bytes during long thinking, that doesn't bound total time. The
+# 2026-05-08 activity log had a 6510s (108 min) generation that completed
+# normally because bytes kept arriving. This caps any one call.
+TOTAL_TIMEOUT_S = 600
+
+
+def _post_with_total_timeout(sess, url, payload, connect_read_timeout, total_timeout):
+    """sess.post with a hard wall-clock cap on total time.
+
+    Spawns a daemon thread to do the actual post; main thread joins with a
+    timeout. If the thread is still alive after total_timeout, we abandon
+    it (it'll clean up when the response eventually comes back or the
+    socket times out) and raise requests.Timeout so the caller's existing
+    retry-on-RequestException path handles it.
+    """
+    out: Dict[str, Any] = {}
+
+    def _do():
+        try:
+            out["response"] = sess.post(url, json=payload, timeout=connect_read_timeout)
+        except Exception as e:  # noqa: BLE001 — preserve any error type for re-raise
+            out["error"] = e
+
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    t.join(total_timeout)
+    if t.is_alive():
+        raise requests.Timeout(f"OR total wall-clock timeout exceeded ({total_timeout}s)")
+    if "error" in out:
+        raise out["error"]
+    return out["response"]
 
 # --- Shared API Settings ---
 # Load/update the API key in this file once and the change will propagate
@@ -21,6 +62,7 @@ INITIAL_RETRY_DELAY = 5
 # currently flattens effort on 4.7's adaptive thinking — the direct path
 # gives real effort differentiation and access to the thinking content block.
 ANTHROPIC_NATIVE_MODELS = {
+    "anthropic/claude-opus-4.8":   "claude-opus-4-8",
     "anthropic/claude-opus-4.7":   "claude-opus-4-7",
     "anthropic/claude-opus-4.6":   "claude-opus-4-6",
     "anthropic/claude-sonnet-4.6": "claude-sonnet-4-6",
@@ -56,11 +98,12 @@ def _call_anthropic_direct(
     }
     payload: Dict[str, Any] = {
         "model": anth_model,
-        # 16k is plenty of headroom for a benchmark response + its thinking
-        # trace. 64k burned ~$5/call at Opus pricing on runaway thinking —
-        # and retrying didn't help because the model deterministically
-        # thinks to the cap on hard prompts.
-        "max_tokens": 16000,
+        # 64k headroom so deep max-effort traces on the hardest prompts (e.g.
+        # logic q4) finish instead of truncating at the cap — at 16k, Opus 4.8
+        # tripped the limit and recorded "Skipped: Model failed". Tradeoff: the
+        # model deterministically thinks to the cap on hard prompts, so those
+        # can cost ~$5/call at Opus pricing — accepted for answer completeness.
+        "max_tokens": 64000,
         "messages": [{"role": "user", "content": prompt}],
         "output_config": {"effort": effort},
         # Must be explicit — without this 4.7 won't emit thinking blocks even
@@ -283,6 +326,8 @@ def get_llm_response(
     system_prompt: Optional[str] = None,
     include_usage: bool = False,
     reasoning_effort: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    reasoning_max_tokens: Optional[int] = None,
 ) -> Union[str, Tuple[str, Dict[str, Any]]]:
     # print(model, prompt)
     messages = []
@@ -322,7 +367,9 @@ def get_llm_response(
         'deepseek/deepseek-v3.2-speciale': 'deepseek',
         'z-ai/glm-4.7': 'z-ai',
         'z-ai/glm-5': 'z-ai',
-        'z-ai/glm-5.1': 'z-ai'
+        'z-ai/glm-5.1': 'z-ai',
+        'moonshotai/kimi-k2.6': 'parasail/int4',
+        'qwen/qwen3.6-27b': 'deepinfra/fp8',
     }
 
     nonthinking_variants = [
@@ -377,6 +424,8 @@ def get_llm_response(
         "usage": {"include": include_usage},
         "stream": False,
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = int(max_tokens)
 
     if reasoning_effort is not None:
         # Explicit override from caller — skip all name-based logic
@@ -404,8 +453,31 @@ def get_llm_response(
     else:
         payload["reasoning"] = {"effort": "xhigh", "enabled": True}
 
+    # Optional caller-supplied reasoning budget. OR rejects payloads with
+    # both reasoning.effort and reasoning.max_tokens, so when the caller
+    # explicitly asks for a token cap we drop the routing-chosen effort
+    # tier. OR translates max_tokens → effort tier for providers that only
+    # accept effort (OpenAI o-series, GPT-5 thinking).
+    if reasoning_max_tokens is not None:
+        rcfg = payload.get("reasoning")
+        if (rcfg
+                and rcfg.get("enabled") is not False
+                and rcfg.get("max_tokens") != 0):
+            rcfg.pop("effort", None)
+            rcfg["max_tokens"] = int(reasoning_max_tokens)
+
     forced_provider = provider_overrides.get(model)
     delay = INITIAL_RETRY_DELAY
+
+    # Precompute: is this payload asking for thinking? Used below to short-circuit
+    # on max_tokens truncation (so collect.py's medium-effort fallback can kick in).
+    _reasoning_cfg = payload.get("reasoning", {})
+    reasoning_expected = bool(
+        _reasoning_cfg
+        and _reasoning_cfg.get("enabled") is not False
+        and _reasoning_cfg.get("max_tokens") != 0
+        and _reasoning_cfg.get("effort") not in ("none", "minimal")
+    )
 
     def _summarize_usage(u: Dict[str, Any]) -> Dict[str, Any]:
         comp_details = (u or {}).get("completion_tokens_details") or {}
@@ -481,11 +553,21 @@ def get_llm_response(
                             kind, prov, allow_fb = mode  # mode is a tuple
 
                             if kind == "prov":
-                                req_payload["provider"] = {"order": [prov], "allow_fallbacks": bool(allow_fb)}
-                            # elif kind == "no-override": leave provider unset
+                                req_payload["provider"] = {
+                                    "order": [prov],
+                                    "allow_fallbacks": bool(allow_fb),
+                                    "ignore": list(DEFAULT_PROVIDER_IGNORE),
+                                }
+                            else:
+                                # no-override: still apply the global ignore list
+                                req_payload["provider"] = {"ignore": list(DEFAULT_PROVIDER_IGNORE)}
 
                             try:
-                                r = sess.post(url, json=req_payload, timeout=(10, 60))
+                                r = _post_with_total_timeout(
+                                    sess, url, req_payload,
+                                    connect_read_timeout=(10, 60),
+                                    total_timeout=TOTAL_TIMEOUT_S,
+                                )
                             except requests.RequestException as e:
                                 last_exc = e
                                 # rotate to next provider mode or next transport variant
@@ -530,29 +612,61 @@ def get_llm_response(
                                 )
                                 continue
 
-                            msg = (data.get("choices", [{}])[0].get("message") or {})
+                            choice = data.get("choices", [{}])[0]
+                            finish_reason = (
+                                choice.get("finish_reason")
+                                or choice.get("native_finish_reason")
+                            )
+                            msg = choice.get("message") or {}
                             content = msg.get("content")
+
+                            # Max-tokens truncation on a reasoning call with no
+                            # visible text: mirrors the Anthropic path at
+                            # llm_client.py ~199. Retrying at the same effort
+                            # across 10 attempts × N providers is deterministic
+                            # waste; raise immediately so collect.py's
+                            # medium-effort fallback can kick in.
+                            if (reasoning_expected
+                                    and finish_reason == "length"
+                                    and not (content and content.strip())):
+                                raise APIError(
+                                    f"OpenRouter finish_reason=length with no "
+                                    f"visible text ({mode}) — not retrying at "
+                                    f"same effort"
+                                )
+
                             if not content:
                                 last_exc = APIError(f"Malformed response ({mode}): missing choices[0].message.content")
                                 continue
 
                             # Detect reasoning-token leakage: model was asked
-                            # to reason but returned 0 reasoning tokens, which
-                            # means the thinking ended up in the content field.
-                            reasoning_cfg = payload.get("reasoning", {})
-                            reasoning_expected = (
-                                reasoning_cfg
-                                and reasoning_cfg.get("enabled") is not False
-                                and reasoning_cfg.get("max_tokens") != 0
-                                and reasoning_cfg.get("effort") not in ("none", "minimal")
-                            )
-                            if reasoning_expected:
+                            # to reason but the thinking ended up in the
+                            # content field instead of split out as reasoning
+                            # tokens. Earlier this fired on usage shape alone
+                            # (reasoning_tokens=0), but several providers
+                            # (Moonshot/Phala/Novita/Parasail on Kimi K2.x)
+                            # genuinely think and just don't report
+                            # reasoning_tokens — that flagged clean responses
+                            # as leaks and burned a retry per call. Now we
+                            # require *both* signals: zero-reported reasoning
+                            # AND explicit thinking-tag markers in content.
+                            # finish_reason=length is also skipped.
+                            if reasoning_expected and finish_reason != "length":
                                 raw_usage = data.get("usage", {})
                                 comp_details = (raw_usage.get("completion_tokens_details") or {})
                                 r_tokens = comp_details.get("reasoning_tokens", 0) or 0
                                 if r_tokens == 0:
-                                    last_exc = APIError(f"Reasoning leak: 0 reasoning tokens ({mode})")
-                                    continue
+                                    lc = content.lower()
+                                    leak_markers = (
+                                        "<think>", "</think>",
+                                        "<thinking>", "</thinking>",
+                                        "<reasoning>", "</reasoning>",
+                                    )
+                                    if any(m in lc for m in leak_markers):
+                                        last_exc = APIError(
+                                            f"Reasoning leak: thinking tags in content ({mode})"
+                                        )
+                                        continue
 
                             if not include_usage:
                                 return content.strip()

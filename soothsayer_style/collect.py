@@ -45,6 +45,13 @@ MAX_PER_MODEL = 5          # concurrent requests per model
 RATE_LIMIT_RETRIES = 5     # collect-level retries on 429 (on top of llm_client's 5)
 SAVE_BATCH_SIZE = 10
 
+# Question ids excluded from collection (preserved IDs — existing data on these
+# is left intact in responses.csv but no new responses will be collected).
+# Q4 (Diels-Alder isomer counting) consistently hangs heavy reasoners on
+# unbounded token budgets and adds little signal the other 8 questions don't
+# already cover. Keep in sync with super_bench.py and score.py.
+EXCLUDED_QUESTIONS = {"4"}
+
 FIELDNAMES = [
     'question_id', 'question_text', 'model_name', 'model_id',
     'run_number', 'response', 'response_length', 'status',
@@ -65,10 +72,25 @@ def load_questions(filepath: str) -> List[str]:
         return []
 
 
+# Error substrings that mark a row as a known-permanent failure. Rows
+# matching these are treated as completed so we don't burn budget retrying
+# them every run (e.g. Kimi K2.6 hitting finish_reason=length on Q4 every
+# benchmark invocation, or a model whose endpoint has been retired). Add
+# new patterns here as new permanent failure modes are identified;
+# transient signatures (network, malformed, rate limit) deliberately stay
+# off this list so they continue to retry.
+PERMANENT_FAILURE_PATTERNS = (
+    "finish_reason=length",
+    "HTTP 404",
+)
+
+
 def load_existing_results(filename: str) -> Set[Tuple[str, str, str]]:
     """Load previously completed (question_id, model_name, run_number) tuples.
 
-    Only status="ok" rows count as completed — errors and empties will be retried.
+    A run counts as completed when status="ok", or when status="error"
+    and the response field contains a known-permanent failure pattern.
+    Transient errors stay un-completed and will be retried.
     """
     completed = set()
     if not os.path.exists(filename):
@@ -77,7 +99,14 @@ def load_existing_results(filename: str) -> Set[Tuple[str, str, str]]:
         with open(filename, 'r', newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if row.get('status') != 'ok':
+                status = row.get('status')
+                if status == 'ok':
+                    pass
+                elif status == 'error':
+                    resp = row.get('response') or ''
+                    if not any(p in resp for p in PERMANENT_FAILURE_PATTERNS):
+                        continue
+                else:
                     continue
                 q_id = row.get('question_id')
                 m_name = row.get('model_name')
@@ -362,6 +391,8 @@ def main():
 
         for q_idx, q_text in enumerate(questions):
             q_id = str(q_idx + 1)
+            if q_id in EXCLUDED_QUESTIONS:
+                continue
             for run_num in range(1, N_RUNS + 1):
                 run_key = (q_id, model_name, str(run_num))
                 if run_key not in existing:

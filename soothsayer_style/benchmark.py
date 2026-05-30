@@ -12,6 +12,11 @@ _BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
 N_RUNS = 3
 N_QUESTIONS = 9
 
+# Question ids excluded from completion counting. Existing data on these
+# questions is left in responses.csv but doesn't count toward "complete".
+# Keep in sync with collect.py / super_bench.py / score.py.
+EXCLUDED_QUESTIONS = {"4"}
+
 
 class StyleBenchmark(Benchmark):
 
@@ -42,10 +47,11 @@ class StyleBenchmark(Benchmark):
             df = pd.read_csv(path)
             # Only count models with all unique (question_id, run_number) pairs completed
             ok_df = df[df['status'] == 'ok']
+            ok_df = ok_df[~ok_df['question_id'].astype(str).isin(EXCLUDED_QUESTIONS)]
             unique_counts = ok_df.groupby('model_name')[['question_id', 'run_number']].apply(
                 lambda g: g.drop_duplicates().shape[0]
             )
-            required = N_RUNS * N_QUESTIONS
+            required = N_RUNS * (N_QUESTIONS - len(EXCLUDED_QUESTIONS))
             return {str(m).strip() for m, c in unique_counts.items() if c >= required}
         except (FileNotFoundError, pd.errors.EmptyDataError, KeyError):
             return set()

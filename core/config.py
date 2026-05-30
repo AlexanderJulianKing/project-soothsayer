@@ -22,8 +22,8 @@ BENCHMARK_DEFAULTS = {
         draw_probability=0.03,
     ),
     "writing": BenchmarkConfig(
-        judge_model="Grok 4 Fast",
-        max_workers=10,
+        judge_model="Gemma 4 26B A4B",
+        max_workers=80,
         draw_probability=0.015,
     ),
     "logic": BenchmarkConfig(
@@ -31,6 +31,7 @@ BENCHMARK_DEFAULTS = {
         max_workers=20,
     ),
     "style": BenchmarkConfig(
-        max_workers=os.cpu_count() or 4,
+        judge_model="Gemma 4 26B A4B",
+        max_workers=80,
     ),
 }
