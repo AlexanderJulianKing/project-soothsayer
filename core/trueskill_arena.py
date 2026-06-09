@@ -237,30 +237,48 @@ class TrueSkillArena:
         if len(selection) >= max_battles:
             return selection
 
-        # SECOND: Score remaining by information gain
+        # SECOND: schedule new matchups by information gain. In paired mode a
+        # matchup is scheduled ATOMICALLY — both orientations together — so every
+        # battle a run pays for yields a complete, position-bias-cancelled pair.
+        # Scheduling one orientation and deferring its reverse to a later batch
+        # leaves orphan battles that contribute nothing to ratings (build_paired_
+        # results uses min(forward, reverse)) and pile up as a single-orientation
+        # backlog whenever a per-run budget cap ends the run first.
         non_priority = [m for m in pending_matches if m not in priority_matches]
 
         def get_rating(model: str) -> trueskill.Rating:
             return ratings.get(model, self._create_rating())
 
-        pair_to_matches: Dict[tuple, list] = {}
+        # Group by unordered model-pair, then by item, keeping every pending
+        # orientation. One item is chosen per model-pair to spread coverage across
+        # distinct matchups (as before), but both of that item's orientations are
+        # scheduled together as a unit.
+        pair_to_items: Dict[tuple, Dict[str, list]] = {}
         for match in non_priority:
-            _, model_a, model_b = match
+            item_id, model_a, model_b = match
             pair_key = tuple(sorted([model_a, model_b]))
-            pair_to_matches.setdefault(pair_key, []).append(match)
+            pair_to_items.setdefault(pair_key, {}).setdefault(item_id, []).append(match)
 
-        scored_matches = []
-        for pair_key, matches in pair_to_matches.items():
-            match = random.choice(matches)
-            info_gain = self.compute_match_info_gain(get_rating(match[1]), get_rating(match[2]))
-            scored_matches.append((info_gain, match))
+        scored_units = []
+        for pair_key, items in pair_to_items.items():
+            item_id = random.choice(list(items.keys()))
+            unit = items[item_id]
+            info_gain = self.compute_match_info_gain(
+                get_rating(unit[0][1]), get_rating(unit[0][2])
+            )
+            scored_units.append((info_gain, unit))
 
-        scored_matches.sort(key=lambda x: x[0], reverse=True)
+        scored_units.sort(key=lambda x: x[0], reverse=True)
 
-        for info_gain, match in scored_matches:
-            if len(selection) >= max_battles:
-                break
-            selection.append(match)
+        for info_gain, unit in scored_units:
+            # In paired mode only schedule complete forward+reverse units. A lone
+            # orientation cannot form a usable pair within this run, so emitting it
+            # would just create an orphan / count imbalance.
+            if self.cfg.paired_mode and len(unit) != 2:
+                continue
+            if len(selection) + len(unit) > max_battles:
+                continue
+            selection.extend(unit)
 
         return selection
 

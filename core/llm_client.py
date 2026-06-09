@@ -66,6 +66,7 @@ ANTHROPIC_NATIVE_MODELS = {
     "anthropic/claude-opus-4.7":   "claude-opus-4-7",
     "anthropic/claude-opus-4.6":   "claude-opus-4-6",
     "anthropic/claude-sonnet-4.6": "claude-sonnet-4-6",
+    "anthropic/claude-fable-5":    "claude-fable-5",
 }
 
 

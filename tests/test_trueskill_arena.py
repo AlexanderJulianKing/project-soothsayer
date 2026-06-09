@@ -193,9 +193,40 @@ class TestSelectMatchesByInfoGain:
         assert ("1", "B", "A") in selected
 
     def test_respects_max_battles(self, eqbench_arena):
-        pending = [("1", "A", "B"), ("2", "C", "D"), ("3", "E", "F")]
+        # Two complete matchups available; a budget of 2 fits exactly one pair.
+        pending = [("1", "A", "B"), ("1", "B", "A"), ("2", "C", "D"), ("2", "D", "C")]
+        selected = eqbench_arena.select_matches_by_info_gain(pending, set(), {}, 2)
+        assert len(selected) == 2
+
+    def test_paired_mode_leaves_odd_slot_unused(self, eqbench_arena):
+        # A lone budget slot can't fit a complete pair, so nothing is scheduled
+        # rather than emitting an orphan.
+        pending = [("1", "A", "B"), ("1", "B", "A")]
         selected = eqbench_arena.select_matches_by_info_gain(pending, set(), {}, 1)
-        assert len(selected) == 1
+        assert selected == []
+
+    def test_paired_mode_schedules_complete_pairs_not_orphans(self, eqbench_arena):
+        # Two fresh matchups, both orientations available, budget for one pair.
+        # Paired mode must schedule BOTH orientations of one matchup (a usable
+        # pair), never one orientation of each (orphans that contribute nothing).
+        pending = [("1", "A", "B"), ("1", "B", "A"), ("1", "C", "D"), ("1", "D", "C")]
+        selected = eqbench_arena.select_matches_by_info_gain(pending, set(), {}, 2)
+        assert selected, "expected a complete pair to be scheduled"
+        orientations_by_pair = {}
+        for item_id, a, b in selected:
+            key = (item_id, tuple(sorted((a, b))))
+            orientations_by_pair.setdefault(key, set()).add((a, b))
+        for key, orientations in orientations_by_pair.items():
+            assert len(orientations) == 2, f"orphan scheduled for {key}: {orientations}"
+
+    def test_paired_mode_does_not_reschedule_seen_orientation(self, writingbench_arena):
+        # WritingBench-style pending includes the already-seen forward plus the
+        # missing reverse (as priority). The selector must run ONLY the reverse —
+        # rescheduling the seen forward would create a forward=2/reverse=1 imbalance.
+        pending = [("1", "A", "B"), ("1", "B", "A")]
+        priority = {("1", "B", "A")}
+        selected = writingbench_arena.select_matches_by_info_gain(pending, priority, {}, 2)
+        assert selected == [("1", "B", "A")]
 
 
 class TestListPendingMatches:
